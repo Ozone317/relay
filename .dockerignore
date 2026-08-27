@@ -1,0 +1,11 @@
+target/
+.git/
+.gitignore
+.gitattributes
+.env
+.vscode/
+.mvn/wrapper/maven-wrapper.jar
+HELP.md
+RELAY_HANDOFF.md
+docker-compose.yml
+Dockerfile
