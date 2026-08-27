@@ -1,4 +1,5 @@
 HELP.md
+RELAY_HANDOFF.md
 target/
 .env
 .mvn/wrapper/maven-wrapper.jar
