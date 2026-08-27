@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,7 +44,7 @@ public class EventServiceTest {
     private EventService underTest;
 
     @Test
-    void create_savesEventUnderApp_whenAppBelongsToUser() throws Exception {
+    void create_savesEventUnderApp_whenAppBelongsToUserAndTheGivenEnvironment() throws Exception {
         // Arrange
         User user = new User("user@mail.com", "someHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -52,12 +53,12 @@ public class EventServiceTest {
         EventCreateDto request = new EventCreateDto("payment.created");
 
         // Stubs
-        when(appRepository.findByIdAndEnvironmentUserId(app.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventMapper.toEntity(request, app)).thenReturn(event);
         when(eventRepository.saveAndFlush(event)).thenReturn(event);
 
         // Act
-        Event result = underTest.create(request, app.getId(), user.getId());
+        Event result = underTest.create(request, app.getId(), env.getId(), user.getId());
 
         // Assert
         assertEquals(request.name(), result.getName());
@@ -75,13 +76,30 @@ public class EventServiceTest {
         EventCreateDto request = new EventCreateDto("payment.created");
 
         // Stub
-        doThrow(new AppNotFoundException(app.getId())).when(appRepository).findByIdAndEnvironmentUserId(app.getId(), user.getId());
+        doThrow(new AppNotFoundException(app.getId())).when(appRepository).findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
 
         // Act + Assert
-        assertThrows(AppNotFoundException.class, () -> underTest.create(request, app.getId(), user.getId()));
+        assertThrows(AppNotFoundException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
 
         // Verify
-        verify(appRepository).findByIdAndEnvironmentUserId(app.getId(), user.getId());
+        verify(appRepository).findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
+    }
+
+    @Test
+    void create_throwsAppNotFoundException_whenAppBelongsToUserButNotToTheGivenEnvironment() throws Exception {
+        // Arrange
+        User user = new User("user@mail.com", "someHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        EventCreateDto request = new EventCreateDto("payment.created");
+
+        UUID wrongEnvId = UUID.randomUUID();
+
+        // Stub
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), wrongEnvId, user.getId())).thenReturn(Optional.empty());
+
+        // Act + Assert
+        assertThrows(AppNotFoundException.class, () -> underTest.create(request, app.getId(), wrongEnvId, user.getId()));
     }
 
     @Test
@@ -94,14 +112,14 @@ public class EventServiceTest {
         Event existingEvent = new Event("payment.created", app);
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(app.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventRepository.findByNameAndAppId(request.name(), app.getId())).thenReturn(Optional.of(existingEvent));
 
         // Act + Assert
-        assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), user.getId()));
+        assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
 
         // Verify
-        verify(appRepository).findByIdAndEnvironmentUserId(app.getId(), user.getId());
+        verify(appRepository).findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
     }
 
     @Test
@@ -114,17 +132,17 @@ public class EventServiceTest {
         Event event = new Event("payment.created", app);
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(app.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventRepository.findByNameAndAppId(request.name(), app.getId())).thenReturn(Optional.empty());
         when(eventMapper.toEntity(request, app)).thenReturn(event);
         doThrow(new DataIntegrityViolationException(null)).when(eventRepository).saveAndFlush(event);
 
         // Act + Assert
-        assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), user.getId()));
+        assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
     }
 
     @Test
-    void getAll_returnsAllEventsUnderApp_whenAppExistsAndBelongsToExistingUser() throws Exception {
+    void getAll_returnsAllEventsUnderApp_whenAppExistsAndBelongsToExistingUserAndTheGivenEnvironment() throws Exception {
         // Arrange
         User user = new User("user@mail.com", "someHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -135,11 +153,11 @@ public class EventServiceTest {
         );
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(app.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventRepository.findAllByAppId(app.getId())).thenReturn(events);
 
         // Act
-        List<Event> result = underTest.getAll(app.getId(), user.getId());
+        List<Event> result = underTest.getAll(app.getId(), env.getId(), user.getId());
 
         // Assert
         assertEquals(events.size(), result.size());
@@ -149,5 +167,21 @@ public class EventServiceTest {
             assertEquals(events.get(i).getCreatedAt(), result.get(i).getCreatedAt());
             assertEquals(events.get(i).getApp().getId(), result.get(i).getApp().getId());
         }
+    }
+
+    @Test
+    void getAll_throwsAppNotFoundException_whenAppBelongsToUserButNotToTheGivenEnvironment() throws Exception {
+        // Arrange
+        User user = new User("user@mail.com", "someHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+
+        UUID wrongEnvId = UUID.randomUUID();
+
+        // Stub
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), wrongEnvId, user.getId())).thenReturn(Optional.empty());
+
+        // Act + Assert
+        assertThrows(AppNotFoundException.class, () -> underTest.getAll(app.getId(), wrongEnvId, user.getId()));
     }
 }

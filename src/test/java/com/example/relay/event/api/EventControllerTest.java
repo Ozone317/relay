@@ -77,7 +77,7 @@ public class EventControllerTest {
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
         // Stubs
-        when(eventService.create(request, app.getId(), user.getId())).thenReturn(event);
+        when(eventService.create(request, app.getId(), env.getId(), user.getId())).thenReturn(event);
         when(eventMapper.toResponseDto(event)).thenReturn(response);
 
         // Act
@@ -94,7 +94,7 @@ public class EventControllerTest {
         .andExpect(jsonPath("$.createdAt").value(response.createdAt().toString()));
 
         // Verify
-        verify(eventService).create(request, app.getId(), user.getId());
+        verify(eventService).create(request, app.getId(), env.getId(), user.getId());
         verify(eventMapper).toResponseDto(event);
     }
 
@@ -109,7 +109,7 @@ public class EventControllerTest {
         EventCreateDto request = new EventCreateDto("payment.created");
 
         // Stubs
-        doThrow(new EventAlreadyExistsException(request.name())).when(eventService).create(request, app.getId(), user.getId());
+        doThrow(new EventAlreadyExistsException(request.name())).when(eventService).create(request, app.getId(), env.getId(), user.getId());
 
         // Act
         mockMvc.perform(
@@ -143,7 +143,7 @@ public class EventControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
-        when(eventService.getAll(app.getId(), user.getId())).thenReturn(events);
+        when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(events);
         when(eventMapper.toResponseDtoList(events)).thenReturn(response);
 
         // Act
@@ -163,7 +163,7 @@ public class EventControllerTest {
         .andExpect(jsonPath("$[1].createdAt").value(response.get(1).createdAt().toString()));
 
         // Verify
-        verify(eventService).getAll(app.getId(), user.getId());
+        verify(eventService).getAll(app.getId(), env.getId(), user.getId());
         verify(eventMapper).toResponseDtoList(events);
     }
 
@@ -179,7 +179,7 @@ public class EventControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
-        when(eventService.getAll(app.getId(), user.getId())).thenReturn(List.of());
+        when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(List.of());
         when(eventMapper.toResponseDtoList(List.of())).thenReturn(List.of());
 
         // Act
@@ -192,7 +192,7 @@ public class EventControllerTest {
         .andExpect(content().json("[]"));
 
         // Verify
-        verify(eventService).getAll(app.getId(), user.getId());
+        verify(eventService).getAll(app.getId(), env.getId(), user.getId());
         verify(eventMapper).toResponseDtoList(List.of());
     }
 }

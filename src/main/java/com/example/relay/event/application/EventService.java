@@ -32,9 +32,10 @@ public class EventService {
         this.eventMapper = eventMapper;
     }
 
-    public Event create(EventCreateDto request, UUID appId, UUID userId) throws AppNotFoundException, EventAlreadyExistsException {
-        App app = appRepository.findByIdAndEnvironmentUserId(
+    public Event create(EventCreateDto request, UUID appId, UUID environmentId, UUID userId) throws AppNotFoundException, EventAlreadyExistsException {
+        App app = appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(
             appId,
+            environmentId,
             userId
         ).orElseThrow(
             () -> new AppNotFoundException(appId)
@@ -58,8 +59,8 @@ public class EventService {
         }
     }
 
-    public List<Event> getAll(UUID appId, UUID userId) {
-        appRepository.findByIdAndEnvironmentUserId(appId, userId)
+    public List<Event> getAll(UUID appId, UUID environmentId, UUID userId) {
+        appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, environmentId, userId)
         .orElseThrow(
             () -> new AppNotFoundException(appId)
         );
