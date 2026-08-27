@@ -55,18 +55,20 @@ public class AppService {
         return apps;
     }
 
-    public App getById(UUID id, UUID userId) {
-        return appRepository.findByIdAndEnvironmentUserId(
+    public App getById(UUID id, UUID environmentId, UUID userId) {
+        return appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(
             id,
+            environmentId,
             userId
         ).orElseThrow(
             () -> new AppNotFoundException(id)
         );
     }
 
-    public void delete(UUID id, UUID userId) {
-        App app = appRepository.findByIdAndEnvironmentUserId(
+    public void delete(UUID id, UUID environmentId, UUID userId) {
+        App app = appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(
             id,
+            environmentId,
             userId
         ).orElseThrow(
             () -> new AppNotFoundException(id)

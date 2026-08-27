@@ -64,7 +64,7 @@ public class AppController {
         @PathVariable UUID appId,
         @AuthenticationPrincipal AuthenticatedUser user
     ) throws AppNotFoundException {
-        App app = appService.getById(appId, user.getId());
+        App app = appService.getById(appId, environmentId, user.getId());
         AppResponseDto response = appMapper.toResponseDto(app);
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }
@@ -75,7 +75,7 @@ public class AppController {
         @PathVariable UUID appId,
         @AuthenticationPrincipal AuthenticatedUser user
     ) throws AppNotFoundException {
-        appService.delete(appId, user.getId());
+        appService.delete(appId, environmentId, user.getId());
         return ResponseEntity.status(HttpStatus.NO_CONTENT).body(null);
     }
 }

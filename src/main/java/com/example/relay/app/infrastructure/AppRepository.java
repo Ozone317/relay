@@ -12,4 +12,5 @@ public interface AppRepository extends JpaRepository<App, UUID> {
 
     List<App> findAllByEnvironmentId(UUID environmentId);
     Optional<App> findByIdAndEnvironmentUserId(UUID id, UUID userId);
+    Optional<App> findByIdAndEnvironmentIdAndEnvironmentUserId(UUID id, UUID environmentId, UUID userId);
 }

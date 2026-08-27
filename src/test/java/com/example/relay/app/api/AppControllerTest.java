@@ -120,7 +120,7 @@ public class AppControllerTest {
         );
 
         // Stub
-        when(appService.getById(app.getId(), user.getId())).thenReturn(app);
+        when(appService.getById(app.getId(), env.getId(), user.getId())).thenReturn(app);
         when(appMapper.toResponseDto(app)).thenReturn(response);
 
         // Act
@@ -136,7 +136,7 @@ public class AppControllerTest {
         .andExpect(jsonPath("$.createdAt").value(response.createdAt().toString()));
 
         // Verify
-        verify(appService).getById(app.getId(), user.getId());
+        verify(appService).getById(app.getId(), env.getId(), user.getId());
         verify(appMapper).toResponseDto(app);
     }
 
@@ -153,7 +153,7 @@ public class AppControllerTest {
         App app = new App("App 1", env);
         
         // Stub
-        when(appService.getById(app.getId(), user.getId())).thenThrow(new AppNotFoundException(app.getId()));
+        when(appService.getById(app.getId(), env.getId(), user.getId())).thenThrow(new AppNotFoundException(app.getId()));
 
         // Act + Assert
         mockMvc.perform(
@@ -278,7 +278,7 @@ public class AppControllerTest {
         .andExpect(status().isNoContent());
 
         // Verify
-        verify(appService).delete(app.getId(), user.getId());
+        verify(appService).delete(app.getId(), env.getId(), user.getId());
     }
 
     @Test
@@ -294,7 +294,7 @@ public class AppControllerTest {
 
         // Stub
         doThrow(new AppNotFoundException(app.getId()))
-        .when(appService).delete(app.getId(), user.getId());
+        .when(appService).delete(app.getId(), env.getId(), user.getId());
 
         // Act + Assert
         mockMvc.perform(
@@ -304,8 +304,8 @@ public class AppControllerTest {
         )
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.message").value("App not found with id: " + app.getId()));
-        
+
         // Verify
-        verify(appService).delete(app.getId(), user.getId());
+        verify(appService).delete(app.getId(), env.getId(), user.getId());
     }
 }

@@ -125,21 +125,22 @@ public class AppServiceTest {
     }
 
     @Test
-    void getById_returnsApp_whenItBelongsToTheUser() {
+    void getById_returnsApp_whenItBelongsToTheUserAndTheGivenEnvironment() {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         UUID userId = user.getId();
 
         Environment env = new Environment("Env 1", "Desc 1", user);
+        UUID envId = env.getId();
 
         App app = new App("App 1", env);
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(appId, userId)).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.of(app));
 
         // Act
-        App result = underTest.getById(appId, userId);
+        App result = underTest.getById(appId, envId, userId);
 
         // Assert
         assertEquals(app.getId(), result.getId());
@@ -154,19 +155,20 @@ public class AppServiceTest {
         User differentUser = new User("diff@mail.com", "someOtherHash");
 
         Environment env = new Environment("Env 1", "Desc 1", differentUser);
+        UUID envId = env.getId();
 
         App app = new App("App 1", env);
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(appId, userId)).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(AppNotFoundException.class, () -> underTest.getById(appId, userId));
+        assertThrows(AppNotFoundException.class, () -> underTest.getById(appId, envId, userId));
     }
 
     @Test
-    void delete_deletesApp_whenItExistsAndBelongsToUser() {
+    void getById_throwsAppNotFoundException_whenAppBelongsToUserButNotToTheGivenEnvironment() {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         UUID userId = user.getId();
@@ -176,11 +178,32 @@ public class AppServiceTest {
         App app = new App("App 1", env);
         UUID appId = app.getId();
 
+        UUID wrongEnvId = UUID.randomUUID();
+
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(appId, userId)).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, wrongEnvId, userId)).thenReturn(Optional.empty());
+
+        // Act + Assert
+        assertThrows(AppNotFoundException.class, () -> underTest.getById(appId, wrongEnvId, userId));
+    }
+
+    @Test
+    void delete_deletesApp_whenItExistsAndBelongsToUserAndTheGivenEnvironment() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        UUID userId = user.getId();
+
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        UUID envId = env.getId();
+
+        App app = new App("App 1", env);
+        UUID appId = app.getId();
+
+        // Stub
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.of(app));
 
         // Act
-        underTest.delete(appId, userId);
+        underTest.delete(appId, envId, userId);
 
         // Verify
         verify(appRepository).delete(app);
@@ -194,15 +217,39 @@ public class AppServiceTest {
         UUID userId = user.getId();
 
         Environment env = new Environment("Env 1", "Desc 1", differentUser);
+        UUID envId = env.getId();
 
         App app = new App("App 1", env);
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentUserId(appId, userId)).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(AppNotFoundException.class, () -> underTest.delete(appId, userId));
+        assertThrows(AppNotFoundException.class, () -> underTest.delete(appId, envId, userId));
+
+        // Verify
+        verify(appRepository, never()).delete(any());
+    }
+
+    @Test
+    void delete_throwsAppNotFoundException_whenAppBelongsToUserButNotToTheGivenEnvironment() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        UUID userId = user.getId();
+
+        Environment env = new Environment("Env 1", "Desc 1", user);
+
+        App app = new App("App 1", env);
+        UUID appId = app.getId();
+
+        UUID wrongEnvId = UUID.randomUUID();
+
+        // Stub
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, wrongEnvId, userId)).thenReturn(Optional.empty());
+
+        // Act + Assert
+        assertThrows(AppNotFoundException.class, () -> underTest.delete(appId, wrongEnvId, userId));
 
         // Verify
         verify(appRepository, never()).delete(any());
