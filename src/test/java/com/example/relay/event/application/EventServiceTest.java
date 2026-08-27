@@ -54,7 +54,7 @@ public class EventServiceTest {
         // Stubs
         when(appRepository.findByIdAndEnvironmentUserId(app.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventMapper.toEntity(request, app)).thenReturn(event);
-        when(eventRepository.save(event)).thenReturn(event);
+        when(eventRepository.saveAndFlush(event)).thenReturn(event);
 
         // Act
         Event result = underTest.create(request, app.getId(), user.getId());
@@ -117,7 +117,7 @@ public class EventServiceTest {
         when(appRepository.findByIdAndEnvironmentUserId(app.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventRepository.findByNameAndAppId(request.name(), app.getId())).thenReturn(Optional.empty());
         when(eventMapper.toEntity(request, app)).thenReturn(event);
-        doThrow(new DataIntegrityViolationException(null)).when(eventRepository).save(event);
+        doThrow(new DataIntegrityViolationException(null)).when(eventRepository).saveAndFlush(event);
 
         // Act + Assert
         assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), user.getId()));
