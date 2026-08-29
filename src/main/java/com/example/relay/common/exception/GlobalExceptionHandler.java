@@ -15,6 +15,7 @@ import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
 import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
+import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 
 @RestControllerAdvice
@@ -60,6 +61,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleEventAlreadyExistsException(EventAlreadyExistsException ex) {
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    public ResponseEntity<ApiError> handleEventNotFoundException(EventNotFoundException ex) {
+        ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
 
     @ExceptionHandler(EndpointNotFoundException.class)

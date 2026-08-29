@@ -12,6 +12,7 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.event.api.dto.EventCreateDto;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventAlreadyExistsException;
+import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.event.mapper.EventMapper;
 
@@ -68,5 +69,18 @@ public class EventService {
         List<Event> events = eventRepository.findAllByAppId(appId);
         
         return events;
+    }
+
+    public Event getById(UUID id, UUID appId, UUID environmentId, UUID userId) {
+        Event event = eventRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(
+            id,
+            appId,
+            environmentId,
+            userId
+        ).orElseThrow(
+            () -> new EventNotFoundException(id)
+        );
+
+        return event;
     }
 }
