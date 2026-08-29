@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.example.relay.app.exception.AppNotFoundException;
+import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
+import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
@@ -56,6 +58,18 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(EventAlreadyExistsException.class)
     public ResponseEntity<ApiError> handleEventAlreadyExistsException(EventAlreadyExistsException ex) {
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(EndpointNotFoundException.class)
+    public ResponseEntity<ApiError> handleEndpointNotFoundException(EndpointNotFoundException ex) {
+        ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    @ExceptionHandler(EndpointAlreadyExistsException.class)
+    public ResponseEntity<ApiError> handleEndpointAlreadyExistsException(EndpointAlreadyExistsException ex) {
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
