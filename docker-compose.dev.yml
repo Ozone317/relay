@@ -26,6 +26,22 @@ services:
       retries: 10
     restart: always
 
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "5672:5672" # Port to reach out to for application clients
+      - "15672:15672" # Port to view queues from UI
+    environment:
+      RABBITMQ_DEFAULT_USER: relay
+      RABBITMQ_DEFAULT_PASS: relay
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: always
+
   app:
     build:
       context: .
