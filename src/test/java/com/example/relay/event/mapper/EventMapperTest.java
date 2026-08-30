@@ -3,6 +3,8 @@ package com.example.relay.event.mapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,13 +51,14 @@ public class EventMapperTest {
         Event event = new Event("payment.completed", app);
 
         // Act
-        EventResponseDto result = underTest.toResponseDto(event);
+        EventResponseDto result = underTest.toResponseDto(event, 3L);
 
         // Assert
         assertEquals(event.getName(), result.name());
         assertEquals(event.getId(), result.id());
         assertEquals(event.getApp().getId(), result.appId());
         assertEquals(event.getCreatedAt(), result.createdAt());
+        assertEquals(3L, result.subscriberCount());
     }
 
     @Test
@@ -68,9 +71,13 @@ public class EventMapperTest {
             new Event("payment.completed", app),
             new Event("user.created", app)
         );
+        Map<UUID, Long> eventIdCountMap = Map.of(
+            events.get(0).getId(), 2L,
+            events.get(1).getId(), 0L
+        );
 
         // Act
-        List<EventResponseDto> result = underTest.toResponseDtoList(events);
+        List<EventResponseDto> result = underTest.toResponseDtoList(events, eventIdCountMap);
 
         // Assert
         assertEquals(events.size(), result.size());
@@ -82,5 +89,22 @@ public class EventMapperTest {
         assertEquals(events.get(1).getCreatedAt(), result.get(1).createdAt());
         assertEquals(events.get(0).getApp().getId(), result.get(0).appId());
         assertEquals(events.get(1).getApp().getId(), result.get(1).appId());
+        assertEquals(2L, result.get(0).subscriberCount());
+        assertEquals(0L, result.get(1).subscriberCount());
+    }
+
+    @Test
+    void toResponseDtoList_defaultsSubscriberCountToZero_whenEventHasNoEntryInCountMap() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        List<Event> events = List.of(new Event("payment.completed", app));
+
+        // Act
+        List<EventResponseDto> result = underTest.toResponseDtoList(events, Map.of());
+
+        // Assert
+        assertEquals(0L, result.get(0).subscriberCount());
     }
 }

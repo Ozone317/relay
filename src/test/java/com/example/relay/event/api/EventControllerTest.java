@@ -1,6 +1,7 @@
 package com.example.relay.event.api;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -78,7 +79,7 @@ public class EventControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
         // Stubs
         when(eventService.create(request, app.getId(), env.getId(), user.getId())).thenReturn(event);
-        when(eventMapper.toResponseDto(event)).thenReturn(response);
+        when(eventMapper.toResponseDto(event, 0)).thenReturn(response);
 
         // Act
         mockMvc.perform(
@@ -95,7 +96,7 @@ public class EventControllerTest {
 
         // Verify
         verify(eventService).create(request, app.getId(), env.getId(), user.getId());
-        verify(eventMapper).toResponseDto(event);
+        verify(eventMapper).toResponseDto(event, 0);
     }
 
     @Test
@@ -122,7 +123,7 @@ public class EventControllerTest {
         .andExpect(jsonPath("$.message").value("Event already exists with name: " + request.name()));
 
         // Verify
-        verify(eventMapper, never()).toResponseDto(any());
+        verify(eventMapper, never()).toResponseDto(any(), anyLong());
     }
 
     @Test
@@ -143,8 +144,7 @@ public class EventControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
-        when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(events);
-        when(eventMapper.toResponseDtoList(events)).thenReturn(response);
+        when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(response);
 
         // Act
         mockMvc.perform(
@@ -164,7 +164,6 @@ public class EventControllerTest {
 
         // Verify
         verify(eventService).getAll(app.getId(), env.getId(), user.getId());
-        verify(eventMapper).toResponseDtoList(events);
     }
 
     @Test
@@ -174,13 +173,12 @@ public class EventControllerTest {
         User differentUser = new User("diff@mail.com", "otherHash");
         Environment env = new Environment("Env 1", "Desc 1", differentUser);
         App app = new App("App 1", env);
-        
+
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
         when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(List.of());
-        when(eventMapper.toResponseDtoList(List.of())).thenReturn(List.of());
 
         // Act
         mockMvc.perform(
@@ -193,6 +191,5 @@ public class EventControllerTest {
 
         // Verify
         verify(eventService).getAll(app.getId(), env.getId(), user.getId());
-        verify(eventMapper).toResponseDtoList(List.of());
     }
 }

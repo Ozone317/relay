@@ -8,5 +8,5 @@ public record EventResponseDto(
     String name,
     UUID appId,
     Instant createdAt,
-    Integer subscriberCount
+    long subscriberCount
 ) {}

@@ -44,7 +44,7 @@ public class EventController {
         @RequestBody @Valid EventCreateDto request
     ) {
         Event event = eventService.create(request, appId, environmentId, user.getId());
-        EventResponseDto response = eventMapper.toResponseDto(event);
+        EventResponseDto response = eventMapper.toResponseDto(event, 0);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -54,8 +54,7 @@ public class EventController {
         @PathVariable UUID appId,
         @AuthenticationPrincipal AuthenticatedUser user
     ) {
-        List<Event> events = eventService.getAll(appId, environmentId, user.getId());
-        List<EventResponseDto> response = eventMapper.toResponseDtoList(events);
+        List<EventResponseDto> response = eventService.getAll(appId, environmentId, user.getId());
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }
 }

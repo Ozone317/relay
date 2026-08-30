@@ -64,4 +64,39 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, UUID
         UUID endpointId,
         UUID userId
     );
+
+    @Query(
+        """
+            SELECT COUNT(s)
+            FROM Subscription s
+            WHERE
+                s.app.id = :appId
+                AND s.app.environment.id = :environmentId
+                AND s.event.id = :eventId
+                AND s.app.environment.user.id = :userId
+        """
+    )
+    long countByAppIdAndEnvironmentIdAndEventIdAndUserId(UUID appId, UUID environmentId, UUID eventId, UUID userId);
+
+    @Query(
+        """
+            SELECT s.event.id AS eventId, COUNT(s) AS count
+            FROM Subscription s
+            WHERE
+                s.event.id IN :eventIds
+                AND s.app.id = :appId
+                AND s.app.environment.id = :environmentId
+                AND s.app.environment.user.id = :userId
+            GROUP BY s.event.id
+        """
+    )
+    List<EventSubscriptionCount> countByEventIdIn(UUID appId, UUID environmentId, List<UUID> eventIds, UUID userId);
+
+    /*
+     * Spring Data maps the AS eventId/AS count aliases onto matching getter names automatically.
+     */
+    public interface EventSubscriptionCount {
+        UUID getEventId();
+        Long getCount();    
+    }
 }

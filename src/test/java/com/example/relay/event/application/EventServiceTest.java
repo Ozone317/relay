@@ -1,17 +1,23 @@
 package com.example.relay.event.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -22,10 +28,13 @@ import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.api.dto.EventCreateDto;
+import com.example.relay.event.api.dto.EventResponseDto;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.event.mapper.EventMapper;
+import com.example.relay.subscription.infrastructure.SubscriptionRepository;
+import com.example.relay.subscription.infrastructure.SubscriptionRepository.EventSubscriptionCount;
 import com.example.relay.user.domain.User;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,6 +45,9 @@ public class EventServiceTest {
 
     @Mock
     private AppRepository appRepository;
+
+    @Mock
+    private SubscriptionRepository subscriptionRepository;
 
     @Mock
     private EventMapper eventMapper;
@@ -142,31 +154,45 @@ public class EventServiceTest {
     }
 
     @Test
-    void getAll_returnsAllEventsUnderApp_whenAppExistsAndBelongsToExistingUserAndTheGivenEnvironment() throws Exception {
+    void getAll_returnsMappedEventResponseDtos_withSubscriberCountsFromSubscriptionRepository() throws Exception {
         // Arrange
         User user = new User("user@mail.com", "someHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
-        List<Event> events = List.of(
-            new Event("payment.created", app),
-            new Event("user.created", app)
+        Event eventWithSubs = new Event("payment.created", app);
+        Event eventWithoutSubs = new Event("user.created", app);
+        List<Event> events = List.of(eventWithSubs, eventWithoutSubs);
+
+        EventSubscriptionCount count = mock(EventSubscriptionCount.class);
+        when(count.getEventId()).thenReturn(eventWithSubs.getId());
+        when(count.getCount()).thenReturn(2L);
+
+        List<EventResponseDto> expectedResponse = List.of(
+            new EventResponseDto(eventWithSubs.getId(), eventWithSubs.getName(), app.getId(), eventWithSubs.getCreatedAt(), 2L),
+            new EventResponseDto(eventWithoutSubs.getId(), eventWithoutSubs.getName(), app.getId(), eventWithoutSubs.getCreatedAt(), 0L)
         );
 
         // Stub
         when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
         when(eventRepository.findAllByAppId(app.getId())).thenReturn(events);
+        when(subscriptionRepository.countByEventIdIn(
+            app.getId(), env.getId(), List.of(eventWithSubs.getId(), eventWithoutSubs.getId()), user.getId()
+        )).thenReturn(List.of(count));
+        when(eventMapper.toResponseDtoList(eq(events), anyMap())).thenReturn(expectedResponse);
 
         // Act
-        List<Event> result = underTest.getAll(app.getId(), env.getId(), user.getId());
+        List<EventResponseDto> result = underTest.getAll(app.getId(), env.getId(), user.getId());
 
         // Assert
-        assertEquals(events.size(), result.size());
-        for (int i = 0; i < events.size(); i++) {
-            assertEquals(events.get(i).getId(), result.get(i).getId());
-            assertEquals(events.get(i).getName(), result.get(i).getName());
-            assertEquals(events.get(i).getCreatedAt(), result.get(i).getCreatedAt());
-            assertEquals(events.get(i).getApp().getId(), result.get(i).getApp().getId());
-        }
+        assertEquals(expectedResponse, result);
+
+        // Verify the count map handed to the mapper only carries entries the repository actually returned;
+        // defaulting a missing event to 0 is the mapper's job (GROUP BY omits zero-subscription events entirely).
+        ArgumentCaptor<Map<UUID, Long>> mapCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(eventMapper).toResponseDtoList(eq(events), mapCaptor.capture());
+        Map<UUID, Long> capturedMap = mapCaptor.getValue();
+        assertEquals(2L, capturedMap.get(eventWithSubs.getId()));
+        assertNull(capturedMap.get(eventWithoutSubs.getId()));
     }
 
     @Test
