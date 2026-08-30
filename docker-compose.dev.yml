@@ -1,0 +1,62 @@
+# Local dev stack: `docker compose -f docker-compose.dev.yml up`
+# Separate from docker-compose.yml, which builds the production Dockerfile
+# and is unrelated to this dev workflow.
+#
+# `name` is set explicitly because both compose files live in this directory
+# and would otherwise default to the same project name ("relay"), causing
+# their images/containers to collide (confirmed - without this, `up` silently
+# reused the production image instead of building Dockerfile.dev).
+name: relay-dev
+
+services:
+  db:
+    image: postgres:16
+    ports:
+      - "5433:5432" # host 5433 to avoid clashing with any locally installed Postgres
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay -d relay"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: always
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    # Bind-mounting the host-owned repo over /app needs a user that can write
+    # to it; the JDK base image's default user has that access, so no `user:
+    # root` override is needed here (unlike the runtime image, which drops to
+    # a dedicated non-root user for the built jar).
+    volumes:
+      - .:/app:cached
+      - m2-cache:/root/.m2
+      # Docker-outside-of-Docker: lets Testcontainers (run via `mvnw test`
+      # inside this container) talk to the host's Docker daemon to spin up
+      # its own ephemeral containers, instead of needing a nested daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+volumes:
+  db-data:
+  m2-cache:

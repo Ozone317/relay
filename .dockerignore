@@ -8,4 +8,6 @@ target/
 HELP.md
 RELAY_HANDOFF.md
 docker-compose.yml
+docker-compose.dev.yml
 Dockerfile
+Dockerfile.dev

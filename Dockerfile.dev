@@ -1,0 +1,12 @@
+# Dev-only image: JDK + pre-warmed dependency cache, no source baked in.
+# docker-compose.dev.yml bind-mounts the repo over /app, so editing files on
+# the host takes effect immediately with no rebuild - this image exists only
+# to remove the need for a locally installed JDK/JAVA_HOME.
+FROM eclipse-temurin:21-jdk
+WORKDIR /app
+
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+RUN chmod +x mvnw && ./mvnw dependency:go-offline -B
+
+CMD ["./mvnw", "spring-boot:run"]
