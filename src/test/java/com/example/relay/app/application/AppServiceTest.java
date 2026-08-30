@@ -7,16 +7,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
 import com.example.relay.app.api.dto.AppCreateDto;
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
@@ -26,6 +16,14 @@ import com.example.relay.environment.domain.Environment;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.environment.infrastructure.EnvironmentRepository;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 public class AppServiceTest {
@@ -83,10 +81,7 @@ public class AppServiceTest {
         when(environmentRepository.findByIdAndUserId(envId, userId)).thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(
-            EnvironmentNotFoundException.class,
-            () -> underTest.create(request, envId, userId)
-        );
+        assertThrows(EnvironmentNotFoundException.class, () -> underTest.create(request, envId, userId));
 
         // Verify
         verify(appMapper, never()).toEntity(any(), any());
@@ -102,10 +97,7 @@ public class AppServiceTest {
         Environment env = new Environment("Env 1", "Desc 1", user);
         UUID envId = env.getId();
 
-        List<App> apps = List.of(
-            new App("App 1", env),
-            new App("App 2", env)
-        );
+        List<App> apps = List.of(new App("App 1", env), new App("App 2", env));
 
         // Stubs
         when(environmentRepository.findByIdAndUserId(envId, userId)).thenReturn(Optional.of(env));
@@ -120,7 +112,8 @@ public class AppServiceTest {
             assertEquals(apps.get(i).getId(), result.get(i).getId());
             assertEquals(apps.get(i).getName(), result.get(i).getName());
             assertEquals(apps.get(i).getEnvironment().getId(), result.get(i).getEnvironment().getId());
-            assertEquals(apps.get(i).getEnvironment().getUser().getId(), result.get(i).getEnvironment().getUser().getId());
+            assertEquals(apps.get(i).getEnvironment().getUser().getId(),
+                    result.get(i).getEnvironment().getUser().getId());
         }
     }
 
@@ -137,7 +130,8 @@ public class AppServiceTest {
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId))
+                .thenReturn(Optional.of(app));
 
         // Act
         App result = underTest.getById(appId, envId, userId);
@@ -161,7 +155,8 @@ public class AppServiceTest {
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
         assertThrows(AppNotFoundException.class, () -> underTest.getById(appId, envId, userId));
@@ -181,7 +176,8 @@ public class AppServiceTest {
         UUID wrongEnvId = UUID.randomUUID();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, wrongEnvId, userId)).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, wrongEnvId, userId))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
         assertThrows(AppNotFoundException.class, () -> underTest.getById(appId, wrongEnvId, userId));
@@ -200,7 +196,8 @@ public class AppServiceTest {
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId))
+                .thenReturn(Optional.of(app));
 
         // Act
         underTest.delete(appId, envId, userId);
@@ -223,7 +220,8 @@ public class AppServiceTest {
         UUID appId = app.getId();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId)).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, envId, userId))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
         assertThrows(AppNotFoundException.class, () -> underTest.delete(appId, envId, userId));
@@ -246,7 +244,8 @@ public class AppServiceTest {
         UUID wrongEnvId = UUID.randomUUID();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, wrongEnvId, userId)).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, wrongEnvId, userId))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
         assertThrows(AppNotFoundException.class, () -> underTest.delete(appId, wrongEnvId, userId));

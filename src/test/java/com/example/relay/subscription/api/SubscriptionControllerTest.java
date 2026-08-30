@@ -10,18 +10,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.util.List;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.http.MediaType;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CustomUserDetailsService;
@@ -36,6 +24,16 @@ import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.subscription.mapper.SubscriptionMapper;
 import com.example.relay.user.application.AuthService;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(SubscriptionController.class)
 @Import(SecurityConfig.class)
@@ -68,26 +66,23 @@ public class SubscriptionControllerTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
         Event event = new Event("user.created", app);
         Subscription subscription = new Subscription(app, event, endpoint);
-        SubscriptionResponseDto response = new SubscriptionResponseDto(
-            subscription.getId(), app.getId(), event.getId(), event.getName(), endpoint.getId(), subscription.getCreatedAt()
-        );
+        SubscriptionResponseDto response = new SubscriptionResponseDto(subscription.getId(), app.getId(), event.getId(),
+                event.getName(), endpoint.getId(), subscription.getCreatedAt());
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
-        when(subscriptionService.create(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId())).thenReturn(subscription);
+        when(subscriptionService.create(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId()))
+                .thenReturn(subscription);
         when(subscriptionMapper.toResponseDto(subscription)).thenReturn(response);
 
         // Act
         mockMvc.perform(
-            put("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions/{eventId}",
-                env.getId(), app.getId(), endpoint.getId(), event.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isCreated())
-        .andExpect(jsonPath("$.id").value(response.id().toString()))
-        .andExpect(jsonPath("$.eventName").value(response.eventName()));
+                put("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions/{eventId}",
+                        env.getId(), app.getId(), endpoint.getId(), event.getId()).with(authentication(auth))
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.id").value(response.id().toString()))
+                .andExpect(jsonPath("$.eventName").value(response.eventName()));
 
         // Verify
         verify(subscriptionService).create(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId());
@@ -102,31 +97,27 @@ public class SubscriptionControllerTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
         Event event1 = new Event("user.created", app);
         Event event2 = new Event("user.deleted", app);
-        List<Subscription> subscriptions = List.of(
-            new Subscription(app, event1, endpoint),
-            new Subscription(app, event2, endpoint)
-        );
+        List<Subscription> subscriptions =
+                List.of(new Subscription(app, event1, endpoint), new Subscription(app, event2, endpoint));
         List<SubscriptionResponseDto> response = List.of(
-            new SubscriptionResponseDto(subscriptions.get(0).getId(), app.getId(), event1.getId(), event1.getName(), endpoint.getId(), subscriptions.get(0).getCreatedAt()),
-            new SubscriptionResponseDto(subscriptions.get(1).getId(), app.getId(), event2.getId(), event2.getName(), endpoint.getId(), subscriptions.get(1).getCreatedAt())
-        );
+                new SubscriptionResponseDto(subscriptions.get(0).getId(), app.getId(), event1.getId(), event1.getName(),
+                        endpoint.getId(), subscriptions.get(0).getCreatedAt()),
+                new SubscriptionResponseDto(subscriptions.get(1).getId(), app.getId(), event2.getId(), event2.getName(),
+                        endpoint.getId(), subscriptions.get(1).getCreatedAt()));
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
-        when(subscriptionService.getAll(env.getId(), app.getId(), endpoint.getId(), user.getId())).thenReturn(subscriptions);
+        when(subscriptionService.getAll(env.getId(), app.getId(), endpoint.getId(), user.getId()))
+                .thenReturn(subscriptions);
         when(subscriptionMapper.toResponseDtoList(subscriptions)).thenReturn(response);
 
         // Act
-        mockMvc.perform(
-            get("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions",
-                env.getId(), app.getId(), endpoint.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$[0].eventName").value(response.get(0).eventName()))
-        .andExpect(jsonPath("$[1].eventName").value(response.get(1).eventName()));
+        mockMvc.perform(get("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions",
+                env.getId(), app.getId(), endpoint.getId()).with(authentication(auth))
+                .contentType(MediaType.APPLICATION_JSON)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventName").value(response.get(0).eventName()))
+                .andExpect(jsonPath("$[1].eventName").value(response.get(1).eventName()));
     }
 
     @Test
@@ -140,18 +131,14 @@ public class SubscriptionControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
-        when(subscriptionService.getAll(env.getId(), app.getId(), endpoint.getId(), user.getId())).thenReturn(List.of());
+        when(subscriptionService.getAll(env.getId(), app.getId(), endpoint.getId(), user.getId()))
+                .thenReturn(List.of());
         when(subscriptionMapper.toResponseDtoList(List.of())).thenReturn(List.of());
 
         // Act
-        mockMvc.perform(
-            get("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions",
-                env.getId(), app.getId(), endpoint.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isOk())
-        .andExpect(content().json("[]"));
+        mockMvc.perform(get("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions",
+                env.getId(), app.getId(), endpoint.getId()).with(authentication(auth))
+                .contentType(MediaType.APPLICATION_JSON)).andExpect(status().isOk()).andExpect(content().json("[]"));
     }
 
     @Test
@@ -166,13 +153,10 @@ public class SubscriptionControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Act
-        mockMvc.perform(
-            delete("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions/{eventId}",
-                env.getId(), app.getId(), endpoint.getId(), event.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isNoContent());
+        mockMvc.perform(delete(
+                "/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions/{eventId}",
+                env.getId(), app.getId(), endpoint.getId(), event.getId()).with(authentication(auth))
+                .contentType(MediaType.APPLICATION_JSON)).andExpect(status().isNoContent());
 
         // Verify
         verify(subscriptionService).delete(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId());
@@ -190,12 +174,9 @@ public class SubscriptionControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Act
-        mockMvc.perform(
-            delete("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions/{eventId}",
-                env.getId(), app.getId(), endpoint.getId(), event.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isNoContent());
+        mockMvc.perform(delete(
+                "/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}/subscriptions/{eventId}",
+                env.getId(), app.getId(), endpoint.getId(), event.getId()).with(authentication(auth))
+                .contentType(MediaType.APPLICATION_JSON)).andExpect(status().isNoContent());
     }
 }

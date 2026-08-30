@@ -3,17 +3,15 @@ package com.example.relay.endpoint.mapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.api.dto.EndpointCreateDto;
 import com.example.relay.endpoint.api.dto.EndpointResponseDto;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public class EndpointMapperTest {
 
@@ -72,10 +70,9 @@ public class EndpointMapperTest {
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
-        List<Endpoint> endpoints = List.of(
-            new Endpoint("Production", "https://example.com/webhook", "whsec_test1", app),
-            new Endpoint("Staging", "https://staging.example.com/webhook", "whsec_test2", app)
-        );
+        List<Endpoint> endpoints =
+                List.of(new Endpoint("Production", "https://example.com/webhook", "whsec_test1", app),
+                        new Endpoint("Staging", "https://staging.example.com/webhook", "whsec_test2", app));
 
         // Act
         List<EndpointResponseDto> result = underTest.toEndpointResponseDtoList(endpoints);

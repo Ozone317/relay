@@ -5,6 +5,6 @@ import java.util.UUID;
 public class AppNotFoundException extends RuntimeException {
 
     public AppNotFoundException(UUID id) {
-        super("App not found with id: "+ id);
+        super("App not found with id: " + id);
     }
 }

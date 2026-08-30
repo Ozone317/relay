@@ -1,11 +1,5 @@
 package com.example.relay.endpoint.application;
 
-import java.util.List;
-import java.util.UUID;
-
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.stereotype.Service;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -17,6 +11,10 @@ import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.endpoint.mapper.EndpointMapper;
 import com.example.relay.endpoint.utils.SigningSecretGenerator;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
 
 @Service
 public class EndpointService {
@@ -26,46 +24,25 @@ public class EndpointService {
     private final EndpointRepository endpointRepository;
     private final SigningSecretGenerator signingSecretGenerator;
 
-    public EndpointService(
-        AppRepository appRepository,
-        EndpointMapper endpointMapper,
-        EndpointRepository endpointRepository,
-        SigningSecretGenerator signingSecretGenerator
-    ) {
+    public EndpointService(AppRepository appRepository, EndpointMapper endpointMapper,
+            EndpointRepository endpointRepository, SigningSecretGenerator signingSecretGenerator) {
         this.appRepository = appRepository;
         this.endpointMapper = endpointMapper;
         this.endpointRepository = endpointRepository;
         this.signingSecretGenerator = signingSecretGenerator;
     }
 
-    public Endpoint create(
-        EndpointCreateDto request,
-        UUID appId,
-        UUID environmentId,
-        UUID userId
-    ) throws AppNotFoundException,EndpointAlreadyExistsException {
-        App app = appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(
-            appId, environmentId, userId
-        ).orElseThrow(
-            () -> new AppNotFoundException(appId)
-        );
+    public Endpoint create(EndpointCreateDto request, UUID appId, UUID environmentId, UUID userId)
+            throws AppNotFoundException, EndpointAlreadyExistsException {
+        App app = appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, environmentId, userId)
+                .orElseThrow(() -> new AppNotFoundException(appId));
 
-        endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(
-            request.name(),
-            appId,
-            environmentId,
-            userId
-        ).ifPresent(
-            endpoint -> {
-                throw new EndpointAlreadyExistsException(endpoint.getName());
-            }
-        );
+        endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), appId, environmentId, userId)
+                .ifPresent(endpoint -> {
+                    throw new EndpointAlreadyExistsException(endpoint.getName());
+                });
 
-        Endpoint toCreate = endpointMapper.toEntity(
-            request,
-            app,
-            signingSecretGenerator.generate()
-        );
+        Endpoint toCreate = endpointMapper.toEntity(request, app, signingSecretGenerator.generate());
 
         try {
             return endpointRepository.saveAndFlush(toCreate);
@@ -74,49 +51,20 @@ public class EndpointService {
         }
     }
 
-    public Endpoint getById(
-        UUID endpointId,
-        UUID appId,
-        UUID environmentId,
-        UUID userId
-    ) {
-        return endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(
-            endpointId,
-            appId,
-            environmentId,
-            userId
-        ).orElseThrow(
-            () -> new EndpointNotFoundException(endpointId)
-        );
+    public Endpoint getById(UUID endpointId, UUID appId, UUID environmentId, UUID userId) {
+        return endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpointId, appId, environmentId, userId)
+                .orElseThrow(() -> new EndpointNotFoundException(endpointId));
     }
 
-    public List<Endpoint> getAll(
-        UUID appId,
-        UUID environmentId,
-        UUID userId
-    ) {
-        return endpointRepository.findAllByAppIdAndEnvironmentIdAndUserId(
-            appId,
-            environmentId,
-            userId
-        );
+    public List<Endpoint> getAll(UUID appId, UUID environmentId, UUID userId) {
+        return endpointRepository.findAllByAppIdAndEnvironmentIdAndUserId(appId, environmentId, userId);
     }
 
-    public Endpoint update(
-        EndpointUpdateDto request,
-        UUID endpointId,
-        UUID appId,
-        UUID environmentId,
-        UUID userId
-    ) throws EndpointNotFoundException {
-        Endpoint endpoint = endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(
-            endpointId,
-            appId,
-            environmentId,
-            userId
-        ).orElseThrow(
-            () -> new EndpointNotFoundException(endpointId)
-        );
+    public Endpoint update(EndpointUpdateDto request, UUID endpointId, UUID appId, UUID environmentId, UUID userId)
+            throws EndpointNotFoundException {
+        Endpoint endpoint =
+                endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpointId, appId, environmentId, userId)
+                        .orElseThrow(() -> new EndpointNotFoundException(endpointId));
 
         if (request.name() != null) {
             endpoint.setName(request.name());
@@ -135,12 +83,7 @@ public class EndpointService {
         return endpoint;
     }
 
-    public void delete(
-        UUID endpointId,
-        UUID appId,
-        UUID environmentId,
-        UUID userId
-    ) throws EndpointNotFoundException {
+    public void delete(UUID endpointId, UUID appId, UUID environmentId, UUID userId) throws EndpointNotFoundException {
         Endpoint endpoint = getById(endpointId, appId, environmentId, userId);
         endpointRepository.delete(endpoint);
     }

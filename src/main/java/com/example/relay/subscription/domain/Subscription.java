@@ -1,12 +1,8 @@
 package com.example.relay.subscription.domain;
 
-import java.time.Instant;
-import java.util.UUID;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.event.domain.Event;
-
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -14,19 +10,15 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import java.time.Instant;
+import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(
-    name = "subscriptions",
-    uniqueConstraints = {
-        @UniqueConstraint(
-            name = "uk_subscription_event_endpoint",
-            columnNames = {"event_id", "endpoint_id"}
-        )
-    }
-)
+@Table(name = "subscriptions",
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uk_subscription_event_endpoint", columnNames = {"event_id", "endpoint_id"})})
 @NoArgsConstructor
 public class Subscription {
 

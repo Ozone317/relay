@@ -2,11 +2,6 @@ package com.example.relay.subscription.mapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.util.List;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
@@ -14,6 +9,9 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.subscription.api.dto.SubscriptionResponseDto;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public class SubscriptionMapperTest {
 
@@ -55,10 +53,8 @@ public class SubscriptionMapperTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
         Event event1 = new Event("user.created", app);
         Event event2 = new Event("user.deleted", app);
-        List<Subscription> subscriptions = List.of(
-            new Subscription(app, event1, endpoint),
-            new Subscription(app, event2, endpoint)
-        );
+        List<Subscription> subscriptions =
+                List.of(new Subscription(app, event1, endpoint), new Subscription(app, event2, endpoint));
 
         // Act
         List<SubscriptionResponseDto> result = underTest.toResponseDtoList(subscriptions);

@@ -1,14 +1,13 @@
 package com.example.relay.common.security;
 
+import com.example.relay.user.infrastructure.UserRepository;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
-import com.example.relay.user.infrastructure.UserRepository;
-
 @Service
-public class CustomUserDetailsService implements UserDetailsService{
+public class CustomUserDetailsService implements UserDetailsService {
 
     private final UserRepository userRepository;
 
@@ -21,12 +20,8 @@ public class CustomUserDetailsService implements UserDetailsService{
         var user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + email));
 
-        return org.springframework.security.core.userdetails.User
-                .withUsername(user.getEmail())
-                .password(user.getPasswordHash())
-                .authorities("USER") // You can set roles/authorities as needed
-                .build();        
+        return org.springframework.security.core.userdetails.User.withUsername(user.getEmail())
+                .password(user.getPasswordHash()).authorities("USER") // You can set roles/authorities as needed
+                .build();
     }
-
-
 }

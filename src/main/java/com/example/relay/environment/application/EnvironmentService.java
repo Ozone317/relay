@@ -1,10 +1,5 @@
 package com.example.relay.environment.application;
 
-import java.util.List;
-import java.util.UUID;
-
-import org.springframework.stereotype.Service;
-
 import com.example.relay.environment.api.dto.EnvironmentCreateDto;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
@@ -12,6 +7,9 @@ import com.example.relay.environment.infrastructure.EnvironmentRepository;
 import com.example.relay.environment.mapper.EnvironmentMapper;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.stereotype.Service;
 
 @Service
 public class EnvironmentService {
@@ -20,13 +18,14 @@ public class EnvironmentService {
     private final UserRepository userRepository;
     private final EnvironmentMapper environmentMapper;
 
-    public EnvironmentService(EnvironmentRepository environmentRepository, UserRepository userRepository, EnvironmentMapper environmentMapper) {
+    public EnvironmentService(EnvironmentRepository environmentRepository, UserRepository userRepository,
+            EnvironmentMapper environmentMapper) {
         this.environmentRepository = environmentRepository;
         this.userRepository = userRepository;
         this.environmentMapper = environmentMapper;
     }
 
-    public Environment create(EnvironmentCreateDto request, UUID userId){
+    public Environment create(EnvironmentCreateDto request, UUID userId) {
         User user = userRepository.getReferenceById(userId);
         Environment environment = environmentMapper.toEntity(request, user);
         return environmentRepository.save(environment);
@@ -38,10 +37,7 @@ public class EnvironmentService {
 
     public Environment getById(UUID id, UUID userId) {
         return environmentRepository.findByIdAndUserId(id, userId)
-                .orElseThrow(
-                    () -> new EnvironmentNotFoundException(id)
-                );
-
+                .orElseThrow(() -> new EnvironmentNotFoundException(id));
     }
 
     public Environment updateDescription(UUID id, String description, UUID userId) {

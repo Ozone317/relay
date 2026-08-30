@@ -2,19 +2,17 @@ package com.example.relay.event.mapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.api.dto.EventCreateDto;
 import com.example.relay.event.api.dto.EventResponseDto;
 import com.example.relay.event.domain.Event;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public class EventMapperTest {
 
@@ -36,7 +34,7 @@ public class EventMapperTest {
 
         // Act
         Event result = underTest.toEntity(request, app);
-        
+
         // Assert
         assertEquals("payment.completed", result.getName());
         assertEquals(app, result.getApp());
@@ -67,14 +65,8 @@ public class EventMapperTest {
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
-        List<Event> events = List.of(
-            new Event("payment.completed", app),
-            new Event("user.created", app)
-        );
-        Map<UUID, Long> eventIdCountMap = Map.of(
-            events.get(0).getId(), 2L,
-            events.get(1).getId(), 0L
-        );
+        List<Event> events = List.of(new Event("payment.completed", app), new Event("user.created", app));
+        Map<UUID, Long> eventIdCountMap = Map.of(events.get(0).getId(), 2L, events.get(1).getId(), 0L);
 
         // Act
         List<EventResponseDto> result = underTest.toResponseDtoList(events, eventIdCountMap);

@@ -8,9 +8,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.relay.common.security.JwtService;
+import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.UserAlreadyExistsException;
+import com.example.relay.user.infrastructure.UserRepository;
 import java.util.Optional;
 import java.util.UUID;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -21,11 +24,6 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
-
-import com.example.relay.common.security.JwtService;
-import com.example.relay.user.domain.User;
-import com.example.relay.user.exception.UserAlreadyExistsException;
-import com.example.relay.user.infrastructure.UserRepository;
 
 @ExtendWith(MockitoExtension.class)
 public class AuthServiceTest {
@@ -64,7 +62,7 @@ public class AuthServiceTest {
 
     @Test
     void register_savesEncodedUserAndReturnsToken_whenEmailIsNew() {
-        
+
         // Arrange
         String email = "dakshkant8@gmail.com";
         String hashedPassword = "somePassword";
@@ -91,7 +89,7 @@ public class AuthServiceTest {
 
     @Test
     void login_returnsToken_whenCredentialsAreValid() {
-        
+
         // Arrange
         String email = "dakshkant8@gmail.com";
         String rawPassword = "somePassword";

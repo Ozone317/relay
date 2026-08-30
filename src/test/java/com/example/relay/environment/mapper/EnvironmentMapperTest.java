@@ -2,16 +2,14 @@ package com.example.relay.environment.mapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.util.ArrayList;
-import java.util.List;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import com.example.relay.environment.api.dto.EnvironmentCreateDto;
 import com.example.relay.environment.api.dto.EnvironmentResponseDto;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.user.domain.User;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 public class EnvironmentMapperTest {
 
@@ -26,14 +24,8 @@ public class EnvironmentMapperTest {
     void shouldMapEnvironmentToResponseDto() {
         // Arrange: construct an Environment (need a User too, for the constructor)
 
-        Environment environment = new Environment(
-            "Test Env 1",
-            "This is the description",
-            new User(
-                "dakshkant8@gmail.com",
-                "passwordhash"
-            )
-        );
+        Environment environment = new Environment("Test Env 1", "This is the description",
+                new User("dakshkant8@gmail.com", "passwordhash"));
 
         // Act: call environmentMapper.toResponseDto()
         EnvironmentResponseDto responseDto = environmentMapper.toResponseDto(environment);

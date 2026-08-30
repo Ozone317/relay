@@ -6,25 +6,23 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.relay.app.application.AppService;
+import com.example.relay.app.domain.App;
+import com.example.relay.endpoint.application.EndpointService;
+import com.example.relay.endpoint.domain.Endpoint;
+import com.example.relay.environment.domain.Environment;
+import com.example.relay.event.application.EventService;
+import com.example.relay.event.domain.Event;
+import com.example.relay.subscription.domain.Subscription;
+import com.example.relay.subscription.infrastructure.SubscriptionRepository;
+import com.example.relay.user.domain.User;
 import java.util.List;
 import java.util.Optional;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-
-import com.example.relay.app.application.AppService;
-import com.example.relay.app.domain.App;
-import com.example.relay.endpoint.application.EndpointService;
-import com.example.relay.endpoint.domain.Endpoint;
-import com.example.relay.event.application.EventService;
-import com.example.relay.event.domain.Event;
-import com.example.relay.environment.domain.Environment;
-import com.example.relay.subscription.domain.Subscription;
-import com.example.relay.subscription.infrastructure.SubscriptionRepository;
-import com.example.relay.user.domain.User;
 
 @ExtendWith(MockitoExtension.class)
 public class SubscriptionServiceTest {
@@ -55,9 +53,8 @@ public class SubscriptionServiceTest {
         Subscription existing = new Subscription(app, event, endpoint);
 
         // Stub
-        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(
-            app.getId(), env.getId(), event.getId(), endpoint.getId(), user.getId()
-        )).thenReturn(Optional.of(existing));
+        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(app.getId(),
+                env.getId(), event.getId(), endpoint.getId(), user.getId())).thenReturn(Optional.of(existing));
 
         // Act
         Subscription result = underTest.create(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId());
@@ -80,9 +77,8 @@ public class SubscriptionServiceTest {
         Event event = new Event("user.created", app);
 
         // Stubs
-        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(
-            app.getId(), env.getId(), event.getId(), endpoint.getId(), user.getId()
-        )).thenReturn(Optional.empty());
+        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(app.getId(),
+                env.getId(), event.getId(), endpoint.getId(), user.getId())).thenReturn(Optional.empty());
         when(appService.getById(app.getId(), env.getId(), user.getId())).thenReturn(app);
         when(eventService.getById(event.getId(), app.getId(), env.getId(), user.getId())).thenReturn(event);
         when(endpointService.getById(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(endpoint);
@@ -106,15 +102,12 @@ public class SubscriptionServiceTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
         Event event1 = new Event("user.created", app);
         Event event2 = new Event("user.deleted", app);
-        List<Subscription> subscriptions = List.of(
-            new Subscription(app, event1, endpoint),
-            new Subscription(app, event2, endpoint)
-        );
+        List<Subscription> subscriptions =
+                List.of(new Subscription(app, event1, endpoint), new Subscription(app, event2, endpoint));
 
         // Stub
-        when(subscriptionRepository.findAllByAppIdAndEnvironmentIdAndEndpointIdAndUserId(
-            app.getId(), env.getId(), endpoint.getId(), user.getId()
-        )).thenReturn(subscriptions);
+        when(subscriptionRepository.findAllByAppIdAndEnvironmentIdAndEndpointIdAndUserId(app.getId(), env.getId(),
+                endpoint.getId(), user.getId())).thenReturn(subscriptions);
 
         // Act
         List<Subscription> result = underTest.getAll(env.getId(), app.getId(), endpoint.getId(), user.getId());
@@ -134,9 +127,8 @@ public class SubscriptionServiceTest {
         Subscription subscription = new Subscription(app, event, endpoint);
 
         // Stub
-        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(
-            app.getId(), env.getId(), event.getId(), endpoint.getId(), user.getId()
-        )).thenReturn(Optional.of(subscription));
+        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(app.getId(),
+                env.getId(), event.getId(), endpoint.getId(), user.getId())).thenReturn(Optional.of(subscription));
 
         // Act
         underTest.delete(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId());
@@ -155,9 +147,8 @@ public class SubscriptionServiceTest {
         Event event = new Event("user.created", app);
 
         // Stub
-        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(
-            app.getId(), env.getId(), event.getId(), endpoint.getId(), user.getId()
-        )).thenReturn(Optional.empty());
+        when(subscriptionRepository.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(app.getId(),
+                env.getId(), event.getId(), endpoint.getId(), user.getId())).thenReturn(Optional.empty());
 
         // Act
         underTest.delete(env.getId(), app.getId(), endpoint.getId(), event.getId(), user.getId());

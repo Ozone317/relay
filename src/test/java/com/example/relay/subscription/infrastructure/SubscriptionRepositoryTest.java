@@ -4,20 +4,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
-import java.util.Optional;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 
 @DataJpaTest
 public class SubscriptionRepositoryTest {
@@ -54,11 +52,8 @@ public class SubscriptionRepositoryTest {
         testEntityManager.persistAndFlush(sub3);
 
         // Act
-        List<Subscription> result = underTest.findAllByAppIdAndEnvironmentIdAndUserId(
-            app.getId(),
-            env.getId(),
-            user.getId()
-        );
+        List<Subscription> result =
+                underTest.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env.getId(), user.getId());
 
         // Assert
         assertEquals(3, result.size());
@@ -90,12 +85,8 @@ public class SubscriptionRepositoryTest {
         testEntityManager.persistAndFlush(sub3);
 
         // Act
-        List<Subscription> result = underTest.findAllByAppIdAndEnvironmentIdAndEndpointIdAndUserId(
-            app.getId(),
-            env.getId(),
-            endpoint1.getId(),
-            user.getId()
-        );
+        List<Subscription> result = underTest.findAllByAppIdAndEnvironmentIdAndEndpointIdAndUserId(app.getId(),
+                env.getId(), endpoint1.getId(), user.getId());
 
         // Assert
         assertEquals(2, result.size());
@@ -128,12 +119,7 @@ public class SubscriptionRepositoryTest {
 
         // Act
         Optional<Subscription> result = underTest.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(
-            app.getId(),
-            env.getId(),
-            event1.getId(),
-            endpoint1.getId(),
-            user.getId()
-        );
+                app.getId(), env.getId(), event1.getId(), endpoint1.getId(), user.getId());
 
         // Assert
         assertFalse(result.isEmpty());
@@ -161,11 +147,8 @@ public class SubscriptionRepositoryTest {
         testEntityManager.persistAndFlush(sub);
 
         // Act
-        List<Subscription> result = underTest.findAllByAppIdAndEnvironmentIdAndUserId(
-            app.getId(),
-            env.getId(),
-            user2.getId()
-        );
+        List<Subscription> result =
+                underTest.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env.getId(), user2.getId());
 
         // Assert
         assertTrue(result.isEmpty());
@@ -191,12 +174,8 @@ public class SubscriptionRepositoryTest {
         testEntityManager.persistAndFlush(sub);
 
         // Act
-        List<Subscription> result = underTest.findAllByAppIdAndEnvironmentIdAndEndpointIdAndUserId(
-            app.getId(),
-            env.getId(),
-            endpoint2.getId(),
-            user.getId()
-        );
+        List<Subscription> result = underTest.findAllByAppIdAndEnvironmentIdAndEndpointIdAndUserId(app.getId(),
+                env.getId(), endpoint2.getId(), user.getId());
 
         // Assert
         assertTrue(result.isEmpty());
@@ -223,12 +202,7 @@ public class SubscriptionRepositoryTest {
 
         // Act
         Optional<Subscription> result = underTest.findByAppIdAndEnvironmentIdAndEventIdAndEndpointIdAndUserId(
-            app.getId(),
-            env.getId(),
-            event2.getId(),
-            endpoint.getId(),
-            user.getId()
-        );
+                app.getId(), env.getId(), event2.getId(), endpoint.getId(), user.getId());
 
         // Assert
         assertTrue(result.isEmpty());

@@ -4,15 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.relay.user.domain.User;
 import java.util.Optional;
-
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.dao.DataIntegrityViolationException;
-
-import com.example.relay.user.domain.User;
 
 @DataJpaTest
 public class UserRepositoryTest {
@@ -42,7 +40,7 @@ public class UserRepositoryTest {
     @Test
     void save_returnsEmpty_whenEmailDoesNotMatchAnyUser() {
 
-        //Arrange
+        // Arrange
         String email = "dakshkant8@gmail.com";
         User user = new User("testemail@mail.com", "passwordHash");
         entityManager.persistAndFlush(user);

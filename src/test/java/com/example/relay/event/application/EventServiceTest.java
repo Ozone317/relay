@@ -10,19 +10,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -36,6 +23,17 @@ import com.example.relay.event.mapper.EventMapper;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository.EventSubscriptionCount;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 public class EventServiceTest {
@@ -65,7 +63,8 @@ public class EventServiceTest {
         EventCreateDto request = new EventCreateDto("payment.created");
 
         // Stubs
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
         when(eventMapper.toEntity(request, app)).thenReturn(event);
         when(eventRepository.saveAndFlush(event)).thenReturn(event);
 
@@ -88,10 +87,12 @@ public class EventServiceTest {
         EventCreateDto request = new EventCreateDto("payment.created");
 
         // Stub
-        doThrow(new AppNotFoundException(app.getId())).when(appRepository).findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
+        doThrow(new AppNotFoundException(app.getId())).when(appRepository)
+                .findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
 
         // Act + Assert
-        assertThrows(AppNotFoundException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(AppNotFoundException.class,
+                () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
 
         // Verify
         verify(appRepository).findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
@@ -108,10 +109,12 @@ public class EventServiceTest {
         UUID wrongEnvId = UUID.randomUUID();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), wrongEnvId, user.getId())).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), wrongEnvId, user.getId()))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(AppNotFoundException.class, () -> underTest.create(request, app.getId(), wrongEnvId, user.getId()));
+        assertThrows(AppNotFoundException.class,
+                () -> underTest.create(request, app.getId(), wrongEnvId, user.getId()));
     }
 
     @Test
@@ -124,11 +127,13 @@ public class EventServiceTest {
         Event existingEvent = new Event("payment.created", app);
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
         when(eventRepository.findByNameAndAppId(request.name(), app.getId())).thenReturn(Optional.of(existingEvent));
 
         // Act + Assert
-        assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(EventAlreadyExistsException.class,
+                () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
 
         // Verify
         verify(appRepository).findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId());
@@ -144,13 +149,15 @@ public class EventServiceTest {
         Event event = new Event("payment.created", app);
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
         when(eventRepository.findByNameAndAppId(request.name(), app.getId())).thenReturn(Optional.empty());
         when(eventMapper.toEntity(request, app)).thenReturn(event);
         doThrow(new DataIntegrityViolationException(null)).when(eventRepository).saveAndFlush(event);
 
         // Act + Assert
-        assertThrows(EventAlreadyExistsException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(EventAlreadyExistsException.class,
+                () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
     }
 
     @Test
@@ -168,16 +175,17 @@ public class EventServiceTest {
         when(count.getCount()).thenReturn(2L);
 
         List<EventResponseDto> expectedResponse = List.of(
-            new EventResponseDto(eventWithSubs.getId(), eventWithSubs.getName(), app.getId(), eventWithSubs.getCreatedAt(), 2L),
-            new EventResponseDto(eventWithoutSubs.getId(), eventWithoutSubs.getName(), app.getId(), eventWithoutSubs.getCreatedAt(), 0L)
-        );
+                new EventResponseDto(eventWithSubs.getId(), eventWithSubs.getName(), app.getId(),
+                        eventWithSubs.getCreatedAt(), 2L),
+                new EventResponseDto(eventWithoutSubs.getId(), eventWithoutSubs.getName(), app.getId(),
+                        eventWithoutSubs.getCreatedAt(), 0L));
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
         when(eventRepository.findAllByAppId(app.getId())).thenReturn(events);
-        when(subscriptionRepository.countByEventIdIn(
-            app.getId(), env.getId(), List.of(eventWithSubs.getId(), eventWithoutSubs.getId()), user.getId()
-        )).thenReturn(List.of(count));
+        when(subscriptionRepository.countByEventIdIn(app.getId(), env.getId(),
+                List.of(eventWithSubs.getId(), eventWithoutSubs.getId()), user.getId())).thenReturn(List.of(count));
         when(eventMapper.toResponseDtoList(eq(events), anyMap())).thenReturn(expectedResponse);
 
         // Act
@@ -186,8 +194,10 @@ public class EventServiceTest {
         // Assert
         assertEquals(expectedResponse, result);
 
-        // Verify the count map handed to the mapper only carries entries the repository actually returned;
-        // defaulting a missing event to 0 is the mapper's job (GROUP BY omits zero-subscription events entirely).
+        // Verify the count map handed to the mapper only carries entries the repository actually
+        // returned;
+        // defaulting a missing event to 0 is the mapper's job (GROUP BY omits zero-subscription events
+        // entirely).
         ArgumentCaptor<Map<UUID, Long>> mapCaptor = ArgumentCaptor.forClass(Map.class);
         verify(eventMapper).toResponseDtoList(eq(events), mapCaptor.capture());
         Map<UUID, Long> capturedMap = mapCaptor.getValue();
@@ -205,7 +215,8 @@ public class EventServiceTest {
         UUID wrongEnvId = UUID.randomUUID();
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), wrongEnvId, user.getId())).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), wrongEnvId, user.getId()))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
         assertThrows(AppNotFoundException.class, () -> underTest.getAll(app.getId(), wrongEnvId, user.getId()));

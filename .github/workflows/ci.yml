@@ -19,5 +19,8 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Check formatting
+        run: ./mvnw spotless:check
+
       - name: Run tests
         run: ./mvnw test

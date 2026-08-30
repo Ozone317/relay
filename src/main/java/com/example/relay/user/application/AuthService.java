@@ -1,15 +1,14 @@
 package com.example.relay.user.application;
 
+import com.example.relay.common.security.JwtService;
+import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.UserAlreadyExistsException;
+import com.example.relay.user.infrastructure.UserRepository;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-
-import com.example.relay.common.security.JwtService;
-import com.example.relay.user.domain.User;
-import com.example.relay.user.exception.UserAlreadyExistsException;
-import com.example.relay.user.infrastructure.UserRepository;
 
 @Service
 public class AuthService {
@@ -19,7 +18,8 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
 
-    public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder, AuthenticationManager authenticationManager, JwtService jwtService) {
+    public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder,
+            AuthenticationManager authenticationManager, JwtService jwtService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.authenticationManager = authenticationManager;

@@ -1,10 +1,6 @@
 package com.example.relay.endpoint.domain;
 
-import java.time.Instant;
-import java.util.UUID;
-
 import com.example.relay.app.domain.App;
-
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -12,20 +8,14 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import java.time.Instant;
+import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(
-    name = "endpoints",
-    uniqueConstraints = {
-        @UniqueConstraint(
-            name = "uk_endpoint_app_name",
-            columnNames = {"app_id", "name"}
-        )
-    }
-)
-
+@Table(name = "endpoints",
+        uniqueConstraints = {@UniqueConstraint(name = "uk_endpoint_app_name", columnNames = {"app_id", "name"})})
 @NoArgsConstructor
 public class Endpoint {
 

@@ -5,16 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
 import com.example.relay.environment.api.dto.EnvironmentCreateDto;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
@@ -22,13 +12,21 @@ import com.example.relay.environment.infrastructure.EnvironmentRepository;
 import com.example.relay.environment.mapper.EnvironmentMapper;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 public class EnvironmentServiceTest {
 
     @Mock
     private EnvironmentRepository environmentRepository;
-    
+
     @Mock
     private UserRepository userRepository;
 
@@ -51,7 +49,6 @@ public class EnvironmentServiceTest {
         when(environmentMapper.toEntity(request, user)).thenReturn(environment);
         when(environmentRepository.save(environment)).thenReturn(environment);
 
-
         // Act
         Environment savedEnvironment = underTest.create(request, userId);
 
@@ -69,18 +66,8 @@ public class EnvironmentServiceTest {
         User user = new User("dakshkant8@gmail.com", "passwordhash");
         UUID userId = user.getId();
 
-        List<Environment> environments = List.of(
-            new Environment(
-                "Environment 1",
-                "Description 1",
-                user
-            ),
-            new Environment(
-                "Environment 2",
-                "Description 2",
-                user
-            )
-        );
+        List<Environment> environments = List.of(new Environment("Environment 1", "Description 1", user),
+                new Environment("Environment 2", "Description 2", user));
 
         when(environmentRepository.findAllByUserId(userId)).thenReturn(environments);
 
@@ -94,7 +81,6 @@ public class EnvironmentServiceTest {
         assertEquals(fetchedEnvironments.get(1).getName(), "Environment 2");
         assertEquals(fetchedEnvironments.get(1).getDescription(), "Description 2");
         assertEquals(fetchedEnvironments.get(1).getUser().getId(), userId);
-
     }
 
     @Test
@@ -114,7 +100,6 @@ public class EnvironmentServiceTest {
         assertEquals(fetchedEnvironment.getName(), "Environment 1");
         assertEquals(fetchedEnvironment.getDescription(), "Description 1");
         assertEquals(fetchedEnvironment.getUser().getId(), userId);
-
     }
 
     @Test
@@ -126,7 +111,7 @@ public class EnvironmentServiceTest {
         Environment environment = new Environment("Environment 1", "Description 1", user);
 
         when(environmentRepository.findByIdAndUserId(environment.getId(), userId)).thenReturn(Optional.empty());
-        
+
         // Act + Assert
         assertThrows(EnvironmentNotFoundException.class, () -> {
             underTest.getById(environment.getId(), userId);
@@ -155,12 +140,13 @@ public class EnvironmentServiceTest {
 
     @Test
     void delete_deletesEnvironment() {
-        
+
         // Arrange
         User user = new User("dakshkant8@gmail.com", "passwordhash");
         Environment environment = new Environment("Environment 1", "Description 1", user);
 
-        when(environmentRepository.findByIdAndUserId(environment.getId(), user.getId())).thenReturn(Optional.of(environment));
+        when(environmentRepository.findByIdAndUserId(environment.getId(), user.getId()))
+                .thenReturn(Optional.of(environment));
 
         // Act
         underTest.delete(environment.getId(), user.getId());

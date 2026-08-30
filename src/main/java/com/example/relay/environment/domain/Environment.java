@@ -1,20 +1,18 @@
 package com.example.relay.environment.domain;
 
-import java.time.Instant;
-import java.util.UUID;
-
 import com.example.relay.user.domain.User;
-
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import java.time.Instant;
+import java.util.UUID;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name ="environments")
+@Table(name = "environments")
 @NoArgsConstructor
 public class Environment {
 
@@ -38,7 +36,7 @@ public class Environment {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    public Environment(String name, String description, User user){
+    public Environment(String name, String description, User user) {
         Instant now = Instant.now();
 
         this.id = UUID.randomUUID();

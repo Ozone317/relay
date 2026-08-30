@@ -4,18 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
-import java.util.Optional;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 
 @DataJpaTest
 public class EndpointRepositoryTest {
@@ -42,7 +40,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint2);
 
         // Act
-        List<Endpoint> result = underTest.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env.getId(), user.getId());
+        List<Endpoint> result =
+                underTest.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env.getId(), user.getId());
 
         // Assert
         assertEquals(2, result.size());
@@ -64,7 +63,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint);
 
         // Act
-        List<Endpoint> result = underTest.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env2.getId(), user.getId());
+        List<Endpoint> result =
+                underTest.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env2.getId(), user.getId());
 
         // Assert
         assertTrue(result.isEmpty());
@@ -84,7 +84,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint);
 
         // Act
-        Optional<Endpoint> result = underTest.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId());
+        Optional<Endpoint> result = underTest.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(),
+                env.getId(), user.getId());
 
         // Assert
         assertFalse(result.isEmpty());
@@ -107,7 +108,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint);
 
         // Act
-        Optional<Endpoint> result = underTest.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env2.getId(), user.getId());
+        Optional<Endpoint> result = underTest.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(),
+                env2.getId(), user.getId());
 
         // Assert
         assertTrue(result.isEmpty());
@@ -129,7 +131,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint);
 
         // Act
-        Optional<Endpoint> result = underTest.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user2.getId());
+        Optional<Endpoint> result = underTest.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(),
+                env.getId(), user2.getId());
 
         // Assert
         assertTrue(result.isEmpty());
@@ -149,7 +152,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint);
 
         // Act
-        Optional<Endpoint> result = underTest.findByNameAndAppIdAndEnvironmentIdAndUserId("Production", app.getId(), env.getId(), user.getId());
+        Optional<Endpoint> result = underTest.findByNameAndAppIdAndEnvironmentIdAndUserId("Production", app.getId(),
+                env.getId(), user.getId());
 
         // Assert
         assertFalse(result.isEmpty());
@@ -170,7 +174,8 @@ public class EndpointRepositoryTest {
         entityManager.persistAndFlush(endpoint);
 
         // Act
-        Optional<Endpoint> result = underTest.findByNameAndAppIdAndEnvironmentIdAndUserId("Nonexistent", app.getId(), env.getId(), user.getId());
+        Optional<Endpoint> result = underTest.findByNameAndAppIdAndEnvironmentIdAndUserId("Nonexistent", app.getId(),
+                env.getId(), user.getId());
 
         // Assert
         assertTrue(result.isEmpty());

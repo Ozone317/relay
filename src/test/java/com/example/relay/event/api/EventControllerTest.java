@@ -13,18 +13,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.util.List;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.http.MediaType;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CustomUserDetailsService;
@@ -40,6 +28,16 @@ import com.example.relay.event.mapper.EventMapper;
 import com.example.relay.user.application.AuthService;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(EventController.class)
 @Import(SecurityConfig.class)
@@ -57,7 +55,7 @@ public class EventControllerTest {
     @MockitoBean
     private EventMapper eventMapper;
 
-        @MockitoBean
+    @MockitoBean
     private JwtService jwtService;
 
     @MockitoBean
@@ -67,14 +65,15 @@ public class EventControllerTest {
     private CustomUserDetailsService customUserDetailsService;
 
     @Test
-    void create_createsAndReturnsEvent_ifItBelongsToTheAppAndUser() throws Exception{
+    void create_createsAndReturnsEvent_ifItBelongsToTheAppAndUser() throws Exception {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
         EventCreateDto request = new EventCreateDto("payment.created");
         Event event = new Event("payment.created", app);
-        EventResponseDto response = new EventResponseDto(event.getId(), event.getName(), app.getId(), event.getCreatedAt(), 0);
+        EventResponseDto response =
+                new EventResponseDto(event.getId(), event.getName(), app.getId(), event.getCreatedAt(), 0);
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
         // Stubs
@@ -82,17 +81,13 @@ public class EventControllerTest {
         when(eventMapper.toResponseDto(event, 0)).thenReturn(response);
 
         // Act
-        mockMvc.perform(
-            post("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request))
-        )
-        .andExpect(status().isCreated())
-        .andExpect(jsonPath("$.id").value(response.id().toString()))
-        .andExpect(jsonPath("$.name").value(response.name()))
-        .andExpect(jsonPath("$.appId").value(response.appId().toString()))
-        .andExpect(jsonPath("$.createdAt").value(response.createdAt().toString()));
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(response.id().toString()))
+                .andExpect(jsonPath("$.name").value(response.name()))
+                .andExpect(jsonPath("$.appId").value(response.appId().toString()))
+                .andExpect(jsonPath("$.createdAt").value(response.createdAt().toString()));
 
         // Verify
         verify(eventService).create(request, app.getId(), env.getId(), user.getId());
@@ -110,17 +105,14 @@ public class EventControllerTest {
         EventCreateDto request = new EventCreateDto("payment.created");
 
         // Stubs
-        doThrow(new EventAlreadyExistsException(request.name())).when(eventService).create(request, app.getId(), env.getId(), user.getId());
+        doThrow(new EventAlreadyExistsException(request.name())).when(eventService).create(request, app.getId(),
+                env.getId(), user.getId());
 
         // Act
-        mockMvc.perform(
-            post("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request))
-        )
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.message").value("Event already exists with name: " + request.name()));
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Event already exists with name: " + request.name()));
 
         // Verify
         verify(eventMapper, never()).toResponseDto(any(), anyLong());
@@ -132,14 +124,12 @@ public class EventControllerTest {
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
-        List<Event> events = List.of(
-            new Event("payment.created", app),
-            new Event("user.created", app)
-        );
+        List<Event> events = List.of(new Event("payment.created", app), new Event("user.created", app));
         List<EventResponseDto> response = List.of(
-            new EventResponseDto(events.get(0).getId(), events.get(0).getName(), app.getId(), events.get(0).getCreatedAt(), 0),
-            new EventResponseDto(events.get(1).getId(), events.get(1).getName(), app.getId(), events.get(1).getCreatedAt(), 0)
-        );
+                new EventResponseDto(events.get(0).getId(), events.get(0).getName(), app.getId(),
+                        events.get(0).getCreatedAt(), 0),
+                new EventResponseDto(events.get(1).getId(), events.get(1).getName(), app.getId(),
+                        events.get(1).getCreatedAt(), 0));
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
@@ -147,20 +137,16 @@ public class EventControllerTest {
         when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(response);
 
         // Act
-        mockMvc.perform(
-            get("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$[0].id").value(response.get(0).id().toString()))
-        .andExpect(jsonPath("$[0].name").value(response.get(0).name()))
-        .andExpect(jsonPath("$[0].appId").value(response.get(0).appId().toString()))
-        .andExpect(jsonPath("$[0].createdAt").value(response.get(0).createdAt().toString()))
-        .andExpect(jsonPath("$[1].id").value(response.get(1).id().toString()))
-        .andExpect(jsonPath("$[1].name").value(response.get(1).name()))
-        .andExpect(jsonPath("$[1].appId").value(response.get(1).appId().toString()))
-        .andExpect(jsonPath("$[1].createdAt").value(response.get(1).createdAt().toString()));
+        mockMvc.perform(get("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(response.get(0).id().toString()))
+                .andExpect(jsonPath("$[0].name").value(response.get(0).name()))
+                .andExpect(jsonPath("$[0].appId").value(response.get(0).appId().toString()))
+                .andExpect(jsonPath("$[0].createdAt").value(response.get(0).createdAt().toString()))
+                .andExpect(jsonPath("$[1].id").value(response.get(1).id().toString()))
+                .andExpect(jsonPath("$[1].name").value(response.get(1).name()))
+                .andExpect(jsonPath("$[1].appId").value(response.get(1).appId().toString()))
+                .andExpect(jsonPath("$[1].createdAt").value(response.get(1).createdAt().toString()));
 
         // Verify
         verify(eventService).getAll(app.getId(), env.getId(), user.getId());
@@ -181,13 +167,9 @@ public class EventControllerTest {
         when(eventService.getAll(app.getId(), env.getId(), user.getId())).thenReturn(List.of());
 
         // Act
-        mockMvc.perform(
-            get("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
-            .with(authentication(auth))
-            .contentType(MediaType.APPLICATION_JSON)
-        )
-        .andExpect(status().isOk())
-        .andExpect(content().json("[]"));
+        mockMvc.perform(get("/api/v1/environments/{environmentId}/apps/{appId}/events", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)).andExpect(status().isOk())
+                .andExpect(content().json("[]"));
 
         // Verify
         verify(eventService).getAll(app.getId(), env.getId(), user.getId());

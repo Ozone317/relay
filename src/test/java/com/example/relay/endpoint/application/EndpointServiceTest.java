@@ -8,16 +8,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
-import java.util.Optional;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
-
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -31,6 +21,14 @@ import com.example.relay.endpoint.mapper.EndpointMapper;
 import com.example.relay.endpoint.utils.SigningSecretGenerator;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.user.domain.User;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 public class EndpointServiceTest {
@@ -60,8 +58,10 @@ public class EndpointServiceTest {
         Endpoint endpoint = new Endpoint(request.name(), request.url(), "whsec_generated", app);
 
         // Stubs
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
-        when(endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
+        when(endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.empty());
         when(signingSecretGenerator.generate()).thenReturn("whsec_generated");
         when(endpointMapper.toEntity(request, app, "whsec_generated")).thenReturn(endpoint);
         when(endpointRepository.saveAndFlush(endpoint)).thenReturn(endpoint);
@@ -85,10 +85,12 @@ public class EndpointServiceTest {
         EndpointCreateDto request = new EndpointCreateDto("Production", "https://example.com/webhook");
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(AppNotFoundException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(AppNotFoundException.class,
+                () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
 
         // Verify
         verify(endpointMapper, never()).toEntity(any(), any(), any());
@@ -105,11 +107,14 @@ public class EndpointServiceTest {
         Endpoint existing = new Endpoint(request.name(), request.url(), "whsec_existing", app);
 
         // Stub
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
-        when(endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(existing));
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
+        when(endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.of(existing));
 
         // Act + Assert
-        assertThrows(EndpointAlreadyExistsException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(EndpointAlreadyExistsException.class,
+                () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
 
         // Verify
         verify(endpointRepository, never()).saveAndFlush(any());
@@ -125,15 +130,19 @@ public class EndpointServiceTest {
         Endpoint endpoint = new Endpoint(request.name(), request.url(), "whsec_generated", app);
 
         // Stub: the pre-check passes (no duplicate found yet)...
-        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(app));
-        when(endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.empty());
+        when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(Optional.of(app));
+        when(endpointRepository.findByNameAndAppIdAndEnvironmentIdAndUserId(request.name(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.empty());
         when(signingSecretGenerator.generate()).thenReturn("whsec_generated");
         when(endpointMapper.toEntity(request, app, "whsec_generated")).thenReturn(endpoint);
-        // ...but the save itself hits the DB unique constraint, simulating a concurrent request winning the race.
+        // ...but the save itself hits the DB unique constraint, simulating a concurrent request winning
+        // the race.
         doThrow(new DataIntegrityViolationException(null)).when(endpointRepository).saveAndFlush(endpoint);
 
         // Act + Assert
-        assertThrows(EndpointAlreadyExistsException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(EndpointAlreadyExistsException.class,
+                () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
     }
 
     @Test
@@ -145,7 +154,8 @@ public class EndpointServiceTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(endpoint));
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.of(endpoint));
 
         // Act
         Endpoint result = underTest.getById(endpoint.getId(), app.getId(), env.getId(), user.getId());
@@ -163,10 +173,12 @@ public class EndpointServiceTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.empty());
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(EndpointNotFoundException.class, () -> underTest.getById(endpoint.getId(), app.getId(), env.getId(), user.getId()));
+        assertThrows(EndpointNotFoundException.class,
+                () -> underTest.getById(endpoint.getId(), app.getId(), env.getId(), user.getId()));
     }
 
     @Test
@@ -175,13 +187,12 @@ public class EndpointServiceTest {
         User user = new User("test@mail.com", "someHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
-        List<Endpoint> endpoints = List.of(
-            new Endpoint("Production", "https://example.com/webhook", "whsec_1", app),
-            new Endpoint("Staging", "https://staging.example.com/webhook", "whsec_2", app)
-        );
+        List<Endpoint> endpoints = List.of(new Endpoint("Production", "https://example.com/webhook", "whsec_1", app),
+                new Endpoint("Staging", "https://staging.example.com/webhook", "whsec_2", app));
 
         // Stub
-        when(endpointRepository.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env.getId(), user.getId())).thenReturn(endpoints);
+        when(endpointRepository.findAllByAppIdAndEnvironmentIdAndUserId(app.getId(), env.getId(), user.getId()))
+                .thenReturn(endpoints);
 
         // Act
         List<Endpoint> result = underTest.getAll(app.getId(), env.getId(), user.getId());
@@ -202,7 +213,8 @@ public class EndpointServiceTest {
         EndpointUpdateDto request = new EndpointUpdateDto("Updated", "https://updated.example.com/webhook", false);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(endpoint));
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.of(endpoint));
 
         // Act
         Endpoint result = underTest.update(request, endpoint.getId(), app.getId(), env.getId(), user.getId());
@@ -226,7 +238,8 @@ public class EndpointServiceTest {
         EndpointUpdateDto request = new EndpointUpdateDto(null, null, false);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(endpoint));
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.of(endpoint));
 
         // Act
         Endpoint result = underTest.update(request, endpoint.getId(), app.getId(), env.getId(), user.getId());
@@ -247,10 +260,12 @@ public class EndpointServiceTest {
         EndpointUpdateDto request = new EndpointUpdateDto("Updated", null, null);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.empty());
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(EndpointNotFoundException.class, () -> underTest.update(request, endpoint.getId(), app.getId(), env.getId(), user.getId()));
+        assertThrows(EndpointNotFoundException.class,
+                () -> underTest.update(request, endpoint.getId(), app.getId(), env.getId(), user.getId()));
 
         // Verify
         verify(endpointRepository, never()).save(any());
@@ -265,7 +280,8 @@ public class EndpointServiceTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.of(endpoint));
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.of(endpoint));
 
         // Act
         underTest.delete(endpoint.getId(), app.getId(), env.getId(), user.getId());
@@ -283,10 +299,12 @@ public class EndpointServiceTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
 
         // Stub
-        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(Optional.empty());
+        when(endpointRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(endpoint.getId(), app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.empty());
 
         // Act + Assert
-        assertThrows(EndpointNotFoundException.class, () -> underTest.delete(endpoint.getId(), app.getId(), env.getId(), user.getId()));
+        assertThrows(EndpointNotFoundException.class,
+                () -> underTest.delete(endpoint.getId(), app.getId(), env.getId(), user.getId()));
 
         // Verify
         verify(endpointRepository, never()).delete(any());
