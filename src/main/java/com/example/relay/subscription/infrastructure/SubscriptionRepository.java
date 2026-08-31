@@ -56,6 +56,15 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, UUID
     long countByAppIdAndEnvironmentIdAndEventIdAndUserId(UUID appId, UUID environmentId, UUID eventId, UUID userId);
 
     @Query("""
+               SELECT s
+               FROM Subscription s
+               WHERE
+                    s.event.id = :eventId
+                    AND s.endpoint.active = true
+            """)
+    List<Subscription> findAllByEventIdAndEndpointActiveTrue(UUID eventId);
+
+    @Query("""
                 SELECT s.event.id AS eventId, COUNT(s) AS count
                 FROM Subscription s
                 WHERE

@@ -207,4 +207,79 @@ public class SubscriptionRepositoryTest {
         // Assert
         assertTrue(result.isEmpty());
     }
+
+    @Test
+    void findAllByEventIdAndEndpointActiveTrue_returnsSubscription_whenEndpointIsActive() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
+        Event event = new Event("user.created", app);
+        Subscription sub = new Subscription(app, event, endpoint);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(env);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(sub);
+
+        // Act
+        List<Subscription> result = underTest.findAllByEventIdAndEndpointActiveTrue(event.getId());
+
+        // Assert
+        assertEquals(1, result.size());
+        assertEquals(sub, result.get(0));
+    }
+
+    @Test
+    void findAllByEventIdAndEndpointActiveTrue_excludesSubscription_whenEndpointIsInactive() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Endpoint activeEndpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
+        Endpoint inactiveEndpoint = new Endpoint("Staging", "https://staging.example.com/webhook", "whsec_2", app);
+        inactiveEndpoint.setActive(false);
+        Event event = new Event("user.created", app);
+        Subscription activeSub = new Subscription(app, event, activeEndpoint);
+        Subscription inactiveSub = new Subscription(app, event, inactiveEndpoint);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(env);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(activeEndpoint);
+        testEntityManager.persistAndFlush(inactiveEndpoint);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(activeSub);
+        testEntityManager.persistAndFlush(inactiveSub);
+
+        // Act
+        List<Subscription> result = underTest.findAllByEventIdAndEndpointActiveTrue(event.getId());
+
+        // Assert
+        assertEquals(1, result.size());
+        assertEquals(activeSub, result.get(0));
+    }
+
+    @Test
+    void findAllByEventIdAndEndpointActiveTrue_returnsEmpty_whenNoSubscriptionsExistForEvent() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("user.created", app);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(env);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+
+        // Act
+        List<Subscription> result = underTest.findAllByEventIdAndEndpointActiveTrue(event.getId());
+
+        // Assert
+        assertTrue(result.isEmpty());
+    }
 }

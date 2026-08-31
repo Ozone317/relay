@@ -6,6 +6,7 @@ import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.event.exception.EventNotFoundException;
+import com.example.relay.message.exception.NoActiveSubscribersException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import java.util.HashMap;
 import java.util.Map;
@@ -57,6 +58,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
+    @ExceptionHandler(EventNotFoundException.class)
     public ResponseEntity<ApiError> handleEventNotFoundException(EventNotFoundException ex) {
         ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
@@ -72,5 +74,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleEndpointAlreadyExistsException(EndpointAlreadyExistsException ex) {
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(NoActiveSubscribersException.class)
+    public ResponseEntity<ApiError> handleNoActiveSubscribersExeption(NoActiveSubscribersException ex) {
+        ApiError error = ApiError.of(HttpStatus.UNPROCESSABLE_ENTITY.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(error);
     }
 }
