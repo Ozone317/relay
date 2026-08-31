@@ -4,10 +4,12 @@ import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.application.AttemptService;
+import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.event.application.EventService;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.message.api.dto.MessageCreateDto;
+import com.example.relay.message.api.dto.MessageCreateResult;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.exception.NoActiveSubscribersException;
 import com.example.relay.message.infrastructure.MessageRepository;
@@ -41,7 +43,7 @@ public class MessageService {
     }
 
     @Transactional
-    public Message create(MessageCreateDto request, UUID appId, UUID environmentId, UUID userId)
+    public MessageCreateResult create(MessageCreateDto request, UUID appId, UUID environmentId, UUID userId)
             throws AppNotFoundException, EventNotFoundException, NoActiveSubscribersException {
         App app = appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(appId, environmentId, userId)
                 .orElseThrow(() -> new AppNotFoundException(appId));
@@ -57,8 +59,8 @@ public class MessageService {
         Message message = messageMapper.toEntity(request, app, event);
         messageRepository.save(message);
 
-        attemptService.createFromSubscriptionList(subscriptions, message);
+        List<Attempt> attempts = attemptService.createFromSubscriptionList(subscriptions, message);
 
-        return message;
+        return new MessageCreateResult(message, attempts);
     }
 }

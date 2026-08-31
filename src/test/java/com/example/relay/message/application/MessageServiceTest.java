@@ -11,12 +11,14 @@ import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.application.AttemptService;
+import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.application.EventService;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.message.api.dto.MessageCreateDto;
+import com.example.relay.message.api.dto.MessageCreateResult;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.exception.NoActiveSubscribersException;
 import com.example.relay.message.infrastructure.MessageRepository;
@@ -72,6 +74,7 @@ public class MessageServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         MessageCreateDto request = new MessageCreateDto(event.getId(), body);
         Message message = new Message(app, event, body);
+        List<Attempt> attempts = List.of(new Attempt(app, message, endpoint, 1));
 
         // Stubs
         when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
@@ -79,12 +82,14 @@ public class MessageServiceTest {
         when(eventService.getById(event.getId(), app.getId(), env.getId(), user.getId())).thenReturn(event);
         when(subscriptionRepository.findAllByEventIdAndEndpointActiveTrue(event.getId())).thenReturn(subscriptions);
         when(messageMapper.toEntity(request, app, event)).thenReturn(message);
+        when(attemptService.createFromSubscriptionList(subscriptions, message)).thenReturn(attempts);
 
         // Act
-        Message result = underTest.create(request, app.getId(), env.getId(), user.getId());
+        MessageCreateResult result = underTest.create(request, app.getId(), env.getId(), user.getId());
 
         // Assert
-        assertEquals(message.getId(), result.getId());
+        assertEquals(message.getId(), result.message().getId());
+        assertEquals(attempts, result.attempts());
 
         // Verify
         verify(messageRepository).save(message);
