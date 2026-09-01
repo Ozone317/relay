@@ -19,16 +19,20 @@ public class AttemptPublisher {
     }
 
     public void publish(UUID attemptId) {
+        publishToRoutingKey(attemptId, RabbitMqConfig.TASKS_ROUTING_KEY);
+    }
+
+    public void publishToRoutingKey(UUID attemptId, String routingKey) {
         CorrelationData correlationData = new CorrelationData(attemptId.toString());
 
         try {
             // convertAndSend's return value does not denote that the message was accepted by rabbitmq, or
             // it was routed correctly
             // RabbitMQ processes it asynchronously. Hence, we require the callbacks for confirm and return
-            rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.TASKS_ROUTING_KEY,
+            rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, routingKey,
                     attemptId.toString(), correlationData);
         } catch (Exception ex) {
-            log.warn("Failed to publish attempt {}", attemptId, ex);
+            log.warn("Failed to publish attempt {} to routing key {}", attemptId, routingKey, ex);
         }
     }
 }

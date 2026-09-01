@@ -46,4 +46,18 @@ class AttemptPublisherIntegrationTest {
         assertNotNull(received, "expected a message on " + RabbitMqConfig.TASKS_QUEUE);
         assertEquals(attemptId.toString(), new String(received.getBody()));
     }
+
+    @Test
+    void publishToRoutingKey_deliversAttemptIdToTheGivenQueue() {
+        // Arrange
+        UUID attemptId = UUID.randomUUID();
+
+        // Act
+        underTest.publishToRoutingKey(attemptId, RabbitMqConfig.WAIT_30S_ROUTING_KEY);
+
+        // Assert
+        Message received = rabbitTemplate.receive(RabbitMqConfig.WAIT_30S_QUEUE, 5000);
+        assertNotNull(received, "expected a message on " + RabbitMqConfig.WAIT_30S_QUEUE);
+        assertEquals(attemptId.toString(), new String(received.getBody()));
+    }
 }
