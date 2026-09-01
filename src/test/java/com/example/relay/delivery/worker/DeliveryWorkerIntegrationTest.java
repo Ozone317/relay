@@ -25,11 +25,15 @@ import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import okhttp3.mockwebserver.MockResponse;
@@ -37,6 +41,7 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -383,5 +388,52 @@ public class DeliveryWorkerIntegrationTest {
                     RetryTier.MAX_ATTEMPTS,
                     retry.getAttemptNo());
         });
+    }
+
+    @Test
+    void unexpectedException_doesNotRequeueMessage() throws InterruptedException {
+        // A malformed UUID throws inside onMessage() itself, BEFORE claim() runs - so unlike an
+        // exception thrown from deliver() (which claim()'s idempotency check would prevent from
+        // repeating on redelivery, since a second delivery just finds the attempt already
+        // IN_FLIGHT and exits cleanly), this exception is identical on every redelivery. This is
+        // the one path that can actually loop forever without default-requeue-rejected=false, so
+        // it's the only scenario that genuinely proves the property. Published directly via
+        // rabbitTemplate, bypassing AttemptPublisher, since it only ever sends real UUIDs.
+        //
+        // channel.messageCount(TASKS_QUEUE) is NOT a reliable signal here: a fast requeue loop
+        // keeps the message perpetually "delivered but unacked" rather than sitting "ready" in
+        // the queue, so a queue-depth reading (even a single non-polled one after a delay) almost
+        // always reads 0 regardless of whether it's actually looping - confirmed empirically by
+        // temporarily flipping default-requeue-rejected to true and observing 8000+ redeliveries
+        // in 12 seconds while messageCount stayed 0. Instead, count how many times Spring AMQP's
+        // container error handler actually logs a failed delivery: exactly once if the message is
+        // dropped after the first failure, a rapidly growing count if it's looping.
+        Logger errorHandlerLogger = (Logger) LoggerFactory
+                .getLogger("org.springframework.amqp.rabbit.listener.ConditionalRejectingErrorHandler");
+        AtomicInteger failureCount = new AtomicInteger(0);
+        AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("Execution of Rabbit message listener failed")) {
+                    failureCount.incrementAndGet();
+                }
+            }
+        };
+        appender.start();
+        errorHandlerLogger.addAppender(appender);
+
+        try {
+            rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.TASKS_ROUTING_KEY,
+                    "not-a-valid-uuid");
+
+            // Give the listener time to consume the message - and, if requeue were enabled, to
+            // already be looping many times over - before taking a reading.
+            Thread.sleep(2000);
+
+            assertEquals(1, failureCount.get(),
+                    "expected exactly one failed delivery, not a requeue loop");
+        } finally {
+            errorHandlerLogger.detachAppender(appender);
+        }
     }
 }
