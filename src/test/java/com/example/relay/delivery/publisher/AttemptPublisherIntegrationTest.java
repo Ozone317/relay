@@ -11,11 +11,16 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+// DeliveryWorker's @RabbitListener on TASKS_QUEUE would otherwise race this test's own
+// rabbitTemplate.receive(TASKS_QUEUE, ...) for the same message - this test is about publishing,
+// not consumption, so the real listener is disabled for this context.
 @SpringBootTest
+@TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 @Testcontainers
 class AttemptPublisherIntegrationTest {
 

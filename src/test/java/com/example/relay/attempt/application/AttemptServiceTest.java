@@ -176,8 +176,9 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void markFailed_marksTheAttemptWithTheGivenFailedStatusSetsRequiredFieldsAndReturnsTheAttemp() {
-        // Arrange
+    void markFailed_setsLastErrorAndLeavesResponseBodyNull_whenNoHttpResponseWasReceived() {
+        // Arrange - simulates a timeout/connection error: no response ever came back, so there's
+        // nothing to put in responseBody, but there is a network-level error to record.
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
@@ -188,21 +189,56 @@ public class AttemptServiceTest {
         Attempt attempt = new Attempt(app, message, endpoint, 1);
         AttemptStatus status = AttemptStatus.FAILED_RETRYING;
         Instant nextRetryAt = Instant.now();
-        int responseCode = 500;
-        String error = "x".repeat(20_000);
+        String lastError = "x".repeat(20_000);
         Long latencyMs = 15000L;
 
         // Stub
         when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
-        Attempt result = underTest.markFailed(attempt, status, nextRetryAt, responseCode, error, latencyMs);
+        Attempt result = underTest.markFailed(attempt, status, nextRetryAt, null, null, lastError, latencyMs);
 
         // Assert
         assertEquals(status, result.getStatus());
         assertEquals(nextRetryAt, result.getNextRetryAt());
-        assertEquals(responseCode, result.getResponseCode());
+        assertEquals(null, result.getResponseCode());
+        assertEquals(null, result.getResponseBody());
         assertEquals(10240, result.getLastError().length());
+        assertEquals(latencyMs, result.getLatencyMs());
+
+        // Verify
+        verify(attemptRepository).save(any());
+    }
+
+    @Test
+    void markFailed_setsResponseBodyAndLeavesLastErrorNull_whenAnHttpResponseWasReceived() {
+        // Arrange - simulates a non-2xx HTTP response (e.g. 500): a real response came back, so
+        // it belongs in responseBody, and there's no network-level error to record.
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        Message message = new Message(app, event, body);
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        AttemptStatus status = AttemptStatus.DEAD;
+        int responseCode = 500;
+        String responseBody = "x".repeat(20_000);
+        Long latencyMs = 200L;
+
+        // Stub
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        Attempt result = underTest.markFailed(attempt, status, null, responseCode, responseBody, null, latencyMs);
+
+        // Assert
+        assertEquals(status, result.getStatus());
+        assertEquals(null, result.getNextRetryAt());
+        assertEquals(responseCode, result.getResponseCode());
+        assertEquals(10240, result.getResponseBody().length());
+        assertEquals(null, result.getLastError());
         assertEquals(latencyMs, result.getLatencyMs());
 
         // Verify

@@ -64,11 +64,12 @@ public class AttemptService {
 
     @Transactional
     public Attempt markFailed(Attempt attempt, AttemptStatus status, Instant nextRetryAt, Integer responseCode,
-            String error, Long latencyMs) {
+            String responseBody, String lastError, Long latencyMs) {
         attempt.setStatus(status);
         attempt.setNextRetryAt(nextRetryAt);
         attempt.setResponseCode(responseCode);
-        attempt.setLastError(truncate(error, 10240));
+        attempt.setResponseBody(truncate(responseBody, 10240));
+        attempt.setLastError(truncate(lastError, 10240));
         attempt.setLatencyMs(latencyMs);
 
         return attemptRepository.save(attempt);

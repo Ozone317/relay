@@ -3,6 +3,8 @@ package com.example.relay.delivery.worker;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 
 import com.example.relay.delivery.config.RabbitMqConfig;
@@ -16,6 +18,15 @@ public class RetryTierTest {
         assertEquals(RabbitMqConfig.WAIT_10M_ROUTING_KEY, RetryTier.forAttemptNo(4).getRoutingKey());
         assertEquals(RabbitMqConfig.WAIT_1H_ROUTING_KEY, RetryTier.forAttemptNo(5).getRoutingKey());
         assertEquals(RabbitMqConfig.WAIT_6H_ROUTING_KEY, RetryTier.forAttemptNo(6).getRoutingKey());
+    }
+
+    @Test
+    void forAttemptNo_returnsCorrectDelayForEachTier() {
+        assertEquals(Duration.ofSeconds(30), RetryTier.forAttemptNo(2).getDelay());
+        assertEquals(Duration.ofMinutes(2), RetryTier.forAttemptNo(3).getDelay());
+        assertEquals(Duration.ofMinutes(10), RetryTier.forAttemptNo(4).getDelay());
+        assertEquals(Duration.ofHours(1), RetryTier.forAttemptNo(5).getDelay());
+        assertEquals(Duration.ofHours(6), RetryTier.forAttemptNo(6).getDelay());
     }
 
     @Test
