@@ -2,7 +2,9 @@ package com.example.relay.attempt.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.relay.app.domain.App;
@@ -17,7 +19,9 @@ import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -84,5 +88,124 @@ public class AttemptServiceTest {
 
         // Assert
         assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void claim_returnsTrue_whenTheAttemptIsClaimedSuccessfully() {
+        // Arrange
+        UUID attemptId = UUID.randomUUID();
+
+        // Stub
+        when(attemptRepository.claim(attemptId)).thenReturn(1);
+
+        // Act
+        boolean result = underTest.claim(attemptId);
+
+        // Assert
+        assertEquals(true, result);
+    }
+
+    @Test
+    void claim_returnsFalse_whenTheAttemptIsNotClaimedSuccessfully() {
+        // Arrange
+        UUID attemptId = UUID.randomUUID();
+
+        // Stub
+        when(attemptRepository.claim(attemptId)).thenReturn(0);
+
+        // Act
+        boolean result = underTest.claim(attemptId);
+
+        // Assert
+        assertEquals(false, result);
+    }
+
+    @Test
+    void createRetry_createsSavesAndReturnsAttemptWithIncreasedAttemptCount() throws Exception {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        Message message = new Message(app, event, body);
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        // Stub
+        // this says that i dont care which object the attemptRepository is passed, give me the exact same object back
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        Attempt result = underTest.createRetry(attempt);
+
+        // Assert
+        assertEquals(attempt.getAttemptNo() + 1, result.getAttemptNo());
+        assertEquals(AttemptStatus.CREATED, result.getStatus());
+    }
+
+    @Test
+    void markSucceeded_marksTheAttemptAsSuccessfulSetsRequiredFilesAndReturnsTheAttempt() throws Exception {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        Message message = new Message(app, event, body);
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        int responseCode = 200;
+        String responseBody = "{\"success\": \"true\"}";
+        Long latencyMs = 153L;
+
+        // Stub
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        Attempt result = underTest.markSucceeded(attempt, responseCode, responseBody, latencyMs);
+
+        // Assert
+        assertEquals(AttemptStatus.SUCCEEDED, result.getStatus());
+        assertEquals(responseCode, result.getResponseCode());
+        assertEquals(responseBody, result.getResponseBody());
+        assertEquals(latencyMs, result.getLatencyMs());
+
+        // Verify
+        verify(attemptRepository).save(any());
+    }
+
+    @Test
+    void markFailed_marksTheAttemptWithTheGivenFailedStatusSetsRequiredFieldsAndReturnsTheAttemp() throws Exception {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        Message message = new Message(app, event, body);
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        AttemptStatus status = AttemptStatus.FAILED_RETRYING;
+        Instant nextRetryAt = Instant.now();
+        int responseCode = 500;
+        String error = "x".repeat(20_000);
+        Long latencyMs = 15000L;
+
+        // Stub
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        Attempt result = underTest.markFailed(attempt, status, nextRetryAt, responseCode, error, latencyMs);
+
+        // Assert
+        assertEquals(status, result.getStatus());
+        assertEquals(nextRetryAt, result.getNextRetryAt());
+        assertEquals(responseCode, result.getResponseCode());
+        assertEquals(10240, result.getLastError().length());
+        assertEquals(latencyMs, result.getLatencyMs());
+
+        // Verify
+        verify(attemptRepository).save(any());
     }
 }

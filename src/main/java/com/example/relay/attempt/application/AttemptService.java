@@ -1,11 +1,16 @@
 package com.example.relay.attempt.application;
 
 import com.example.relay.attempt.domain.Attempt;
+import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.subscription.domain.Subscription;
+
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,5 +38,43 @@ public class AttemptService {
         }
 
         return attempts;
+    }
+
+    public boolean claim(UUID attemptId) {
+        return attemptRepository.claim(attemptId) == 1;
+    }
+
+    public Attempt createRetry(Attempt previous) {
+        Attempt retry = new Attempt(previous.getApp(), previous.getMessage(), previous.getEndpoint(),
+                previous.getAttemptNo() + 1);
+        return attemptRepository.save(retry);
+    }
+
+    public Attempt markSucceeded(Attempt attempt, Integer responseCode, String responseBody, Long latencyMs) {
+        attempt.setResponseCode(responseCode);
+        attempt.setResponseBody(responseBody);
+        attempt.setLatencyMs(latencyMs);
+        attempt.setStatus(AttemptStatus.SUCCEEDED);
+
+        return attemptRepository.save(attempt);
+    }
+
+    public Attempt markFailed(Attempt attempt, AttemptStatus status, Instant nextRetryAt, Integer responseCode,
+            String error, Long latencyMs) {
+        attempt.setStatus(status);
+        attempt.setNextRetryAt(nextRetryAt);
+        attempt.setResponseCode(responseCode);
+        attempt.setLastError(truncate(error, 10240));
+        attempt.setLatencyMs(latencyMs);
+
+        return attemptRepository.save(attempt);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+
+        return value.length() > maxLength ? value.substring(0, maxLength) : value;
     }
 }
