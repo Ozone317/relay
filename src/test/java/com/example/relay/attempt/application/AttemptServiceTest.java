@@ -121,7 +121,7 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void createRetry_createsSavesAndReturnsAttemptWithIncreasedAttemptCount() throws Exception {
+    void createRetry_createsSavesAndReturnsAttemptWithIncreasedAttemptCount() {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -145,7 +145,7 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void markSucceeded_marksTheAttemptAsSuccessfulSetsRequiredFilesAndReturnsTheAttempt() throws Exception {
+    void markSucceeded_marksTheAttemptAsSuccessfulSetsRequiredFilesAndReturnsTheAttempt() {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -176,7 +176,7 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void markFailed_marksTheAttemptWithTheGivenFailedStatusSetsRequiredFieldsAndReturnsTheAttemp() throws Exception {
+    void markFailed_marksTheAttemptWithTheGivenFailedStatusSetsRequiredFieldsAndReturnsTheAttemp() {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);

@@ -40,16 +40,19 @@ public class AttemptService {
         return attempts;
     }
 
+    @Transactional
     public boolean claim(UUID attemptId) {
         return attemptRepository.claim(attemptId) == 1;
     }
 
+    @Transactional
     public Attempt createRetry(Attempt previous) {
         Attempt retry = new Attempt(previous.getApp(), previous.getMessage(), previous.getEndpoint(),
                 previous.getAttemptNo() + 1);
         return attemptRepository.save(retry);
     }
 
+    @Transactional
     public Attempt markSucceeded(Attempt attempt, Integer responseCode, String responseBody, Long latencyMs) {
         attempt.setResponseCode(responseCode);
         attempt.setResponseBody(responseBody);
@@ -59,6 +62,7 @@ public class AttemptService {
         return attemptRepository.save(attempt);
     }
 
+    @Transactional
     public Attempt markFailed(Attempt attempt, AttemptStatus status, Instant nextRetryAt, Integer responseCode,
             String error, Long latencyMs) {
         attempt.setStatus(status);
