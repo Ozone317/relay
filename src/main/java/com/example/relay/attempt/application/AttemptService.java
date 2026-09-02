@@ -75,6 +75,11 @@ public class AttemptService {
         return attemptRepository.save(attempt);
     }
 
+    @Transactional
+    public int resetStuck(UUID attemptId, Instant threshold) {
+        return attemptRepository.resetStuck(attemptId, threshold);
+    }
+
     private String truncate(String value, int maxLength) {
         if (value == null) {
             return null;
