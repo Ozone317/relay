@@ -1,0 +1,30 @@
+package com.example.relay.delivery.reconciliation;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import java.time.Duration;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.TestPropertySource;
+
+@SpringBootTest
+@TestPropertySource(properties = {
+        "relay.reconciliation.interval=15s",
+        "relay.reconciliation.created-grace=5s",
+        "relay.reconciliation.in-flight-grace=45s",
+        "relay.reconciliation.batch-size=25"
+})
+class ReconciliationPropertiesTest {
+
+    @Autowired
+    private ReconciliationProperties properties;
+
+    @Test
+    void bindsAllPropertiesFromRelayReconciliationPrefix() {
+        assertEquals(Duration.ofSeconds(15), properties.getInterval());
+        assertEquals(Duration.ofSeconds(5), properties.getCreatedGrace());
+        assertEquals(Duration.ofSeconds(45), properties.getInFlightGrace());
+        assertEquals(25, properties.getBatchSize());
+    }
+}
