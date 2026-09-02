@@ -1,6 +1,11 @@
 package com.example.relay.attempt.infrastructure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
@@ -15,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.data.domain.Limit;
 
 @DataJpaTest
 public class AttemptRepositoryTest {
@@ -84,5 +90,175 @@ public class AttemptRepositoryTest {
 
         // Assert
         assertEquals(0, rowsAffected);
+    }
+
+    @Test
+    void findByStatusAndUpdatedAtBefore_returnsOnlyStaleMatchingRows() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+
+        Attempt stale = new Attempt(app, message, endpoint, 1);
+        Attempt fresh = new Attempt(app, message, endpoint, 1);
+        Attempt staleButWrongStatus = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(stale);
+        testEntityManager.persistAndFlush(fresh);
+        testEntityManager.persistAndFlush(staleButWrongStatus);
+
+        Instant longAgo = Instant.now().minusSeconds(3600);
+        backdateUpdatedAt(stale.getId(), longAgo);
+        backdateUpdatedAt(staleButWrongStatus.getId(), longAgo);
+        underTest.claim(staleButWrongStatus.getId()); // flips it to IN_FLIGHT
+
+        Instant threshold = Instant.now().minusSeconds(60);
+
+        // Act
+        List<Attempt> result = underTest.findByStatusAndUpdatedAtBefore(
+                AttemptStatus.CREATED, threshold, Limit.of(100));
+
+        // Assert
+        assertEquals(1, result.size());
+        assertEquals(stale.getId(), result.get(0).getId());
+        assertTrue(result.stream().noneMatch(a -> a.getId().equals(fresh.getId()))); // Fresh row is not returned
+    }
+
+    @Test
+    void findByStatusAndUpdatedAtBefore_respectsLimit() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+
+        Instant longAgo = Instant.now().minusSeconds(3600);
+        for (int i = 0; i < 3; i++) {
+            Attempt attempt = new Attempt(app, message, endpoint, 1);
+            testEntityManager.persistAndFlush(attempt);
+            backdateUpdatedAt(attempt.getId(), longAgo);
+        }
+
+        // Act
+        List<Attempt> result = underTest.findByStatusAndUpdatedAtBefore(
+                AttemptStatus.CREATED, Instant.now().minusSeconds(60), Limit.of(2));
+
+        // Assert
+        assertEquals(2, result.size());
+    }
+
+    @Test
+    void resetStuck_returns1AndFlipsStatus_whenInFlightAndStale() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        underTest.claim(attempt.getId()); // CREATED -> IN_FLIGHT
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        // Act
+        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+
+        // Assert
+        assertEquals(1, rowsAffected);
+        assertEquals(AttemptStatus.CREATED, underTest.findById(attempt.getId()).get().getStatus());
+    }
+
+    @Test
+    void resetStuck_returns0_whenNotStaleEnough() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        underTest.claim(attempt.getId()); // updated_at is "now", not stale
+
+        // Act
+        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+
+        // Assert
+        assertEquals(0, rowsAffected);
+        assertEquals(AttemptStatus.IN_FLIGHT, underTest.findById(attempt.getId()).get().getStatus());
+    }
+
+    @Test
+    void resetStuck_returns0_whenStatusIsNotInFlight() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1); // stays CREATED
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        // Act
+        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+
+        // Assert
+        assertEquals(0, rowsAffected);
+        assertEquals(AttemptStatus.CREATED, underTest.findById(attempt.getId()).get().getStatus());
+    }
+
+    private void backdateUpdatedAt(UUID attemptId, Instant when) {
+        testEntityManager.getEntityManager()
+                .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")
+                .setParameter("when", when)
+                .setParameter("id", attemptId)
+                .executeUpdate();
+        testEntityManager.getEntityManager().clear();
     }
 }
