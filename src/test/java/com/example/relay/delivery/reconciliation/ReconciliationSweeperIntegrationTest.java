@@ -52,7 +52,8 @@ import jakarta.persistence.PersistenceContext;
         // AttemptPublisherIntegrationTest disabling the listener for its own queue reads.
         "spring.task.scheduling.enabled=false",
         "spring.rabbitmq.listener.simple.auto-startup=false",
-        "relay.reconciliation.batch-size=2"
+        "relay.reconciliation.batch-size=2",
+        "relay.reconciliation.scheduled-slack=5m"
 })
 public class ReconciliationSweeperIntegrationTest {
 
@@ -133,6 +134,13 @@ public class ReconciliationSweeperIntegrationTest {
         }
         backdateUpdatedAt(attempt.getId(), updatedAt);
         return attempt;
+    }
+
+    private Attempt persistScheduledAttempt(Instant nextRetryAt) {
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 2));
+        attempt.setStatus(AttemptStatus.SCHEDULED);
+        attempt.setNextRetryAt(nextRetryAt);
+        return attemptRepository.save(attempt);
     }
 
     private void backdateUpdatedAt(UUID id, Instant timestamp) {
@@ -235,5 +243,45 @@ public class ReconciliationSweeperIntegrationTest {
         // Relies on relay.reconciliation.batch-size being overridden below the default 100 for
         // this assertion to mean anything - see the @TestPropertySource addition below.
         assertEquals(2, republished);
+    }
+
+    @Test
+    void overdueScheduledAttempt_isResetAndRepublished() {
+        Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(3600));
+
+        sweeper.sweep();
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
+        });
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
+        assertNotNull(queued, "expected the overdue SCHEDULED attempt to be recovered to delivery.tasks");
+        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
+    }
+
+    @Test
+    void notYetDueScheduledAttempt_isLeftAlone() {
+        Attempt attempt = persistScheduledAttempt(Instant.now().plusSeconds(3600));
+
+        sweeper.sweep();
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
+        assertNull(queued, "a SCHEDULED attempt not yet due must not be recovered early");
+        assertEquals(AttemptStatus.SCHEDULED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void scheduledAttempt_dueButWithinSlack_isLeftAlone() {
+        // D3's core scenario: a retry whose grace-by-updated_at would look stale, but whose actual
+        // backoff (next_retry_at) has not elapsed past the configured slack yet.
+        Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(30));
+
+        sweeper.sweep();
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
+        assertNull(queued, "a SCHEDULED attempt within its slack window must not be recovered early");
+        assertEquals(AttemptStatus.SCHEDULED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
     }
 }
