@@ -306,4 +306,24 @@ public class ReconciliationSweeperIntegrationTest {
         assertNull(queued, "a SCHEDULED attempt within its slack window must not be recovered early");
         assertEquals(AttemptStatus.SCHEDULED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
     }
+
+    @Test
+    void inFlightAttempt_claimedAfterSittingStaleForHours_isNotImmediatelyResetMidDelivery() {
+        // Reproduces D1: before the fix, claim() left updated_at at its pre-claim value, so a retry
+        // claimed after (e.g.) six hours in a wait tier looked immediately stale to recoverInFlight,
+        // which would reset it back to CREATED and republish it WHILE the HTTP call was still running.
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 1));
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600)); // 6 hours, pre-claim
+
+        attemptService.claim(attempt.getId()); // should stamp updated_at to ~now (Task 2's fix)
+
+        sweeper.sweep();
+
+        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        assertEquals(AttemptStatus.IN_FLIGHT, reloaded.getStatus(),
+                "a just-claimed attempt must not be reset mid-delivery even if it was stale before claiming");
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
+        assertNull(queued, "must not be republished while genuinely in flight");
+    }
 }
