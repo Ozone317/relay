@@ -246,6 +246,28 @@ public class ReconciliationSweeperIntegrationTest {
     }
 
     @Test
+    void staleCreatedAttempt_isNotRepublishedOnEveryConsecutiveSweep() {
+        // Honest now, and not before Step 3's fix: with created-grace >= interval enforced at
+        // startup, a row touched by recoverCreated() cannot go stale again before at least one
+        // full interval has elapsed. So calling sweep() three times with ~0ms between calls is a
+        // valid lower bound on real @Scheduled(fixedDelay) spacing - if the row doesn't re-match
+        // after zero elapsed time, it provably won't re-match after a real interval's worth of
+        // time either. Before the validation existed, this same test would have proven nothing.
+        persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now().minusSeconds(3600));
+
+        sweeper.sweep();
+        sweeper.sweep();
+        sweeper.sweep();
+
+        int republished = 0;
+        while (rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 500) != null) {
+            republished++;
+        }
+        assertEquals(1, republished,
+                "three back-to-back sweeps of one stuck row should republish it once, not three times");
+    }
+
+    @Test
     void overdueScheduledAttempt_isResetAndRepublished() {
         Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(3600));
 

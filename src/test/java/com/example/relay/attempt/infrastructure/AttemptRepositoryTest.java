@@ -437,6 +437,64 @@ public class AttemptRepositoryTest {
         assertEquals(AttemptStatus.SCHEDULED, underTest.findById(attempt.getId()).get().getStatus());
     }
 
+    @Test
+    void touchCreated_returns1AndAdvancesUpdatedAt_whenStillCreated() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        // Act
+        int rowsAffected = underTest.touchCreated(attempt.getId());
+
+        // Assert
+        assertEquals(1, rowsAffected);
+        Attempt reloaded = underTest.findById(attempt.getId()).get();
+        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)));
+    }
+
+    @Test
+    void touchCreated_returns0_whenNoLongerCreated() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        underTest.claim(attempt.getId()); // moves it to IN_FLIGHT
+
+        // Act
+        int rowsAffected = underTest.touchCreated(attempt.getId());
+
+        // Assert
+        assertEquals(0, rowsAffected);
+    }
+
     private void backdateUpdatedAt(UUID attemptId, Instant when) {
         testEntityManager.getEntityManager()
                 .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")

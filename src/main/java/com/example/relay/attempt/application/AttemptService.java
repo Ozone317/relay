@@ -87,6 +87,11 @@ public class AttemptService {
         return attemptRepository.resetScheduled(attemptId, threshold);
     }
 
+    @Transactional
+    public int touchCreated(UUID attemptId) {
+        return attemptRepository.touchCreated(attemptId);
+    }
+
     private String truncate(String value, int maxLength) {
         if (value == null) {
             return null;
