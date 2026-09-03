@@ -121,7 +121,7 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void createRetry_createsSavesAndReturnsAttemptWithIncreasedAttemptCount() {
+    void createRetry_createsSavesAndReturnsScheduledAttemptWithIncreasedAttemptCountAndDueTime() {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -131,17 +131,18 @@ public class AttemptServiceTest {
         Message message = new Message(app, event, body);
         Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
         Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Instant nextRetryAt = Instant.now().plusSeconds(30);
 
         // Stub
-        // this says that i dont care which object the attemptRepository is passed, give me the exact same object back
         when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
-        Attempt result = underTest.createRetry(attempt);
+        Attempt result = underTest.createRetry(attempt, nextRetryAt);
 
         // Assert
         assertEquals(attempt.getAttemptNo() + 1, result.getAttemptNo());
-        assertEquals(AttemptStatus.CREATED, result.getStatus());
+        assertEquals(AttemptStatus.SCHEDULED, result.getStatus());
+        assertEquals(nextRetryAt, result.getNextRetryAt());
     }
 
     @Test

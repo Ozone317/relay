@@ -46,9 +46,11 @@ public class AttemptService {
     }
 
     @Transactional
-    public Attempt createRetry(Attempt previous) {
+    public Attempt createRetry(Attempt previous, Instant nextRetryAt) {
         Attempt retry = new Attempt(previous.getApp(), previous.getMessage(), previous.getEndpoint(),
                 previous.getAttemptNo() + 1);
+        retry.setStatus(AttemptStatus.SCHEDULED);
+        retry.setNextRetryAt(nextRetryAt);
         return attemptRepository.save(retry);
     }
 

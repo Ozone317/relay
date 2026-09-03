@@ -209,6 +209,8 @@ public class DeliveryWorkerIntegrationTest {
             assertEquals(
                     attempt.getEndpoint().getId(),
                     retry.getEndpoint().getId());
+            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+            assertNotNull(retry.getNextRetryAt());
 
             retryHolder.set(retry);
         });
@@ -268,6 +270,8 @@ public class DeliveryWorkerIntegrationTest {
             assertEquals(
                     attempt.getEndpoint().getId(),
                     retry.getEndpoint().getId());
+            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+            assertNotNull(retry.getNextRetryAt());
         });
     }
 
@@ -387,6 +391,8 @@ public class DeliveryWorkerIntegrationTest {
             assertEquals(
                     RetryTier.MAX_ATTEMPTS,
                     retry.getAttemptNo());
+            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+            assertNotNull(retry.getNextRetryAt());
         });
     }
 
