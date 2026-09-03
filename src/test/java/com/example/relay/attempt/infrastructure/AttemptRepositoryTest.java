@@ -315,6 +315,34 @@ public class AttemptRepositoryTest {
                 "resetStuck() should stamp updated_at to roughly now, not leave the old value");
     }
 
+    @Test
+    void claim_returns1_whenRowIsScheduled() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        attempt.setStatus(AttemptStatus.SCHEDULED);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        // Act
+        int rowsAffected = underTest.claim(attempt.getId());
+
+        // Assert
+        assertEquals(1, rowsAffected);
+        assertEquals(AttemptStatus.IN_FLIGHT, underTest.findById(attempt.getId()).get().getStatus());
+    }
+
     private void backdateUpdatedAt(UUID attemptId, Instant when) {
         testEntityManager.getEntityManager()
                 .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")
