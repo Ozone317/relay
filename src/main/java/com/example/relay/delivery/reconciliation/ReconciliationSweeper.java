@@ -13,6 +13,7 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.config.RabbitMqConfig;
 import com.example.relay.delivery.publisher.AttemptPublisher;
 
 @Component
@@ -41,6 +42,7 @@ public class ReconciliationSweeper {
         recoverCreated();
         recoverInFlight();
         recoverScheduled();
+        recoverDeadLetter();
     }
 
     private void recoverCreated() {
@@ -90,6 +92,24 @@ public class ReconciliationSweeper {
                 attemptPublisher.publish(attempt.getId());
             } else {
                 log.info("Attempt {} resolved before the sweep could recover it, skipping", attempt.getId());
+            }
+        }
+    }
+
+    private void recoverDeadLetter() {
+        Instant now = Instant.now();
+        Instant threshold = now.minus(reconciliationProperties.getDeadLetterGrace());
+        List<Attempt> attempts = attemptRepository.findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(
+            AttemptStatus.DEAD, threshold, Limit.of(reconciliationProperties.getBatchSize())
+        );
+
+        for (Attempt attempt : attempts) {
+            if (attemptService.touchDeadLetterCandidate(attempt.getId(), threshold, now) == 1) {
+                log.warn("Republishing unnotified DEAD attempt {} to delivery.deadletter", attempt.getId());
+                attemptPublisher.publishToRoutingKey(attempt.getId(), RabbitMqConfig.DEADLETTER_ROUTING_KEY);
+            } else {
+                log.info("Attempt {} was notified or already re-touched before the sweep could republish it, skipping",
+                        attempt.getId());
             }
         }
     }

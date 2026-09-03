@@ -110,6 +110,7 @@ public class ReconciliationSweeperIntegrationTest {
         environmentRepository.deleteAll();
         userRepository.deleteAll();
         drainTasksQueue();
+        drainDeadletterQueue();
 
         User user = userRepository.save(new User("test" + UUID.randomUUID() + "@mail.com", "hash"));
         Environment env = environmentRepository.save(new Environment("Env 1", "Desc 1", user));
@@ -122,6 +123,12 @@ public class ReconciliationSweeperIntegrationTest {
 
     private void drainTasksQueue() {
         while (rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 100) != null) {
+            // discard leftover messages from a prior test
+        }
+    }
+
+    private void drainDeadletterQueue() {
+        while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 100) != null) {
             // discard leftover messages from a prior test
         }
     }
@@ -141,6 +148,15 @@ public class ReconciliationSweeperIntegrationTest {
         attempt.setStatus(AttemptStatus.SCHEDULED);
         attempt.setNextRetryAt(nextRetryAt);
         return attemptRepository.save(attempt);
+    }
+
+    private Attempt persistDeadAttempt(Instant updatedAt, Instant deadLetterNotifiedAt) {
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 6));
+        attempt.setStatus(AttemptStatus.DEAD);
+        attempt.setDeadLetterNotifiedAt(deadLetterNotifiedAt);
+        attempt = attemptRepository.save(attempt);
+        backdateUpdatedAt(attempt.getId(), updatedAt);
+        return attempt;
     }
 
     private void backdateUpdatedAt(UUID id, Instant timestamp) {
@@ -325,5 +341,54 @@ public class ReconciliationSweeperIntegrationTest {
 
         Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
         assertNull(queued, "must not be republished while genuinely in flight");
+    }
+
+    @Test
+    void staleUnnotifiedDeadAttempt_getsRepublishedToDeadletterQueue() {
+        Attempt attempt = persistDeadAttempt(Instant.now().minusSeconds(3600), null);
+
+        sweeper.sweep();
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 5000);
+        assertNotNull(queued, "expected the stale unnotified DEAD attempt to be republished");
+        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
+    }
+
+    @Test
+    void staleButAlreadyNotifiedDeadAttempt_isLeftAlone() {
+        persistDeadAttempt(Instant.now().minusSeconds(3600), Instant.now());
+
+        sweeper.sweep();
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 2000);
+        assertNull(queued, "an already-notified DEAD attempt must not be republished");
+    }
+
+    @Test
+    void freshUnnotifiedDeadAttempt_isLeftAlone() {
+        persistDeadAttempt(Instant.now(), null);
+
+        sweeper.sweep();
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 2000);
+        assertNull(queued, "a freshly dead-lettered attempt should not be swept yet");
+    }
+
+    @Test
+    void staleUnnotifiedDeadAttempt_isNotRepublishedOnEveryConsecutiveSweep() {
+        // Same D2-shaped guard as recoverCreated()/touchCreated - proven the same way, since
+        // relay.reconciliation.dead-letter-grace >= interval is enforced at startup (Step 9).
+        persistDeadAttempt(Instant.now().minusSeconds(3600), null);
+
+        sweeper.sweep();
+        sweeper.sweep();
+        sweeper.sweep();
+
+        int republished = 0;
+        while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 500) != null) {
+            republished++;
+        }
+        assertEquals(1, republished,
+                "three back-to-back sweeps of one stuck DEAD row should republish it once, not three times");
     }
 }

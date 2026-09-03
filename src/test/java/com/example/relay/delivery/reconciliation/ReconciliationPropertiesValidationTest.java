@@ -34,4 +34,22 @@ class ReconciliationPropertiesValidationTest {
 
         assertDoesNotThrow(properties::validate);
     }
+
+    @Test
+    void validate_throws_whenDeadLetterGraceIsShorterThanInterval() {
+        ReconciliationProperties properties = new ReconciliationProperties();
+        properties.setInterval(Duration.ofSeconds(30));
+        properties.setDeadLetterGrace(Duration.ofSeconds(10));
+
+        assertThrows(IllegalStateException.class, properties::validate);
+    }
+
+    @Test
+    void validate_passes_whenDeadLetterGraceEqualsInterval() {
+        ReconciliationProperties properties = new ReconciliationProperties();
+        properties.setInterval(Duration.ofSeconds(30));
+        properties.setDeadLetterGrace(Duration.ofSeconds(30));
+
+        assertDoesNotThrow(properties::validate);
+    }
 }
