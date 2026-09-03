@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -54,7 +55,7 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(attempt);
 
         // Act
-        int rowsAffected = underTest.claim(attempt.getId());
+        int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
 
         // Assert
         assertEquals(1, rowsAffected);
@@ -83,10 +84,10 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId());
+        underTest.claim(attempt.getId(), Instant.now());
 
         // Act (claiming the already claimed row)
-        int rowsAffected = underTest.claim(attempt.getId());
+        int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
 
         // Assert
         assertEquals(0, rowsAffected);
@@ -119,7 +120,7 @@ public class AttemptRepositoryTest {
         Instant longAgo = Instant.now().minusSeconds(3600);
         backdateUpdatedAt(stale.getId(), longAgo);
         backdateUpdatedAt(staleButWrongStatus.getId(), longAgo);
-        underTest.claim(staleButWrongStatus.getId()); // flips it to IN_FLIGHT
+        underTest.claim(staleButWrongStatus.getId(), Instant.now()); // flips it to IN_FLIGHT
 
         Instant threshold = Instant.now().minusSeconds(60);
 
@@ -184,11 +185,11 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId()); // CREATED -> IN_FLIGHT
+        underTest.claim(attempt.getId(), Instant.now()); // CREATED -> IN_FLIGHT
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
-        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now());
 
         // Assert
         assertEquals(1, rowsAffected);
@@ -214,10 +215,10 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId()); // updated_at is "now", not stale
+        underTest.claim(attempt.getId(), Instant.now()); // updated_at is "now", not stale
 
         // Act
-        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now());
 
         // Assert
         assertEquals(0, rowsAffected);
@@ -246,7 +247,7 @@ public class AttemptRepositoryTest {
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
-        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now());
 
         // Assert
         assertEquals(0, rowsAffected);
@@ -276,12 +277,13 @@ public class AttemptRepositoryTest {
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600));
 
         // Act
-        underTest.claim(attempt.getId());
+        Instant now = Instant.now();
+        underTest.claim(attempt.getId(), now);
 
         // Assert
         Attempt reloaded = underTest.findById(attempt.getId()).get();
-        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
-                "claim() should stamp updated_at to roughly now, not leave the old value");
+        assertEquals(now.truncatedTo(ChronoUnit.MILLIS), reloaded.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS),
+                "claim() should stamp updated_at to the bound now parameter, not leave the old value");
     }
 
     @Test
@@ -303,16 +305,17 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId());
+        underTest.claim(attempt.getId(), Instant.now());
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
-        underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+        Instant now = Instant.now();
+        underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), now);
 
         // Assert
         Attempt reloaded = underTest.findById(attempt.getId()).get();
-        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
-                "resetStuck() should stamp updated_at to roughly now, not leave the old value");
+        assertEquals(now.truncatedTo(ChronoUnit.MILLIS), reloaded.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS),
+                "resetStuck() should stamp updated_at to the bound now parameter, not leave the old value");
     }
 
     @Test
@@ -336,7 +339,7 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(attempt);
 
         // Act
-        int rowsAffected = underTest.claim(attempt.getId());
+        int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
 
         // Assert
         assertEquals(1, rowsAffected);
@@ -401,7 +404,7 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(attempt);
 
         // Act
-        int rowsAffected = underTest.resetScheduled(attempt.getId(), Instant.now());
+        int rowsAffected = underTest.resetScheduled(attempt.getId(), Instant.now(), Instant.now());
 
         // Assert
         assertEquals(1, rowsAffected);
@@ -430,7 +433,7 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(attempt);
 
         // Act
-        int rowsAffected = underTest.resetScheduled(attempt.getId(), Instant.now());
+        int rowsAffected = underTest.resetScheduled(attempt.getId(), Instant.now(), Instant.now());
 
         // Assert
         assertEquals(0, rowsAffected);
@@ -459,12 +462,13 @@ public class AttemptRepositoryTest {
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
-        int rowsAffected = underTest.touchCreated(attempt.getId());
+        Instant now = Instant.now();
+        int rowsAffected = underTest.touchCreated(attempt.getId(), now);
 
         // Assert
         assertEquals(1, rowsAffected);
         Attempt reloaded = underTest.findById(attempt.getId()).get();
-        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)));
+        assertEquals(now.truncatedTo(ChronoUnit.MILLIS), reloaded.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS));
     }
 
     @Test
@@ -486,10 +490,10 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId()); // moves it to IN_FLIGHT
+        underTest.claim(attempt.getId(), Instant.now()); // moves it to IN_FLIGHT
 
         // Act
-        int rowsAffected = underTest.touchCreated(attempt.getId());
+        int rowsAffected = underTest.touchCreated(attempt.getId(), Instant.now());
 
         // Assert
         assertEquals(0, rowsAffected);

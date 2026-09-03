@@ -130,7 +130,7 @@ public class ReconciliationSweeperIntegrationTest {
         Attempt attempt = attemptRepository.save(new Attempt(
                 endpoint.getApp(), message, endpoint, 1));
         if (status == AttemptStatus.IN_FLIGHT) {
-            attemptService.claim(attempt.getId());
+            attemptService.claim(attempt.getId(), Instant.now());
         }
         backdateUpdatedAt(attempt.getId(), updatedAt);
         return attempt;
@@ -315,7 +315,7 @@ public class ReconciliationSweeperIntegrationTest {
         Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 1));
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600)); // 6 hours, pre-claim
 
-        attemptService.claim(attempt.getId()); // should stamp updated_at to ~now (Task 2's fix)
+        attemptService.claim(attempt.getId(), Instant.now()); // should stamp updated_at to ~now (Task 2's fix)
 
         sweeper.sweep();
 

@@ -41,8 +41,8 @@ public class AttemptService {
     }
 
     @Transactional
-    public boolean claim(UUID attemptId) {
-        return attemptRepository.claim(attemptId) == 1;
+    public boolean claim(UUID attemptId, Instant now) {
+        return attemptRepository.claim(attemptId, now) == 1;
     }
 
     @Transactional
@@ -78,18 +78,18 @@ public class AttemptService {
     }
 
     @Transactional
-    public int resetStuck(UUID attemptId, Instant threshold) {
-        return attemptRepository.resetStuck(attemptId, threshold);
+    public int resetStuck(UUID attemptId, Instant threshold, Instant now) {
+        return attemptRepository.resetStuck(attemptId, threshold, now);
     }
 
     @Transactional
-    public int resetScheduled(UUID attemptId, Instant threshold) {
-        return attemptRepository.resetScheduled(attemptId, threshold);
+    public int resetScheduled(UUID attemptId, Instant threshold, Instant now) {
+        return attemptRepository.resetScheduled(attemptId, threshold, now);
     }
 
     @Transactional
-    public int touchCreated(UUID attemptId) {
-        return attemptRepository.touchCreated(attemptId);
+    public int touchCreated(UUID attemptId, Instant now) {
+        return attemptRepository.touchCreated(attemptId, now);
     }
 
     private String truncate(String value, int maxLength) {

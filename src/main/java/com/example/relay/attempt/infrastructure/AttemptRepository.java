@@ -17,42 +17,42 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'IN_FLIGHT', updated_at = now()
+                SET status = 'IN_FLIGHT', updated_at = :now
                 WHERE id = :attemptId
                 AND status IN ('CREATED', 'SCHEDULED')
             """, nativeQuery = true)
-    int claim(UUID attemptId);
+    int claim(UUID attemptId, Instant now);
 
     List<Attempt> findByStatusAndUpdatedAtBefore(AttemptStatus status, Instant threshold, Limit limit);
 
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'CREATED', updated_at = now()
+                SET status = 'CREATED', updated_at = :now
                 WHERE id = :attemptId
                 AND status = 'IN_FLIGHT'
                 AND updated_at < :threshold
             """, nativeQuery = true)
-    int resetStuck(UUID attemptId, Instant threshold);
+    int resetStuck(UUID attemptId, Instant threshold, Instant now);
 
     List<Attempt> findByStatusAndNextRetryAtBefore(AttemptStatus status, Instant threshold, Limit limit);
 
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'CREATED', updated_at = now()
+                SET status = 'CREATED', updated_at = :now
                 WHERE id = :attemptId
                 AND status = 'SCHEDULED'
                 AND next_retry_at < :threshold
             """, nativeQuery = true)
-    int resetScheduled(UUID attemptId, Instant threshold);
+    int resetScheduled(UUID attemptId, Instant threshold, Instant now);
 
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET updated_at = now()
+                SET updated_at = :now
                 WHERE id = :attemptId
                 AND status = 'CREATED'
             """, nativeQuery = true)
-    int touchCreated(UUID attemptId);
+    int touchCreated(UUID attemptId, Instant now);
 }

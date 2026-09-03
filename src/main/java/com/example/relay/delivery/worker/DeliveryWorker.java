@@ -43,7 +43,7 @@ public class DeliveryWorker {
     public void onMessage(String attemptIdRaw) {
         UUID attemptId = UUID.fromString(attemptIdRaw);
 
-        if (!attemptService.claim(attemptId)) {
+        if (!attemptService.claim(attemptId, Instant.now())) {
             log.warn("Attempt {} was already claimed, skipping", attemptId);
             return;
         }
