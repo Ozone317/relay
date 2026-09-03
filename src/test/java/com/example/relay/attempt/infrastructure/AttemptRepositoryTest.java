@@ -253,6 +253,68 @@ public class AttemptRepositoryTest {
         assertEquals(AttemptStatus.CREATED, underTest.findById(attempt.getId()).get().getStatus());
     }
 
+    @Test
+    void claim_advancesUpdatedAt() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        // Simulate a retry that sat in a wait tier for hours before being claimed.
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600));
+
+        // Act
+        underTest.claim(attempt.getId());
+
+        // Assert
+        Attempt reloaded = underTest.findById(attempt.getId()).get();
+        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
+                "claim() should stamp updated_at to roughly now, not leave the old value");
+    }
+
+    @Test
+    void resetStuck_advancesUpdatedAt() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        underTest.claim(attempt.getId());
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        // Act
+        underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60));
+
+        // Assert
+        Attempt reloaded = underTest.findById(attempt.getId()).get();
+        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
+                "resetStuck() should stamp updated_at to roughly now, not leave the old value");
+    }
+
     private void backdateUpdatedAt(UUID attemptId, Instant when) {
         testEntityManager.getEntityManager()
                 .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")

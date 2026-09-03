@@ -17,7 +17,7 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'IN_FLIGHT'
+                SET status = 'IN_FLIGHT', updated_at = now()
                 WHERE id = :attemptId
                 AND status = 'CREATED'
             """, nativeQuery = true)
@@ -28,7 +28,7 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'CREATED'
+                SET status = 'CREATED', updated_at = now()
                 WHERE id = :attemptId
                 AND status = 'IN_FLIGHT'
                 AND updated_at < :threshold
