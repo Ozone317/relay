@@ -34,4 +34,16 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
                 AND updated_at < :threshold
             """, nativeQuery = true)
     int resetStuck(UUID attemptId, Instant threshold);
+
+    List<Attempt> findByStatusAndNextRetryAtBefore(AttemptStatus status, Instant threshold, Limit limit);
+
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+                UPDATE attempts
+                SET status = 'CREATED', updated_at = now()
+                WHERE id = :attemptId
+                AND status = 'SCHEDULED'
+                AND next_retry_at < :threshold
+            """, nativeQuery = true)
+    int resetScheduled(UUID attemptId, Instant threshold);
 }

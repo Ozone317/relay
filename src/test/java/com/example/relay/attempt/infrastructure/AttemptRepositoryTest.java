@@ -343,6 +343,100 @@ public class AttemptRepositoryTest {
         assertEquals(AttemptStatus.IN_FLIGHT, underTest.findById(attempt.getId()).get().getStatus());
     }
 
+    @Test
+    void findByStatusAndNextRetryAtBefore_returnsOnlyOverdueScheduledRows() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+
+        Attempt overdue = new Attempt(app, message, endpoint, 2);
+        overdue.setStatus(AttemptStatus.SCHEDULED);
+        overdue.setNextRetryAt(Instant.now().minusSeconds(3600));
+
+        Attempt notYetDue = new Attempt(app, message, endpoint, 2);
+        notYetDue.setStatus(AttemptStatus.SCHEDULED);
+        notYetDue.setNextRetryAt(Instant.now().plusSeconds(3600));
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(overdue);
+        testEntityManager.persistAndFlush(notYetDue);
+
+        // Act
+        List<Attempt> result = underTest.findByStatusAndNextRetryAtBefore(
+                AttemptStatus.SCHEDULED, Instant.now(), Limit.of(100));
+
+        // Assert
+        assertEquals(1, result.size());
+        assertEquals(overdue.getId(), result.get(0).getId());
+    }
+
+    @Test
+    void resetScheduled_returns1AndFlipsToCreated_whenOverdue() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        attempt.setStatus(AttemptStatus.SCHEDULED);
+        attempt.setNextRetryAt(Instant.now().minusSeconds(3600));
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        // Act
+        int rowsAffected = underTest.resetScheduled(attempt.getId(), Instant.now());
+
+        // Assert
+        assertEquals(1, rowsAffected);
+        assertEquals(AttemptStatus.CREATED, underTest.findById(attempt.getId()).get().getStatus());
+    }
+
+    @Test
+    void resetScheduled_returns0_whenNotYetDue() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        attempt.setStatus(AttemptStatus.SCHEDULED);
+        attempt.setNextRetryAt(Instant.now().plusSeconds(3600));
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        // Act
+        int rowsAffected = underTest.resetScheduled(attempt.getId(), Instant.now());
+
+        // Assert
+        assertEquals(0, rowsAffected);
+        assertEquals(AttemptStatus.SCHEDULED, underTest.findById(attempt.getId()).get().getStatus());
+    }
+
     private void backdateUpdatedAt(UUID attemptId, Instant when) {
         testEntityManager.getEntityManager()
                 .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")

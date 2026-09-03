@@ -20,4 +20,6 @@ public class ReconciliationProperties {
     
     private int batchSize = 100;
 
+    private Duration scheduledSlack = Duration.ofMinutes(5);
+
 }

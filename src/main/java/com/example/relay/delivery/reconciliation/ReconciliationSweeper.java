@@ -40,6 +40,7 @@ public class ReconciliationSweeper {
     public void sweep() {
         recoverCreated();
         recoverInFlight();
+        recoverScheduled();
     }
 
     private void recoverCreated() {
@@ -55,18 +56,33 @@ public class ReconciliationSweeper {
     }
 
     private void recoverInFlight() {
+        Instant threshold = Instant.now().minus(reconciliationProperties.getInFlightGrace());
         List<Attempt> attempts = attemptRepository.findByStatusAndUpdatedAtBefore(
-            AttemptStatus.IN_FLIGHT,
-            Instant.now().minus(reconciliationProperties.getInFlightGrace()),
-            Limit.of(reconciliationProperties.getBatchSize())
+            AttemptStatus.IN_FLIGHT, threshold, Limit.of(reconciliationProperties.getBatchSize())
         );
 
         for (Attempt attempt : attempts) {
-            if (attemptService.resetStuck(attempt.getId(), Instant.now().minus(reconciliationProperties.getInFlightGrace())) == 1) {
+            if (attemptService.resetStuck(attempt.getId(), threshold) == 1) {
                 log.warn("Reset stuck IN_FLIGHT attempt {} back to CREATED", attempt.getId());
                 attemptPublisher.publish(attempt.getId());
             } else {
                 log.info("Attempt {} resolved before the sweep could reset it, skipping", attempt.getId());
+            }
+        }
+    }
+
+    private void recoverScheduled() {
+        Instant threshold = Instant.now().minus(reconciliationProperties.getScheduledSlack());
+        List<Attempt> attempts = attemptRepository.findByStatusAndNextRetryAtBefore(
+            AttemptStatus.SCHEDULED, threshold, Limit.of(reconciliationProperties.getBatchSize())
+        );
+
+        for (Attempt attempt : attempts) {
+            if (attemptService.resetScheduled(attempt.getId(), threshold) == 1) {
+                log.warn("Recovered overdue SCHEDULED attempt {} to CREATED", attempt.getId());
+                attemptPublisher.publish(attempt.getId());
+            } else {
+                log.info("Attempt {} resolved before the sweep could recover it, skipping", attempt.getId());
             }
         }
     }

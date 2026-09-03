@@ -82,6 +82,11 @@ public class AttemptService {
         return attemptRepository.resetStuck(attemptId, threshold);
     }
 
+    @Transactional
+    public int resetScheduled(UUID attemptId, Instant threshold) {
+        return attemptRepository.resetScheduled(attemptId, threshold);
+    }
+
     private String truncate(String value, int maxLength) {
         if (value == null) {
             return null;
