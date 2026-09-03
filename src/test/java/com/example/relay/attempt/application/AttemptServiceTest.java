@@ -94,12 +94,13 @@ public class AttemptServiceTest {
     void claim_returnsTrue_whenTheAttemptIsClaimedSuccessfully() {
         // Arrange
         UUID attemptId = UUID.randomUUID();
+        Instant now = Instant.now();
 
         // Stub
-        when(attemptRepository.claim(attemptId)).thenReturn(1);
+        when(attemptRepository.claim(attemptId, now)).thenReturn(1);
 
         // Act
-        boolean result = underTest.claim(attemptId);
+        boolean result = underTest.claim(attemptId, now);
 
         // Assert
         assertEquals(true, result);
@@ -109,12 +110,13 @@ public class AttemptServiceTest {
     void claim_returnsFalse_whenTheAttemptIsNotClaimedSuccessfully() {
         // Arrange
         UUID attemptId = UUID.randomUUID();
+        Instant now = Instant.now();
 
         // Stub
-        when(attemptRepository.claim(attemptId)).thenReturn(0);
+        when(attemptRepository.claim(attemptId, now)).thenReturn(0);
 
         // Act
-        boolean result = underTest.claim(attemptId);
+        boolean result = underTest.claim(attemptId, now);
 
         // Assert
         assertEquals(false, result);

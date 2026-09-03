@@ -44,27 +44,31 @@ public class ReconciliationSweeper {
     }
 
     private void recoverCreated() {
+        Instant now = Instant.now();
+        Instant threshold = now.minus(reconciliationProperties.getCreatedGrace());
         List<Attempt> attempts = attemptRepository.findByStatusAndUpdatedAtBefore(
-            AttemptStatus.CREATED,
-            Instant.now().minus(reconciliationProperties.getCreatedGrace()),
-            Limit.of(reconciliationProperties.getBatchSize())
+            AttemptStatus.CREATED, threshold, Limit.of(reconciliationProperties.getBatchSize())
         );
 
         for (Attempt attempt : attempts) {
-            if (attemptService.touchCreated(attempt.getId()) == 1) {
+            if (attemptService.touchCreated(attempt.getId(), now) == 1) {
+                log.warn("Republishing stale CREATED attempt {} to delivery.tasks", attempt.getId());
                 attemptPublisher.publish(attempt.getId());
+            } else {
+                log.info("Attempt {} moved on before the sweep could republish it, skipping", attempt.getId());
             }
         }
     }
 
     private void recoverInFlight() {
-        Instant threshold = Instant.now().minus(reconciliationProperties.getInFlightGrace());
+        Instant now = Instant.now();
+        Instant threshold = now.minus(reconciliationProperties.getInFlightGrace());
         List<Attempt> attempts = attemptRepository.findByStatusAndUpdatedAtBefore(
             AttemptStatus.IN_FLIGHT, threshold, Limit.of(reconciliationProperties.getBatchSize())
         );
 
         for (Attempt attempt : attempts) {
-            if (attemptService.resetStuck(attempt.getId(), threshold) == 1) {
+            if (attemptService.resetStuck(attempt.getId(), threshold, now) == 1) {
                 log.warn("Reset stuck IN_FLIGHT attempt {} back to CREATED", attempt.getId());
                 attemptPublisher.publish(attempt.getId());
             } else {
@@ -74,13 +78,14 @@ public class ReconciliationSweeper {
     }
 
     private void recoverScheduled() {
-        Instant threshold = Instant.now().minus(reconciliationProperties.getScheduledSlack());
+        Instant now = Instant.now();
+        Instant threshold = now.minus(reconciliationProperties.getScheduledSlack());
         List<Attempt> attempts = attemptRepository.findByStatusAndNextRetryAtBefore(
             AttemptStatus.SCHEDULED, threshold, Limit.of(reconciliationProperties.getBatchSize())
         );
 
         for (Attempt attempt : attempts) {
-            if (attemptService.resetScheduled(attempt.getId(), threshold) == 1) {
+            if (attemptService.resetScheduled(attempt.getId(), threshold, now) == 1) {
                 log.warn("Recovered overdue SCHEDULED attempt {} to CREATED", attempt.getId());
                 attemptPublisher.publish(attempt.getId());
             } else {
