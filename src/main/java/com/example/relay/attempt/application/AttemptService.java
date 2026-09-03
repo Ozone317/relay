@@ -105,6 +105,11 @@ public class AttemptService {
         return attemptRepository.touchDeadLetterCandidate(attemptId, threshold, now);
     }
 
+    @Transactional
+    public boolean claimDeadLetterNotification(UUID attemptId, Instant now) {
+        return attemptRepository.claimDeadLetterNotification(attemptId, now) == 1;
+    }
+
     private String truncate(String value, int maxLength) {
         if (value == null) {
             return null;
