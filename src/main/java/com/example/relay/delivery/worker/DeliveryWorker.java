@@ -91,9 +91,9 @@ public class DeliveryWorker {
             int nextAttemptNo = attempt.getAttemptNo() + 1;
             RetryTier tier = RetryTier.forAttemptNo(nextAttemptNo);
             Instant dueAt = Instant.now().plus(tier.getDelay());
-            attemptService.markFailed(attempt, finalStatus, dueAt, responseCode, responseBody, lastError, latencyMs);
 
-            Attempt retry = attemptService.createRetry(attempt, dueAt);
+            Attempt retry = attemptService.markFailedAndCreateRetry(attempt, dueAt, responseCode, responseBody,
+                    lastError, latencyMs);
             attemptPublisher.publishToRoutingKey(retry.getId(), tier.getRoutingKey());
         }
     }

@@ -78,6 +78,14 @@ public class AttemptService {
     }
 
     @Transactional
+    public Attempt markFailedAndCreateRetry(Attempt attempt, Instant nextRetryAt, Integer responseCode,
+            String responseBody, String lastError, Long latencyMs) {
+        markFailed(attempt, AttemptStatus.FAILED_RETRYING, nextRetryAt, responseCode, responseBody, lastError,
+                latencyMs);
+        return createRetry(attempt, nextRetryAt);
+    }
+
+    @Transactional
     public int resetStuck(UUID attemptId, Instant threshold, Instant now) {
         return attemptRepository.resetStuck(attemptId, threshold, now);
     }
