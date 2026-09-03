@@ -30,6 +30,11 @@ public class DeadLetterNotifier {
     public void onMessage(String attemptIdRaw) {
         UUID attemptId = UUID.fromString(attemptIdRaw);
 
+        // Claim-before-act, deliberately: this only stays safe because there is no I/O between the
+        // claim committing and the log line below. If the log line is ever replaced with a real
+        // email send, a crash/failure after the claim but before the send would permanently lose
+        // the notification (the claim already marked it "notified", so no sweep will revisit it).
+        // Reconsider the claim mechanism first (e.g. an expiring lease) before wiring up real email.
         if (!attemptService.claimDeadLetterNotification(attemptId, Instant.now())) {
             log.info("Attempt {} was already notified, skipping", attemptId);
             return;
