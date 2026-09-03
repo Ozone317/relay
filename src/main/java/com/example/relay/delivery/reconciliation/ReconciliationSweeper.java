@@ -51,7 +51,9 @@ public class ReconciliationSweeper {
         );
 
         for (Attempt attempt : attempts) {
-            attemptPublisher.publish(attempt.getId());
+            if (attemptService.touchCreated(attempt.getId()) == 1) {
+                attemptPublisher.publish(attempt.getId());
+            }
         }
     }
 
