@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -246,5 +247,43 @@ public class AttemptServiceTest {
 
         // Verify
         verify(attemptRepository).save(any());
+    }
+
+    @Test
+    void markFailedAndCreateRetry_marksParentFailedAndCreatesScheduledRetry() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        Message message = new Message(app, event, body);
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Instant nextRetryAt = Instant.now().plusSeconds(30);
+        int responseCode = 500;
+        String responseBody = "internal error";
+        Long latencyMs = 120L;
+
+        // Stub
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        Attempt retry = underTest.markFailedAndCreateRetry(attempt, nextRetryAt, responseCode, responseBody, null,
+                latencyMs);
+
+        // Assert - the parent attempt object passed in was mutated to FAILED_RETRYING
+        assertEquals(AttemptStatus.FAILED_RETRYING, attempt.getStatus());
+        assertEquals(nextRetryAt, attempt.getNextRetryAt());
+        assertEquals(responseCode, attempt.getResponseCode());
+        assertEquals(responseBody, attempt.getResponseBody());
+
+        // Assert - the returned retry is a fresh SCHEDULED row for the next attempt number
+        assertEquals(attempt.getAttemptNo() + 1, retry.getAttemptNo());
+        assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+        assertEquals(nextRetryAt, retry.getNextRetryAt());
+
+        // Verify - both writes happened
+        verify(attemptRepository, times(2)).save(any());
     }
 }
