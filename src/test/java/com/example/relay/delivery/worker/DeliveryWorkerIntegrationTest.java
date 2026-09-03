@@ -68,6 +68,9 @@ public class DeliveryWorkerIntegrationTest {
     private RabbitTemplate rabbitTemplate;
 
     @Autowired
+    private org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
+
+    @Autowired
     private UserRepository userRepository;
 
     @Autowired
@@ -91,6 +94,7 @@ public class DeliveryWorkerIntegrationTest {
     void setUp() throws IOException {
         clearDatabase();
         drainQueues();
+        rabbitListenerEndpointRegistry.getListenerContainer("deadLetterNotifier").stop();
 
         mockWebServer = new MockWebServer();
         mockWebServer.start();
@@ -117,6 +121,7 @@ public class DeliveryWorkerIntegrationTest {
 
     @AfterEach
     void tearDown() throws IOException {
+        rabbitListenerEndpointRegistry.getListenerContainer("deadLetterNotifier").start();
         mockWebServer.shutdown();
     }
 

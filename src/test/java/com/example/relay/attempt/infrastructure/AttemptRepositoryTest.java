@@ -634,6 +634,66 @@ public class AttemptRepositoryTest {
         assertEquals(staleUnnotified.getId(), result.get(0).getId());
     }
 
+    @Test
+    void claimDeadLetterNotification_returns1AndSetsNotifiedAt_whenNotYetNotified() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        attempt.setStatus(AttemptStatus.DEAD);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        // Act
+        Instant now = Instant.now();
+        int rowsAffected = underTest.claimDeadLetterNotification(attempt.getId(), now);
+
+        // Assert
+        assertEquals(1, rowsAffected);
+        Attempt reloaded = underTest.findById(attempt.getId()).get();
+        assertEquals(now.truncatedTo(ChronoUnit.MILLIS),
+                reloaded.getDeadLetterNotifiedAt().truncatedTo(ChronoUnit.MILLIS));
+    }
+
+    @Test
+    void claimDeadLetterNotification_returns0_whenAlreadyClaimed() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        attempt.setStatus(AttemptStatus.DEAD);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        underTest.claimDeadLetterNotification(attempt.getId(), Instant.now());
+
+        // Act - simulates a second, redelivered message for the same attempt
+        int rowsAffected = underTest.claimDeadLetterNotification(attempt.getId(), Instant.now());
+
+        // Assert
+        assertEquals(0, rowsAffected);
+    }
+
     private void backdateUpdatedAt(UUID attemptId, Instant when) {
         testEntityManager.getEntityManager()
                 .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")

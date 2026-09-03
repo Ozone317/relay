@@ -69,4 +69,13 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
                 AND updated_at < :threshold
             """, nativeQuery = true)
     int touchDeadLetterCandidate(UUID attemptId, Instant threshold, Instant now);
+
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+                UPDATE attempts
+                SET dead_letter_notified_at = :now
+                WHERE id = :attemptId
+                AND dead_letter_notified_at IS NULL
+            """, nativeQuery = true)
+    int claimDeadLetterNotification(UUID attemptId, Instant now);
 }
