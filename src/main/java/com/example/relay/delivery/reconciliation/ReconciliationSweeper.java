@@ -96,6 +96,11 @@ public class ReconciliationSweeper {
         }
     }
 
+    // touchDeadLetterCandidate() only advances updated_at — it never sets dead_letter_notified_at.
+    // Setting that column is DeadLetterNotifier's job (delivery.deadletter package), done via its
+    // own atomic claim when it actually processes the message. This asymmetry (sweep bumps
+    // updated_at, consumer sets dead_letter_notified_at) is what lets the two guards compose
+    // without racing each other.
     private void recoverDeadLetter() {
         Instant now = Instant.now();
         Instant threshold = now.minus(reconciliationProperties.getDeadLetterGrace());
