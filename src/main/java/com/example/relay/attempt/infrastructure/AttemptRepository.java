@@ -19,7 +19,7 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
                 UPDATE attempts
                 SET status = 'IN_FLIGHT', updated_at = now()
                 WHERE id = :attemptId
-                AND status = 'CREATED'
+                AND status IN ('CREATED', 'SCHEDULED')
             """, nativeQuery = true)
     int claim(UUID attemptId);
 
