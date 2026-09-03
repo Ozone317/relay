@@ -499,6 +499,141 @@ public class AttemptRepositoryTest {
         assertEquals(0, rowsAffected);
     }
 
+    @Test
+    void touchDeadLetterCandidate_returns1AndAdvancesUpdatedAt_whenDeadAndStaleAndNotYetNotified() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        attempt.setStatus(AttemptStatus.DEAD);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        // Act
+        Instant now = Instant.now();
+        int rowsAffected = underTest.touchDeadLetterCandidate(attempt.getId(), Instant.now().minusSeconds(60), now);
+
+        // Assert
+        assertEquals(1, rowsAffected);
+        Attempt reloaded = underTest.findById(attempt.getId()).get();
+        assertEquals(now.truncatedTo(ChronoUnit.MILLIS), reloaded.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS));
+    }
+
+    @Test
+    void touchDeadLetterCandidate_returns0_whenAlreadyNotified() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        attempt.setStatus(AttemptStatus.DEAD);
+        attempt.setDeadLetterNotifiedAt(Instant.now());
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        // Act
+        int rowsAffected = underTest.touchDeadLetterCandidate(attempt.getId(), Instant.now().minusSeconds(60),
+                Instant.now());
+
+        // Assert
+        assertEquals(0, rowsAffected);
+    }
+
+    @Test
+    void touchDeadLetterCandidate_returns0_whenNotStaleEnough() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        attempt.setStatus(AttemptStatus.DEAD);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt); // updated_at is "now"
+
+        // Act
+        int rowsAffected = underTest.touchDeadLetterCandidate(attempt.getId(), Instant.now().minusSeconds(60),
+                Instant.now());
+
+        // Assert
+        assertEquals(0, rowsAffected);
+    }
+
+    @Test
+    void findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore_returnsOnlyStaleUnnotifiedDeadRows()
+            throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+
+        Attempt staleUnnotified = new Attempt(app, message, endpoint, 6);
+        staleUnnotified.setStatus(AttemptStatus.DEAD);
+
+        Attempt staleButNotified = new Attempt(app, message, endpoint, 6);
+        staleButNotified.setStatus(AttemptStatus.DEAD);
+        staleButNotified.setDeadLetterNotifiedAt(Instant.now());
+
+        Attempt freshUnnotified = new Attempt(app, message, endpoint, 6);
+        freshUnnotified.setStatus(AttemptStatus.DEAD);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(staleUnnotified);
+        testEntityManager.persistAndFlush(staleButNotified);
+        testEntityManager.persistAndFlush(freshUnnotified);
+
+        Instant longAgo = Instant.now().minusSeconds(3600);
+        backdateUpdatedAt(staleUnnotified.getId(), longAgo);
+        backdateUpdatedAt(staleButNotified.getId(), longAgo);
+
+        // Act
+        List<Attempt> result = underTest.findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(
+                AttemptStatus.DEAD, Instant.now().minusSeconds(60), Limit.of(100));
+
+        // Assert
+        assertEquals(1, result.size());
+        assertEquals(staleUnnotified.getId(), result.get(0).getId());
+    }
+
     private void backdateUpdatedAt(UUID attemptId, Instant when) {
         testEntityManager.getEntityManager()
                 .createNativeQuery("UPDATE attempts SET updated_at = :when WHERE id = :id")

@@ -100,6 +100,11 @@ public class AttemptService {
         return attemptRepository.touchCreated(attemptId, now);
     }
 
+    @Transactional
+    public int touchDeadLetterCandidate(UUID attemptId, Instant threshold, Instant now) {
+        return attemptRepository.touchDeadLetterCandidate(attemptId, threshold, now);
+    }
+
     private String truncate(String value, int maxLength) {
         if (value == null) {
             return null;

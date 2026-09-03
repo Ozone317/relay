@@ -80,6 +80,11 @@ public class Attempt {
     @Setter
     private Long latencyMs;
 
+    @Column(name = "dead_letter_notified_at", nullable = true, updatable = true)
+    @Getter
+    @Setter
+    private Instant deadLetterNotifiedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreationTimestamp
     @Getter
