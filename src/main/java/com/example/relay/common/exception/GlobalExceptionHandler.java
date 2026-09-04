@@ -1,6 +1,7 @@
 package com.example.relay.common.exception;
 
 import com.example.relay.app.exception.AppNotFoundException;
+import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
 import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
@@ -80,5 +81,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleNoActiveSubscribersExeption(NoActiveSubscribersException ex) {
         ApiError error = ApiError.of(HttpStatus.UNPROCESSABLE_ENTITY.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(error);
+    }
+
+    @ExceptionHandler(AttemptNotFoundException.class)
+    public ResponseEntity<ApiError> handleAttemptNotFoundException(AttemptNotFoundException ex) {
+        ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
 }

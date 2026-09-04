@@ -5,12 +5,16 @@ import com.example.relay.attempt.domain.AttemptStatus;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
@@ -78,4 +82,30 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
                 AND dead_letter_notified_at IS NULL
             """, nativeQuery = true)
     int claimDeadLetterNotification(UUID attemptId, Instant now);
+
+    @Query(
+        """
+            SELECT a FROM Attempt a
+            WHERE a.app.id = :appId
+            AND (:endpointId IS NULL OR a.endpoint.id = :endpointId)    
+            AND (:status IS NULL OR a.status = :status)
+            AND (:createdFrom IS NULL OR a.createdAt >= :createdFrom)
+            AND (:createdTo IS NULL OR a.createdAt <= :createdTo)
+        """
+    )
+    Page<Attempt> findByAppIdAndFilters(
+        @Param("appId") UUID appId,
+        @Param("endpointId") UUID endpointId,
+        @Param("status") AttemptStatus status,
+        @Param("createdFrom") Instant createdFrom,
+        @Param("createdTo") Instant createdTo,
+        Pageable pageable
+    );
+
+    Optional<Attempt> findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(
+        UUID attemptId,
+        UUID appId,
+        UUID environmentId,
+        UUID userId
+    );
 }
