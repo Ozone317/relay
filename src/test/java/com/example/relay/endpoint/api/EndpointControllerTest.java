@@ -23,6 +23,7 @@ import com.example.relay.common.security.JwtService;
 import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.common.security.SecurityConfig;
 import com.example.relay.endpoint.api.dto.EndpointCreateDto;
+import com.example.relay.endpoint.api.dto.EndpointCreatedDto;
 import com.example.relay.endpoint.api.dto.EndpointResponseDto;
 import com.example.relay.endpoint.api.dto.EndpointUpdateDto;
 import com.example.relay.endpoint.application.EndpointService;
@@ -78,15 +79,15 @@ public class EndpointControllerTest {
         App app = new App("App 1", env);
         EndpointCreateDto request = new EndpointCreateDto("Production", "https://example.com/webhook");
         Endpoint endpoint = new Endpoint(request.name(), request.url(), "whsec_test", app);
-        EndpointResponseDto response =
-                new EndpointResponseDto(endpoint.getId(), endpoint.getName(), endpoint.getUrl(), endpoint.isActive(),
+        EndpointCreatedDto response =
+                new EndpointCreatedDto(endpoint.getId(), endpoint.getName(), endpoint.getUrl(), endpoint.isActive(),
                         app.getId(), endpoint.getSigningSecret(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         // Stubs
         when(endpointService.create(request, app.getId(), env.getId(), user.getId())).thenReturn(endpoint);
-        when(endpointMapper.toEndpointResponseDto(endpoint)).thenReturn(response);
+        when(endpointMapper.toEndpointCreatedDto(endpoint)).thenReturn(response);
 
         // Act
         mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/endpoints", env.getId(), app.getId())
@@ -121,7 +122,7 @@ public class EndpointControllerTest {
                 .andExpect(jsonPath("$.message").value("Endpoint already exists with name: " + request.name()));
 
         // Verify
-        verify(endpointMapper, never()).toEndpointResponseDto(any());
+        verify(endpointMapper, never()).toEndpointCreatedDto(any());
     }
 
     @Test
@@ -133,7 +134,7 @@ public class EndpointControllerTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         EndpointResponseDto response =
                 new EndpointResponseDto(endpoint.getId(), endpoint.getName(), endpoint.getUrl(), endpoint.isActive(),
-                        app.getId(), endpoint.getSigningSecret(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
+                        app.getId(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
@@ -148,6 +149,29 @@ public class EndpointControllerTest {
 
         // Verify
         verify(endpointService).getById(endpoint.getId(), app.getId(), env.getId(), user.getId());
+    }
+
+    @Test
+    void getById_doesNotReturnTheSigningSecret() throws Exception {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
+        EndpointResponseDto response =
+                new EndpointResponseDto(endpoint.getId(), endpoint.getName(), endpoint.getUrl(), endpoint.isActive(),
+                        app.getId(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        // Stub
+        when(endpointService.getById(endpoint.getId(), app.getId(), env.getId(), user.getId())).thenReturn(endpoint);
+        when(endpointMapper.toEndpointResponseDto(endpoint)).thenReturn(response);
+
+        // Act + Assert
+        mockMvc.perform(get("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}", env.getId(),
+                app.getId(), endpoint.getId()).with(authentication(auth)).contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.signingSecret").doesNotExist());
     }
 
     @Test
@@ -184,7 +208,7 @@ public class EndpointControllerTest {
                 new Endpoint("Staging", "https://staging.example.com/webhook", "whsec_2", app));
         List<EndpointResponseDto> response =
                 endpoints.stream().map(e -> new EndpointResponseDto(e.getId(), e.getName(), e.getUrl(), e.isActive(),
-                        app.getId(), e.getSigningSecret(), e.getCreatedAt(), e.getUpdatedAt())).toList();
+                        app.getId(), e.getCreatedAt(), e.getUpdatedAt())).toList();
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
@@ -230,7 +254,7 @@ public class EndpointControllerTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         EndpointUpdateDto request = new EndpointUpdateDto("Updated", null, false);
         EndpointResponseDto response = new EndpointResponseDto(endpoint.getId(), "Updated", endpoint.getUrl(), false,
-                app.getId(), endpoint.getSigningSecret(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
+                app.getId(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
         AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 

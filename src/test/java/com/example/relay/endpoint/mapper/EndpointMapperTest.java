@@ -1,10 +1,12 @@
 package com.example.relay.endpoint.mapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.api.dto.EndpointCreateDto;
+import com.example.relay.endpoint.api.dto.EndpointCreatedDto;
 import com.example.relay.endpoint.api.dto.EndpointResponseDto;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
@@ -59,9 +61,36 @@ public class EndpointMapperTest {
         assertEquals(endpoint.getUrl(), result.url());
         assertEquals(endpoint.isActive(), result.active());
         assertEquals(endpoint.getApp().getId(), result.appId());
-        assertEquals(endpoint.getSigningSecret(), result.signingSecret());
         assertEquals(endpoint.getCreatedAt(), result.createdAt());
         assertEquals(endpoint.getUpdatedAt(), result.updatedAt());
+    }
+
+    @Test
+    void toEndpointResponseDto_doesNotExposeTheSigningSecret() {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test123", app);
+
+        EndpointResponseDto result = underTest.toEndpointResponseDto(endpoint);
+
+        // The record has no signingSecret component at all - this test documents that the read DTO
+        // cannot leak it even by accident. PRD FR-3.2: the secret is shown exactly once, at creation.
+        assertFalse(result.toString().contains("whsec_test123"));
+    }
+
+    @Test
+    void toEndpointCreatedDto_doesExposeTheSigningSecretExactlyOnceAtCreation() {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test123", app);
+
+        EndpointCreatedDto result = underTest.toEndpointCreatedDto(endpoint);
+
+        assertEquals("whsec_test123", result.signingSecret());
+        assertEquals(endpoint.getId(), result.id());
+        assertEquals(endpoint.getName(), result.name());
     }
 
     @Test

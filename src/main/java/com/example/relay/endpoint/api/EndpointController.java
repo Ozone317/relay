@@ -3,6 +3,7 @@ package com.example.relay.endpoint.api;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.endpoint.api.dto.EndpointCreateDto;
+import com.example.relay.endpoint.api.dto.EndpointCreatedDto;
 import com.example.relay.endpoint.api.dto.EndpointResponseDto;
 import com.example.relay.endpoint.api.dto.EndpointUpdateDto;
 import com.example.relay.endpoint.application.EndpointService;
@@ -38,11 +39,11 @@ public class EndpointController {
     }
 
     @PostMapping("/endpoints")
-    public ResponseEntity<EndpointResponseDto> create(@PathVariable UUID environmentId, @PathVariable UUID appId,
+    public ResponseEntity<EndpointCreatedDto> create(@PathVariable UUID environmentId, @PathVariable UUID appId,
             @AuthenticationPrincipal AuthenticatedUser user, @RequestBody @Valid EndpointCreateDto request)
             throws AppNotFoundException, EndpointAlreadyExistsException {
         Endpoint endpoint = endpointService.create(request, appId, environmentId, user.getId());
-        EndpointResponseDto response = endpointMapper.toEndpointResponseDto(endpoint);
+        EndpointCreatedDto response = endpointMapper.toEndpointCreatedDto(endpoint);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
