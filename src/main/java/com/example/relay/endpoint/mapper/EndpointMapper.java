@@ -2,6 +2,7 @@ package com.example.relay.endpoint.mapper;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.endpoint.api.dto.EndpointCreateDto;
+import com.example.relay.endpoint.api.dto.EndpointCreatedDto;
 import com.example.relay.endpoint.api.dto.EndpointResponseDto;
 import com.example.relay.endpoint.domain.Endpoint;
 import java.util.List;
@@ -18,6 +19,11 @@ public class EndpointMapper {
 
     public EndpointResponseDto toEndpointResponseDto(Endpoint endpoint) {
         return new EndpointResponseDto(endpoint.getId(), endpoint.getName(), endpoint.getUrl(), endpoint.isActive(),
+                endpoint.getApp().getId(), endpoint.getCreatedAt(), endpoint.getUpdatedAt());
+    }
+
+    public EndpointCreatedDto toEndpointCreatedDto(Endpoint endpoint) {
+        return new EndpointCreatedDto(endpoint.getId(), endpoint.getName(), endpoint.getUrl(), endpoint.isActive(),
                 endpoint.getApp().getId(), endpoint.getSigningSecret(), endpoint.getCreatedAt(),
                 endpoint.getUpdatedAt());
     }
