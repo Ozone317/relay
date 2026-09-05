@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -76,6 +77,17 @@ public class RefreshTokenServiceTest {
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.empty());
 
         assertThrows(InvalidRefreshTokenException.class, () -> underTest.validateAndSlide("raw", now));
+    }
+
+    @Test
+    void validateAndSlide_throws_whenTheTokenIsRevoked() {
+        RefreshToken revoked = mock(RefreshToken.class);
+        when(revoked.getRevokedAt()).thenReturn(now);
+        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(revoked));
+
+        assertThrows(InvalidRefreshTokenException.class, () -> underTest.validateAndSlide("raw", now));
+        verify(refreshTokenRepository, never()).slide(any(), any());
     }
 
     @Test
