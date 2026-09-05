@@ -13,9 +13,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.attempt.domain.Attempt;
+import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CustomUserDetailsService;
 import com.example.relay.common.security.JwtService;
+import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.common.security.SecurityConfig;
 import com.example.relay.delivery.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -46,7 +48,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(MessageController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, AuthProperties.class, RefreshCookieFactory.class})
 public class MessageControllerTest {
 
     @Autowired

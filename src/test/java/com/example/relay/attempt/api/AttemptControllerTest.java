@@ -32,9 +32,11 @@ import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.mapper.AttemptMapper;
+import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CustomUserDetailsService;
 import com.example.relay.common.security.JwtService;
+import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.common.security.SecurityConfig;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
@@ -45,7 +47,7 @@ import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @WebMvcTest(AttemptController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, AuthProperties.class, RefreshCookieFactory.class})
 public class AttemptControllerTest {
 
     @Autowired
