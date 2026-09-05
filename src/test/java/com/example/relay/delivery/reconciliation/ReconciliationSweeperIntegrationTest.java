@@ -37,6 +37,7 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -77,6 +78,9 @@ public class ReconciliationSweeperIntegrationTest {
     private UserRepository userRepository;
 
     @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
     private EnvironmentRepository environmentRepository;
 
     @Autowired
@@ -108,6 +112,7 @@ public class ReconciliationSweeperIntegrationTest {
         eventRepository.deleteAll();
         appRepository.deleteAll();
         environmentRepository.deleteAll();
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
         drainTasksQueue();
         drainDeadletterQueue();

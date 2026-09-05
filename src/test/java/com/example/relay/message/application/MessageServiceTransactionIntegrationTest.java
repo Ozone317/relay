@@ -19,6 +19,7 @@ import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -56,6 +57,9 @@ public class MessageServiceTransactionIntegrationTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -104,6 +108,7 @@ public class MessageServiceTransactionIntegrationTest {
         eventRepository.deleteAll();
         appRepository.deleteAll();
         environmentRepository.deleteAll();
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 }

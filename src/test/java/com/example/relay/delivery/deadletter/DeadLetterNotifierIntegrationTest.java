@@ -37,6 +37,7 @@ import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -57,6 +58,9 @@ class DeadLetterNotifierIntegrationTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired
     private EnvironmentRepository environmentRepository;
@@ -84,6 +88,7 @@ class DeadLetterNotifierIntegrationTest {
         eventRepository.deleteAll();
         appRepository.deleteAll();
         environmentRepository.deleteAll();
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         User user = userRepository.save(new User("test" + UUID.randomUUID() + "@mail.com", "hash"));

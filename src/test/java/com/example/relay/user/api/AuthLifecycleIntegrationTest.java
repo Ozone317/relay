@@ -9,8 +9,6 @@ import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import java.time.Instant;
-import java.util.List;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,13 +26,9 @@ public class AuthLifecycleIntegrationTest {
     // This class is the only one in the suite that drives real, committing writes through the
     // embedded HTTP server rather than through Mockito or a rolled-back @DataJpaTest transaction.
     // Those writes land in the same named H2 instance ("relay") that every other @SpringBootTest
-    // class shares for the life of the JVM. Several of those classes do an unconditional
-    // userRepository.deleteAll() in their own setUp/cleanUp; if this class left its users behind,
-    // their still-referencing refresh_tokens rows would break that deleteAll() with an FK
-    // violation - and did, before this cleanup was added. Deleting only the emails this class
-    // itself registers keeps the fix scoped to the mess this class actually makes.
-    private static final List<String> TEST_EMAILS = List.of("lifecycle@example.com", "idempotent@example.com",
-            "everywhere@example.com", "csrf@example.com", "idle@example.com");
+    // class shares for the life of the JVM. Every other @SpringBootTest class that resets its
+    // tables now deletes refresh_tokens before users in its own setUp/cleanUp (children before
+    // parent), so this class's leftover users no longer need to be swept up here.
 
     @Autowired
     private TestRestTemplate rest;
@@ -44,15 +38,6 @@ public class AuthLifecycleIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
-
-    @AfterEach
-    void cleanUpPersistedTestUsers() {
-        for (String email : TEST_EMAILS) {
-            jdbcTemplate.update(
-                    "DELETE FROM refresh_tokens WHERE user_id = (SELECT id FROM users WHERE email = ?)", email);
-            jdbcTemplate.update("DELETE FROM users WHERE email = ?", email);
-        }
-    }
 
     private HttpHeaders csrfHeaders() {
         HttpHeaders headers = new HttpHeaders();
