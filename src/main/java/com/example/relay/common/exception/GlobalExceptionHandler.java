@@ -13,6 +13,8 @@ import com.example.relay.user.exception.InvalidRefreshTokenException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import java.util.HashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,15 +26,32 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /**
+     * The single answer every rejected refresh token gets, whatever the actual cause.
+     */
+    private static final String INVALID_REFRESH_TOKEN = "Invalid refresh token";
+
     private final RefreshCookieFactory refreshCookieFactory;
 
     public GlobalExceptionHandler(RefreshCookieFactory refreshCookieFactory) {
         this.refreshCookieFactory = refreshCookieFactory;
     }
 
+    /**
+     * Answers every rejected refresh token identically.
+     *
+     * <p>
+     * The throw sites distinguish "not recognised" from "has been revoked" from "has expired", and that distinction is
+     * worth keeping in the log. It must not reach the client: the caller here is unauthenticated by definition, so
+     * returning the specific reason let anyone holding a stolen token discover whether the victim had logged out. The
+     * design spec refuses to leak exactly that on /logout; passing ex.getMessage() through here leaked it anyway.
+     */
     @ExceptionHandler(InvalidRefreshTokenException.class)
     public ResponseEntity<ApiError> handleInvalidRefreshToken(InvalidRefreshTokenException ex) {
-        ApiError error = ApiError.of(HttpStatus.UNAUTHORIZED.value(), ex.getMessage());
+        log.warn("Refresh token rejected: {}", ex.getMessage());
+        ApiError error = ApiError.of(HttpStatus.UNAUTHORIZED.value(), INVALID_REFRESH_TOKEN);
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .header(HttpHeaders.SET_COOKIE, refreshCookieFactory.clear().toString()).body(error);
     }
