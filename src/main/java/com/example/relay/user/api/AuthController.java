@@ -4,6 +4,7 @@ import com.example.relay.user.api.dto.AuthResponse;
 import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
 import com.example.relay.user.application.AuthService;
+import com.example.relay.user.application.IssuedTokens;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,13 +25,14 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
-        String token = authService.register(request.email(), request.password());
-        return ResponseEntity.status(HttpStatus.CREATED).body(new AuthResponse(token));
+        IssuedTokens tokens = authService.register(request.email(), request.password());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(new AuthResponse(tokens.accessToken(), tokens.expiresIn()));
     }
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request) {
-        String token = authService.login(request.email(), request.password());
-        return ResponseEntity.ok(new AuthResponse(token));
+        IssuedTokens tokens = authService.login(request.email(), request.password());
+        return ResponseEntity.ok(new AuthResponse(tokens.accessToken(), tokens.expiresIn()));
     }
 }

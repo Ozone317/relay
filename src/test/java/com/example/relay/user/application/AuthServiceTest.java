@@ -8,16 +8,17 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -40,8 +41,16 @@ public class AuthServiceTest {
     @Mock
     private JwtService jwtService;
 
-    @InjectMocks
+    @Mock
+    private RefreshTokenService refreshTokenService;
+
     private AuthService underTest;
+
+    @BeforeEach
+    void setUp() {
+        underTest = new AuthService(userRepository, passwordEncoder, authenticationManager, jwtService,
+                refreshTokenService, new AuthProperties());
+    }
 
     @Test
     void register_throwsUserAlreadyExistsException_whenEmailAlreadyExists() {
@@ -75,7 +84,7 @@ public class AuthServiceTest {
 
         // Act
         String password = "somePassword";
-        String result = underTest.register(email, password);
+        IssuedTokens result = underTest.register(email, password);
 
         // Assert
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
@@ -84,7 +93,22 @@ public class AuthServiceTest {
 
         assertEquals(email, savedUser.getEmail());
         assertEquals(hashedPassword, savedUser.getPasswordHash());
-        assertEquals(token, result);
+        assertEquals(token, result.accessToken());
+    }
+
+    @Test
+    void register_returnsBothCredentialsAndTtlInSeconds() {
+        String email = "daksh@example.com";
+        when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
+        when(passwordEncoder.encode("pw")).thenReturn("hashed");
+        when(jwtService.generateToken(eq(email), any())).thenReturn("access-token");
+        when(refreshTokenService.issue(any(), any())).thenReturn("raw-refresh");
+
+        IssuedTokens result = underTest.register(email, "pw");
+
+        assertEquals("access-token", result.accessToken());
+        assertEquals("raw-refresh", result.rawRefreshToken());
+        assertEquals(900L, result.expiresIn());
     }
 
     @Test
@@ -99,10 +123,10 @@ public class AuthServiceTest {
         when(jwtService.generateToken(eq(email), eq(user.getId()))).thenReturn(token);
 
         // Act
-        String result = underTest.login(email, rawPassword);
+        IssuedTokens result = underTest.login(email, rawPassword);
 
         // Assert
-        assertEquals(token, result);
+        assertEquals(token, result.accessToken());
         verify(authenticationManager).authenticate(any(UsernamePasswordAuthenticationToken.class));
     }
 
@@ -118,5 +142,26 @@ public class AuthServiceTest {
         assertThrows(BadCredentialsException.class, () -> {
             underTest.login(email, rawPassword);
         });
+    }
+
+    @Test
+    void refresh_mintsANewAccessTokenAndEchoesTheSameRefreshToken() {
+        User user = new User("daksh@example.com", "hashed");
+        when(refreshTokenService.validateAndSlide(eq("raw-refresh"), any())).thenReturn(user);
+        when(jwtService.generateToken(eq(user.getEmail()), eq(user.getId()))).thenReturn("new-access");
+
+        IssuedTokens result = underTest.refresh("raw-refresh");
+
+        assertEquals("new-access", result.accessToken());
+        assertEquals("raw-refresh", result.rawRefreshToken());
+    }
+
+    @Test
+    void logoutAll_delegatesWithTheUsersId() {
+        UUID userId = UUID.randomUUID();
+
+        underTest.logoutAll(userId);
+
+        verify(refreshTokenService).revokeAll(eq(userId), any());
     }
 }
