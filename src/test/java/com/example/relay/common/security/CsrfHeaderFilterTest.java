@@ -68,4 +68,33 @@ public class CsrfHeaderFilterTest {
 
         verify(filterChain).doFilter(request, response);
     }
+
+    @Test
+    void rejectsRefresh_whenThePathIsPercentEncodedAndTheHeaderIsAbsent() throws Exception {
+        // "refre%73h" decodes to "refresh" - a raw-string comparison against getRequestURI()
+        // would miss this, letting the request slip past the filter to the controller.
+        underTest.doFilterInternal(request("/api/v1/auth/refre%73h"), response, filterChain);
+
+        assertEquals(403, response.getStatus());
+        verify(filterChain, never()).doFilter(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void rejectsLogout_whenThePathIsPercentEncodedAndTheHeaderIsAbsent() throws Exception {
+        // "logou%74" decodes to "logout".
+        underTest.doFilterInternal(request("/api/v1/auth/logou%74"), response, filterChain);
+
+        assertEquals(403, response.getStatus());
+    }
+
+    @Test
+    void allowsRefresh_whenThePathIsPercentEncodedAndTheHeaderIsPresent() throws Exception {
+        MockHttpServletRequest request = request("/api/v1/auth/refre%73h");
+        request.addHeader("X-Relay-Auth", "anything-at-all");
+
+        underTest.doFilterInternal(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+    }
 }
