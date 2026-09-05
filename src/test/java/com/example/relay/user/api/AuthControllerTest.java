@@ -143,6 +143,7 @@ public class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/refresh").header("X-Relay-Auth", "1")
                 .cookie(new jakarta.servlet.http.Cookie("relay_refresh", "bad"))).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Invalid refresh token"))
                 .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
     }
 
@@ -151,8 +152,7 @@ public class AuthControllerTest {
         when(authService.refresh("good-token")).thenReturn(new IssuedTokens("new-access", "good-token", 900L));
 
         mockMvc.perform(post("/api/v1/auth/refresh").header("X-Relay-Auth", "1")
-                .cookie(new jakarta.servlet.http.Cookie("relay_refresh", "good-token")))
-                .andExpect(status().isOk())
+                .cookie(new jakarta.servlet.http.Cookie("relay_refresh", "good-token"))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").value("new-access"))
                 .andExpect(header().string("Set-Cookie", containsString("relay_refresh=good-token")))
                 .andExpect(header().string("Set-Cookie", containsString("HttpOnly")))
@@ -165,7 +165,27 @@ public class AuthControllerTest {
         when(authService.refresh(null)).thenThrow(new InvalidRefreshTokenException("No refresh token supplied"));
 
         mockMvc.perform(post("/api/v1/auth/refresh").header("X-Relay-Auth", "1")).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Invalid refresh token"))
                 .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
+    }
+
+    @Test
+    void refresh_saysTheSameThing_whateverTheRealReasonWas() throws Exception {
+        // A revoked session and an expired one must be indistinguishable here. The caller is
+        // unauthenticated by definition, so answering "has been revoked" tells whoever holds a
+        // stolen token that the victim has logged out - which is session state they should not be
+        // able to read. The distinct causes still reach the log; only the response is flattened.
+        when(authService.refresh("revoked"))
+                .thenThrow(new InvalidRefreshTokenException("Refresh token has been revoked"));
+        when(authService.refresh("expired")).thenThrow(new InvalidRefreshTokenException("Refresh token has expired"));
+
+        mockMvc.perform(post("/api/v1/auth/refresh").header("X-Relay-Auth", "1")
+                .cookie(new jakarta.servlet.http.Cookie("relay_refresh", "revoked")))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.message").value("Invalid refresh token"));
+
+        mockMvc.perform(post("/api/v1/auth/refresh").header("X-Relay-Auth", "1")
+                .cookie(new jakarta.servlet.http.Cookie("relay_refresh", "expired")))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.message").value("Invalid refresh token"));
     }
 
     @Test
@@ -175,8 +195,7 @@ public class AuthControllerTest {
         Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
 
         mockMvc.perform(post("/api/v1/auth/logout-all").header("X-Relay-Auth", "1").with(authentication(auth)))
-                .andExpect(status().isNoContent())
-                .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")))
+                .andExpect(status().isNoContent()).andExpect(header().string("Set-Cookie", containsString("Max-Age=0")))
                 .andExpect(header().string("Set-Cookie", containsString("Path=/api/v1/auth")));
 
         verify(authService).logoutAll(user.getId());
