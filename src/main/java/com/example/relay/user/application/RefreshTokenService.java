@@ -49,7 +49,9 @@ public class RefreshTokenService {
             throw new InvalidRefreshTokenException("Refresh token has expired");
         }
 
-        refreshTokenRepository.slide(token.getId(), now.plus(authProperties.getRefreshIdleWindow()));
+        if (refreshTokenRepository.slide(token.getId(), now.plus(authProperties.getRefreshIdleWindow())) == 0) {
+            throw new InvalidRefreshTokenException("Refresh token has been revoked");
+        }
         return token.getUser();
     }
 

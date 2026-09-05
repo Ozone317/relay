@@ -105,11 +105,22 @@ public class RefreshTokenServiceTest {
         RefreshToken live = liveToken();
         when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(live));
+        when(refreshTokenRepository.slide(any(), any())).thenReturn(1);
 
         User result = underTest.validateAndSlide("raw", now);
 
         assertSame(user, result);
         verify(refreshTokenRepository).slide(live.getId(), now.plus(30, ChronoUnit.DAYS));
+    }
+
+    @Test
+    void validateAndSlide_throws_whenSlideMatchesZeroRows_becauseLogoutRacedTheRefresh() {
+        RefreshToken live = liveToken();
+        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(live));
+        when(refreshTokenRepository.slide(any(), any())).thenReturn(0);
+
+        assertThrows(InvalidRefreshTokenException.class, () -> underTest.validateAndSlide("raw", now));
     }
 
     @Test
