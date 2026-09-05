@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -66,7 +67,7 @@ public class AuthServiceTest {
         });
 
         // Assert
-        verify(userRepository, never()).save(any()); // proves it bailed out BEFORE trying to save a duplicate
+        verify(userRepository, never()).saveAndFlush(any()); // proves it bailed out BEFORE trying to save a duplicate
     }
 
     @Test
@@ -78,7 +79,7 @@ public class AuthServiceTest {
         when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
         when(passwordEncoder.encode("somePassword")).thenReturn(hashedPassword);
         User user = new User(email, hashedPassword);
-        when(userRepository.save(any(User.class))).thenReturn(user);
+        when(userRepository.saveAndFlush(any(User.class))).thenReturn(user);
         String token = "someToken";
         when(jwtService.generateToken(eq(email), any(UUID.class))).thenReturn(token);
 
@@ -88,7 +89,7 @@ public class AuthServiceTest {
 
         // Assert
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
-        verify(userRepository).save(userCaptor.capture());
+        verify(userRepository).saveAndFlush(userCaptor.capture());
         User savedUser = userCaptor.getValue();
 
         assertEquals(email, savedUser.getEmail());
@@ -109,6 +110,23 @@ public class AuthServiceTest {
         assertEquals("access-token", result.accessToken());
         assertEquals("raw-refresh", result.rawRefreshToken());
         assertEquals(900L, result.expiresIn());
+    }
+
+    @Test
+    void register_throwsUserAlreadyExists_whenItLosesTheUniqueConstraintRace() {
+        // The pre-check passes because the concurrent registration had not committed yet; the
+        // users.email UNIQUE constraint is what actually catches the duplicate. Without the
+        // translation this surfaces as an unmapped DataIntegrityViolationException, i.e. a 500.
+        String email = "daksh@example.com";
+        when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
+        when(passwordEncoder.encode("pw")).thenReturn("hashed");
+        when(userRepository.saveAndFlush(any(User.class)))
+                .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
+
+        assertThrows(UserAlreadyExistsException.class, () -> underTest.register(email, "pw"));
+
+        // a registration that did not happen must not open a session
+        verify(refreshTokenService, never()).issue(any(), any());
     }
 
     @Test
