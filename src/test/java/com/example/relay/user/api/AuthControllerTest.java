@@ -181,4 +181,11 @@ public class AuthControllerTest {
 
         verify(authService).logoutAll(user.getId());
     }
+
+    @Test
+    void logoutAll_returns401_forAnUnauthenticatedCaller() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout-all")).andExpect(status().isUnauthorized());
+
+        verify(authService, never()).logoutAll(any());
+    }
 }
