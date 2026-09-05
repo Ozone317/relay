@@ -14,6 +14,7 @@ import com.example.relay.common.security.SecurityConfig;
 import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
 import com.example.relay.user.application.AuthService;
+import com.example.relay.user.application.IssuedTokens;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,13 +52,14 @@ public class AuthControllerTest {
         // Arrange
         RegisterRequest registerRequest = new RegisterRequest("test@mail.com", "somePassword");
         String token = "someToken";
+        IssuedTokens issuedTokens = new IssuedTokens(token, "raw-refresh", 900L);
 
-        when(authService.register(registerRequest.email(), registerRequest.password())).thenReturn(token);
+        when(authService.register(registerRequest.email(), registerRequest.password())).thenReturn(issuedTokens);
 
         // Act + Assert
         mockMvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(registerRequest))).andExpect(status().isCreated())
-                .andExpect(jsonPath("$.token").value(token));
+                .andExpect(jsonPath("$.accessToken").value(token));
 
         // Verify
         verify(authService).register(registerRequest.email(), registerRequest.password());
@@ -81,13 +83,14 @@ public class AuthControllerTest {
         // Arrange
         LoginRequest loginRequest = new LoginRequest("test@mail.com", "somePassword");
         String token = "someToken";
+        IssuedTokens issuedTokens = new IssuedTokens(token, "raw-refresh", 900L);
 
-        when(authService.login(loginRequest.email(), loginRequest.password())).thenReturn(token);
+        when(authService.login(loginRequest.email(), loginRequest.password())).thenReturn(issuedTokens);
 
         // Act + Assert
         mockMvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(loginRequest))).andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").value(token));
+                .andExpect(jsonPath("$.accessToken").value(token));
 
         // Verify
         verify(authService).login(loginRequest.email(), loginRequest.password());
