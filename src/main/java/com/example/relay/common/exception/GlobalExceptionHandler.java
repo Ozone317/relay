@@ -2,15 +2,18 @@ package com.example.relay.common.exception;
 
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
+import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
 import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.message.exception.NoActiveSubscribersException;
+import com.example.relay.user.exception.InvalidRefreshTokenException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import java.util.HashMap;
 import java.util.Map;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -20,6 +23,19 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private final RefreshCookieFactory refreshCookieFactory;
+
+    public GlobalExceptionHandler(RefreshCookieFactory refreshCookieFactory) {
+        this.refreshCookieFactory = refreshCookieFactory;
+    }
+
+    @ExceptionHandler(InvalidRefreshTokenException.class)
+    public ResponseEntity<ApiError> handleInvalidRefreshToken(InvalidRefreshTokenException ex) {
+        ApiError error = ApiError.of(HttpStatus.UNAUTHORIZED.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .header(HttpHeaders.SET_COOKIE, refreshCookieFactory.clear().toString()).body(error);
+    }
 
     @ExceptionHandler(EnvironmentNotFoundException.class)
     public ResponseEntity<ApiError> handleEnvironmentNotFound(EnvironmentNotFoundException ex) {
