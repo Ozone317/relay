@@ -1,7 +1,7 @@
 package com.example.relay.common.security;
 
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import java.util.Date;
@@ -13,11 +13,13 @@ import org.springframework.stereotype.Component;
 @Component
 public class JwtService {
 
-    @Value("${jwt.secret}")
-    private String secret;
+    private final AuthProperties authProperties;
+    private final String secret;
 
-    @Value("${jwt.expiration-ms}")
-    private long expirationMs;
+    public JwtService(AuthProperties authProperties, @Value("${jwt.secret}") String secret) {
+        this.authProperties = authProperties;
+        this.secret = secret;
+    }
 
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes());
@@ -27,17 +29,9 @@ public class JwtService {
         return Jwts.parser().verifyWith(getSigningKey()).build().parseSignedClaims(token).getPayload();
     }
 
-    private boolean isExpired(String token) {
-        try {
-            return parseClaims(token).getExpiration().before(new Date());
-        } catch (ExpiredJwtException e) {
-            return true;
-        }
-    }
-
     public String generateToken(String email, UUID userId) {
         Date now = new Date();
-        Date expiry = new Date(now.getTime() + expirationMs);
+        Date expiry = new Date(now.getTime() + authProperties.getAccessTokenTtl().toMillis());
 
         return Jwts.builder().subject(email).claim("userId", userId).issuedAt(now).expiration(expiry)
                 .signWith(getSigningKey()).compact();
@@ -53,6 +47,10 @@ public class JwtService {
     }
 
     public boolean isValid(String token) {
-        return !isExpired(token);
+        try {
+            return !parseClaims(token).getExpiration().before(new Date());
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
     }
 }
