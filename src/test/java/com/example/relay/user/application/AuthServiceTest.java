@@ -62,9 +62,14 @@ public class AuthServiceTest {
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
 
         // Act + Assert
-        assertThrows(UserAlreadyExistsException.class, () -> {
+        UserAlreadyExistsException thrown = assertThrows(UserAlreadyExistsException.class, () -> {
             underTest.register(email, password);
         });
+
+        // The exception's own constructor supplies the prefix, so the caller must pass the bare
+        // address. Passing a full sentence produced "User already exists with email: User with
+        // email x@y.com already exists." in the 409 body for the whole of v10-v11.
+        assertEquals("User already exists with email: " + email, thrown.getMessage());
 
         // Assert
         verify(userRepository, never()).saveAndFlush(any()); // proves it bailed out BEFORE trying to save a duplicate
@@ -123,7 +128,13 @@ public class AuthServiceTest {
         when(userRepository.saveAndFlush(any(User.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
 
-        assertThrows(UserAlreadyExistsException.class, () -> underTest.register(email, "pw"));
+        UserAlreadyExistsException thrown =
+                assertThrows(UserAlreadyExistsException.class, () -> underTest.register(email, "pw"));
+
+        // Byte-identical to the pre-check path's message, and that is a security property rather
+        // than tidiness: any difference would let a caller detect that it lost a concurrent race,
+        // turning the 409 into an oracle for whether a registration is in flight for that address.
+        assertEquals("User already exists with email: " + email, thrown.getMessage());
 
         // a registration that did not happen must not open a session
         verify(refreshTokenService, never()).issue(any(), any());

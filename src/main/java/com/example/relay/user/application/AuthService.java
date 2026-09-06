@@ -52,7 +52,7 @@ public class AuthService {
     @Transactional
     public IssuedTokens register(String email, String password) {
         if (userRepository.findByEmail(email).isPresent()) {
-            throw new UserAlreadyExistsException("User with email " + email + " already exists.");
+            throw new UserAlreadyExistsException(email);
         }
 
         User user = new User(email, passwordEncoder.encode(password));
@@ -66,7 +66,7 @@ public class AuthService {
             // address. The lookup above is only a fast path; users.email UNIQUE is the authority.
             // Deliberately the same message as the fast path: which caller lost a database race
             // is not something the loser gets to learn.
-            throw new UserAlreadyExistsException("User with email " + email + " already exists.");
+            throw new UserAlreadyExistsException(email);
         }
 
         return issueFor(user);
