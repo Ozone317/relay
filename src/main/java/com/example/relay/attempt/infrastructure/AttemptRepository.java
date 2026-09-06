@@ -12,11 +12,11 @@ import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 
-public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
+public interface AttemptRepository extends JpaRepository<Attempt, UUID>, JpaSpecificationExecutor<Attempt> {
 
     @Modifying(clearAutomatically = true)
     @Query(value = """
@@ -83,29 +83,19 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
             """, nativeQuery = true)
     int claimDeadLetterNotification(UUID attemptId, Instant now);
 
-    @Query(
-        """
-            SELECT a FROM Attempt a
-            WHERE a.app.id = :appId
-            AND (:endpointId IS NULL OR a.endpoint.id = :endpointId)    
-            AND (:status IS NULL OR a.status = :status)
-            AND (:createdFrom IS NULL OR a.createdAt >= :createdFrom)
-            AND (:createdTo IS NULL OR a.createdAt <= :createdTo)
-        """
-    )
-    Page<Attempt> findByAppIdAndFilters(
-        @Param("appId") UUID appId,
-        @Param("endpointId") UUID endpointId,
-        @Param("status") AttemptStatus status,
-        @Param("createdFrom") Instant createdFrom,
-        @Param("createdTo") Instant createdTo,
-        Pageable pageable
-    );
+    /**
+     * Dashboard attempt list, filtered by whichever of the optional criteria were supplied.
+     *
+     * <p>
+     * Built through {@link AttemptSpecifications} rather than a {@code @Query} using {@code (:param IS NULL OR ...)}.
+     * That original form was silently broken on PostgreSQL - see the explanation on {@code AttemptSpecifications}. Do
+     * not "simplify" it back.
+     */
+    default Page<Attempt> findByAppIdAndFilters(UUID appId, UUID endpointId, AttemptStatus status, Instant createdFrom,
+            Instant createdTo, Pageable pageable) {
+        return findAll(AttemptSpecifications.matching(appId, endpointId, status, createdFrom, createdTo), pageable);
+    }
 
-    Optional<Attempt> findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(
-        UUID attemptId,
-        UUID appId,
-        UUID environmentId,
-        UUID userId
-    );
+    Optional<Attempt> findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(UUID attemptId, UUID appId,
+            UUID environmentId, UUID userId);
 }
