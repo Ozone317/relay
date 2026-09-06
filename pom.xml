@@ -203,6 +203,35 @@
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
 
+			<!--
+				Point the test run's default RabbitMQ at a port nothing listens on.
+
+				Without this, tests connect to localhost:5672 as guest/guest - and if the Docker dev
+				stack happens to be running, that port belongs to a broker requiring relay/relay. The
+				resulting ACCESS_REFUSED is a FatalListenerStartupException, which aborts the whole
+				application context, so every @SpringBootTest errors out. A connection that is merely
+				refused is NOT fatal (the listener logs and retries), which is why the suite passes
+				when the stack is down and fails when it is up - failures that look exactly like code
+				bugs and have already caused one misdiagnosis.
+
+				A system property is used rather than src/test/resources/application.properties
+				because the latter would shadow src/main/resources/application.properties entirely
+				rather than merge with it, taking Flyway and jwt.secret down with it.
+
+				Tests that genuinely need a broker start their own via Testcontainers and
+				@ServiceConnection, which contributes a RabbitConnectionDetails bean; those take
+				precedence over properties, so this does not affect them.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<spring.rabbitmq.port>1</spring.rabbitmq.port>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+
 			<!-- Java code formatting: Eclipse JDT formatter (4-space indent, 120-col wrap) via Spotless -->
 			<plugin>
 				<groupId>com.diffplug.spotless</groupId>
