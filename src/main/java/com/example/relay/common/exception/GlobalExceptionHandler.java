@@ -123,4 +123,27 @@ public class GlobalExceptionHandler {
         ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
+
+    /**
+     * Last-resort handler so an unexpected failure is reported as the 500 it actually is.
+     *
+     * <p>
+     * Without this, anything unhandled escaped the controller and Spring dispatched it to {@code /error}.
+     * {@link com.example.relay.common.security.JwtAuthenticationFilter} extends {@code OncePerRequestFilter}, whose
+     * {@code shouldNotFilterErrorDispatch()} returns true by default, so it did not re-run on that dispatch; with
+     * {@code SessionCreationPolicy.STATELESS} nothing restored the {@code SecurityContext} either, so
+     * {@code anyRequest().authenticated()} rejected {@code /error} and the entry point wrote
+     * {@code 401 "Authentication required"}. Every server-side fault therefore reached clients disguised as an auth
+     * failure - which sent a frontend integrator hunting for a nonexistent token bug while the real cause was a broken
+     * SQL statement.
+     *
+     * <p>
+     * The message is deliberately generic; the stack trace belongs in the log, not the response.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiError> handleUnexpected(Exception ex) {
+        log.error("Unhandled exception reached the controller advice", ex);
+        ApiError error = ApiError.of(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Internal server error");
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
 }

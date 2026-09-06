@@ -75,8 +75,12 @@ public class SecurityConfig {
                 // The /api/v1/auth/** wildcard MUST stay below logout-all or it swallows it and
                 // silently makes a destructive endpoint public.
                 .authorizeHttpRequests(auth -> auth.requestMatchers("/api/v1/auth/logout-all").authenticated()
-                        .requestMatchers("/api/v1/auth/**").permitAll()
-                        .requestMatchers("/actuator/health").permitAll().anyRequest().authenticated())
+                        .requestMatchers("/api/v1/auth/**").permitAll().requestMatchers("/actuator/health").permitAll()
+                        // Defence in depth for the same problem GlobalExceptionHandler.handleUnexpected
+                        // describes: the JWT filter does not run on an ERROR dispatch, so if anything
+                        // ever does reach /error, requiring authentication there turns a 500 into a
+                        // misleading 401. The error body itself exposes nothing.
+                        .requestMatchers("/error").permitAll().anyRequest().authenticated())
                 .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.setContentType("application/json");
