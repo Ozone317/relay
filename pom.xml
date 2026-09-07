@@ -47,7 +47,7 @@
 			<scope>test</scope>
 		</dependency>
 
-		<!-- Testcontainers: real Postgres/RabbitMQ in tests instead of H2/mocks -->
+		<!-- Testcontainers: real Postgres/RabbitMQ in tests instead of mocks -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-testcontainers</artifactId>
@@ -134,13 +134,6 @@
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
-		</dependency>
-
-		<!-- Database driver: H2 (in-memory, for local dev) -->
-		<dependency>
-			<groupId>com.h2database</groupId>
-			<artifactId>h2</artifactId>
-			<scope>runtime</scope>
 		</dependency>
 
 		<!-- DevTools: auto-restart during development -->

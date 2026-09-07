@@ -26,10 +26,11 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 
     // This class is the only one in the suite that drives real, committing writes through the
     // embedded HTTP server rather than through Mockito or a rolled-back @DataJpaTest transaction.
-    // Those writes land in the same named H2 instance ("relay") that every other @SpringBootTest
-    // class shares for the life of the JVM. Every other @SpringBootTest class that resets its
-    // tables now deletes refresh_tokens before users in its own setUp/cleanUp (children before
-    // parent), so this class's leftover users no longer need to be swept up here.
+    // Those writes land in the same shared Testcontainers Postgres instance (see
+    // com.example.relay.support.SharedPostgresContainer) that every other @SpringBootTest class
+    // points at for the life of the JVM. Every other @SpringBootTest class that resets its tables
+    // now deletes refresh_tokens before users in its own setUp/cleanUp (children before parent),
+    // so this class's leftover users no longer need to be swept up here.
 
     @Autowired
     private TestRestTemplate rest;
@@ -163,7 +164,7 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
         String cookie = registered.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
         String refreshCookie = cookie.substring(0, cookie.indexOf(';'));
 
-        // Age only this test's own refresh token row past its idle window. The H2 instance is
+        // Age only this test's own refresh token row past its idle window. The Postgres instance is
         // shared across the whole suite (see other @SpringBootTest classes), so an unscoped
         // findAll().forEach(...) would age every row ever written by any test that happened to
         // run first - a footgun for whichever test runs next. Filtering to this user's row keeps

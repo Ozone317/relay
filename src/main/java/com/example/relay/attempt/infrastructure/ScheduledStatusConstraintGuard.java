@@ -21,8 +21,9 @@ import jakarta.persistence.PersistenceContext;
  * no warning and only fails later, deep inside {@code AttemptService.createRetry}, after the
  * parent row has already committed as {@code FAILED_RETRYING} - silently losing that delivery.
  *
- * <p>Only runs under the {@code docker} profile (real Postgres). The default/test profile uses
- * H2, which rebuilds its schema from scratch on every run and never needs this migration.
+ * <p>Only runs under the {@code docker} profile - a freshly created database (including every test
+ * run's own Testcontainers Postgres instance) has no pre-Flyway migration history to be missing,
+ * so this guard has nothing to check there.
  */
 @Component
 @Profile("docker")
