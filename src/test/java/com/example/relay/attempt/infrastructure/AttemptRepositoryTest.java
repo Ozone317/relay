@@ -1,6 +1,7 @@
 package com.example.relay.attempt.infrastructure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
@@ -1061,6 +1062,32 @@ public class AttemptRepositoryTest {
 
         // Assert
         assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void existsByMessageIdAndEndpointIdAndStatusIn_returnsTrue_whenAnActiveRowExists() throws Exception {
+        User user = new User("some_email@mail.com", "someHash");
+        Environment environment = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", environment);
+        Event event = new Event("some.event", app);
+        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
+        objectMapper = new ObjectMapper();
+        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        Attempt attempt = new Attempt(app, message, endpoint, 1);
+
+        testEntityManager.persistAndFlush(user);
+        testEntityManager.persistAndFlush(environment);
+        testEntityManager.persistAndFlush(app);
+        testEntityManager.persistAndFlush(event);
+        testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(attempt);
+
+        // Act & Assert
+        assertTrue(underTest.existsByMessageIdAndEndpointIdAndStatusIn(message.getId(), endpoint.getId(),
+                List.of(AttemptStatus.CREATED, AttemptStatus.IN_FLIGHT, AttemptStatus.SCHEDULED)));
+        assertFalse(underTest.existsByMessageIdAndEndpointIdAndStatusIn(message.getId(), endpoint.getId(),
+                List.of(AttemptStatus.DEAD)));
     }
 
     private void backdateUpdatedAt(UUID attemptId, Instant when) {

@@ -83,6 +83,8 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID>, JpaSpec
             """, nativeQuery = true)
     int claimDeadLetterNotification(UUID attemptId, Instant now);
 
+    boolean existsByMessageIdAndEndpointIdAndStatusIn(UUID messageId, UUID endpointId, List<AttemptStatus> statuses);
+
     /**
      * Dashboard attempt list, filtered by whichever of the optional criteria were supplied.
      *
