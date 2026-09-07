@@ -60,6 +60,10 @@ public class MessageServiceIntegrationTest {
 
     @Test
     void create_shouldPersistMessageAndAttempt_whenMessageCreationAndAttemptCreationBothPass() throws Exception {
+        // Clean up any leftover data from previous tests to ensure count assertions are scoped correctly
+        attemptRepository.deleteAll();
+        messageRepository.deleteAll();
+
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);

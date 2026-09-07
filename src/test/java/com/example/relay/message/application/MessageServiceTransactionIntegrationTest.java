@@ -23,9 +23,11 @@ import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest
@@ -64,9 +66,34 @@ public class MessageServiceTransactionIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @BeforeEach
+    void setUp() {
+        // Clear any leftover messages from previous tests to ensure the test's assertion
+        // that messageRepository.count()==0 is valid. Since attemptRepository is @MockitoBean
+        // (mocked for this test), it cannot delete real leftover attempt rows. Attempts from
+        // other test classes may reference messages, so we must delete attempts via raw SQL first.
+        // This is necessary because this test's @MockitoBean replacement prevents using the
+        // normal repository pattern to clean up data from other test classes' real attempts.
+        try {
+            messageRepository.deleteAll();
+        } catch (Exception e) {
+            // FK violation: leftover attempts reference messages. Delete attempts first via SQL,
+            // then retry message deletion.
+            try {
+                jdbcTemplate.execute("DELETE FROM attempts");
+                messageRepository.deleteAll();
+            } catch (Exception sqlException) {
+                System.err.println("Test setup failed to clean up data: " + sqlException.getMessage());
+                throw new RuntimeException("Test setup failed: could not clean up message/attempt data", sqlException);
+            }
+        }
+    }
+
     @Test
     void create_shouldRollbackMessage_whenAttemptCreationFails() throws Exception {
-
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -102,8 +129,10 @@ public class MessageServiceTransactionIntegrationTest {
 
     @AfterEach
     void cleanUp() {
-
+        // Explicit cleanup to remove this test's created fixtures. This test is not @Transactional,
+        // so manual cleanup ensures no data persists to affect subsequent tests.
         subscriptionRepository.deleteAll();
+        messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
         appRepository.deleteAll();
