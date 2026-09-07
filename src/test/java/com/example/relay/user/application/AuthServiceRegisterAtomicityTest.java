@@ -50,8 +50,9 @@ class AuthServiceRegisterAtomicityTest implements SharedPostgresContainer {
      *
      * <p>
      * A passing run commits nothing, so this looks redundant - but if the transaction ever regresses, the rollback test
-     * leaves a real user row in the JVM-wide {@code jdbc:h2:mem:relay} instance that every {@code @SpringBootTest}
-     * shares. Leftover users with live refresh_tokens rows are exactly what broke six unrelated test classes in the
+     * leaves a real user row in the shared Testcontainers Postgres instance that every {@code @SpringBootTest} and
+     * {@code @DataJpaTest} class in this JVM run points at (see {@link com.example.relay.support.SharedPostgresContainer}).
+     * Leftover users with live refresh_tokens rows are exactly what broke six unrelated test classes in the
      * previous cycle, so the test that proves rollback has to clean up for the case where rollback did not happen.
      * Children before parents, same ordering as the fix in ee35ac0.
      */

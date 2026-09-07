@@ -73,7 +73,7 @@ class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
         accessToken = (String) response.getBody().get("accessToken");
     }
 
-    /** Registration commits into the JVM-wide shared H2 instance; children before parents. */
+    /** Registration commits into the JVM-wide shared Postgres instance; children before parents. */
     @AfterEach
     void removeTheRegisteredUser() {
         userRepository.findByEmail(EMAIL).ifPresent(user -> {
