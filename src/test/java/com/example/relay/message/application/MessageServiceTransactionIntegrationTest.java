@@ -71,25 +71,10 @@ public class MessageServiceTransactionIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        // Clear any leftover messages from previous tests to ensure the test's assertion
-        // that messageRepository.count()==0 is valid. Since attemptRepository is @MockitoBean
-        // (mocked for this test), it cannot delete real leftover attempt rows. Attempts from
-        // other test classes may reference messages, so we must delete attempts via raw SQL first.
-        // This is necessary because this test's @MockitoBean replacement prevents using the
-        // normal repository pattern to clean up data from other test classes' real attempts.
-        try {
-            messageRepository.deleteAll();
-        } catch (Exception e) {
-            // FK violation: leftover attempts reference messages. Delete attempts first via SQL,
-            // then retry message deletion.
-            try {
-                jdbcTemplate.execute("DELETE FROM attempts");
-                messageRepository.deleteAll();
-            } catch (Exception sqlException) {
-                System.err.println("Test setup failed to clean up data: " + sqlException.getMessage());
-                throw new RuntimeException("Test setup failed: could not clean up message/attempt data", sqlException);
-            }
-        }
+        // attemptRepository is @MockitoBean here, so it cannot clear real attempt rows left by
+        // other test classes - and those rows FK-reference messages. Raw SQL first, then messages.
+        jdbcTemplate.update("DELETE FROM attempts");
+        messageRepository.deleteAll();
     }
 
     @Test

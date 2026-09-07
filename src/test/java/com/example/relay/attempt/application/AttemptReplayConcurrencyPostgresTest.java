@@ -1,6 +1,7 @@
 package com.example.relay.attempt.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -110,7 +111,8 @@ class AttemptReplayConcurrencyPostgresTest {
                 executor.submit(() -> race(readyLatch, startLatch, successCount, conflictCount)),
                 executor.submit(() -> race(readyLatch, startLatch, successCount, conflictCount)));
 
-        readyLatch.await(5, TimeUnit.SECONDS);
+        assertTrue(readyLatch.await(5, TimeUnit.SECONDS),
+                "both replay threads should reach the rendezvous point within 5 seconds");
         startLatch.countDown();
 
         for (Future<?> future : futures) {
