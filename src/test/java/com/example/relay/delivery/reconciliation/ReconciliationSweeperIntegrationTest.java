@@ -251,8 +251,16 @@ public class ReconciliationSweeperIntegrationTest {
 
     @Test
     void batchSize_limitsHowManyStaleAttemptsAreSweptPerCycle() {
+        // Each iteration gets its own endpoint: idx_attempts_one_active_per_message_endpoint allows
+        // only one active (CREATED/IN_FLIGHT/SCHEDULED) row per (message_id, endpoint_id) pair, and
+        // endpoint identity is irrelevant to what batching behavior this test checks.
         for (int i = 0; i < 3; i++) {
-            persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now().minusSeconds(3600));
+            Endpoint iterationEndpoint = endpointRepository
+                    .save(new Endpoint("batch-" + i, "https://example.com/batch-" + i, "whsec_batch_" + i,
+                            endpoint.getApp()));
+            Attempt attempt = attemptRepository.save(new Attempt(iterationEndpoint.getApp(), message,
+                    iterationEndpoint, 1));
+            backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
         }
 
         sweeper.sweep();

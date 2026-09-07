@@ -82,6 +82,11 @@ public class AttemptService {
             String responseBody, String lastError, Long latencyMs) {
         markFailed(attempt, AttemptStatus.FAILED_RETRYING, nextRetryAt, responseCode, responseBody, lastError,
                 latencyMs);
+        // Explicit flush: Hibernate's default flush ordering runs every queued INSERT before any
+        // queued UPDATE in the same flush, regardless of Java call order. Without this, the new
+        // retry row's INSERT would hit idx_attempts_one_active_per_message_endpoint while the row
+        // above is still (from the DB's perspective) active, since its UPDATE hasn't executed yet.
+        attemptRepository.flush();
         return createRetry(attempt, nextRetryAt);
     }
 

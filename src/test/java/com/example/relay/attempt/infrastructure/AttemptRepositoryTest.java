@@ -107,15 +107,23 @@ public class AttemptRepositoryTest {
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
 
+        // Each gets its own endpoint: idx_attempts_one_active_per_message_endpoint allows only one
+        // active (CREATED/IN_FLIGHT/SCHEDULED) row per (message_id, endpoint_id) pair, and endpoint
+        // identity is irrelevant to what this test checks.
+        Endpoint endpointFresh = new Endpoint("testing-fresh", "https://example.com/fresh", "whsec_fresh", app);
+        Endpoint endpointStaleWrongStatus =
+                new Endpoint("testing-swrong", "https://example.com/swrong", "whsec_swrong", app);
         Attempt stale = new Attempt(app, message, endpoint, 1);
-        Attempt fresh = new Attempt(app, message, endpoint, 1);
-        Attempt staleButWrongStatus = new Attempt(app, message, endpoint, 1);
+        Attempt fresh = new Attempt(app, message, endpointFresh, 1);
+        Attempt staleButWrongStatus = new Attempt(app, message, endpointStaleWrongStatus, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
         testEntityManager.persistAndFlush(app);
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(endpointFresh);
+        testEntityManager.persistAndFlush(endpointStaleWrongStatus);
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(stale);
         testEntityManager.persistAndFlush(fresh);
@@ -157,7 +165,12 @@ public class AttemptRepositoryTest {
 
         Instant longAgo = Instant.now().minusSeconds(3600);
         for (int i = 0; i < 3; i++) {
-            Attempt attempt = new Attempt(app, message, endpoint, 1);
+            // Distinct endpoint per iteration: idx_attempts_one_active_per_message_endpoint allows
+            // only one active row per (message_id, endpoint_id) pair.
+            Endpoint iterationEndpoint =
+                    new Endpoint("testing-" + i, "https://example.com/" + i, "whsec_" + i, app);
+            testEntityManager.persistAndFlush(iterationEndpoint);
+            Attempt attempt = new Attempt(app, message, iterationEndpoint, 1);
             testEntityManager.persistAndFlush(attempt);
             backdateUpdatedAt(attempt.getId(), longAgo);
         }
@@ -360,11 +373,16 @@ public class AttemptRepositoryTest {
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
 
+        // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
+        // (CREATED/IN_FLIGHT/SCHEDULED) row per (message_id, endpoint_id) pair, and both of these
+        // are SCHEDULED at once.
+        Endpoint endpointNotYetDue =
+                new Endpoint("testing-notyetdue", "https://example.com/notyetdue", "whsec_notyetdue", app);
         Attempt overdue = new Attempt(app, message, endpoint, 2);
         overdue.setStatus(AttemptStatus.SCHEDULED);
         overdue.setNextRetryAt(Instant.now().minusSeconds(3600));
 
-        Attempt notYetDue = new Attempt(app, message, endpoint, 2);
+        Attempt notYetDue = new Attempt(app, message, endpointNotYetDue, 2);
         notYetDue.setStatus(AttemptStatus.SCHEDULED);
         notYetDue.setNextRetryAt(Instant.now().plusSeconds(3600));
 
@@ -373,6 +391,7 @@ public class AttemptRepositoryTest {
         testEntityManager.persistAndFlush(app);
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(endpointNotYetDue);
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(overdue);
         testEntityManager.persistAndFlush(notYetDue);
@@ -707,14 +726,18 @@ public class AttemptRepositoryTest {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
+        // row per (message_id, endpoint_id) pair, and both attempts here default to CREATED.
+        Endpoint endpoint2 = new Endpoint("testing2", "https://example.com/2", "whsec_2", app);
         Attempt attempt1 = new Attempt(app, message, endpoint, 1);
-        Attempt attempt2 = new Attempt(app, message, endpoint, 2);
+        Attempt attempt2 = new Attempt(app, message, endpoint2, 2);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
         testEntityManager.persistAndFlush(app);
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(endpoint2);
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(attempt1);
         testEntityManager.persistAndFlush(attempt2);
@@ -838,16 +861,25 @@ public class AttemptRepositoryTest {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
+        // row per (message_id, endpoint_id) pair, and all four attempts here default to CREATED.
+        Endpoint endpointAtTo = new Endpoint("testing-atTo", "https://example.com/atTo", "whsec_atTo", app);
+        Endpoint endpointBeforeRange =
+                new Endpoint("testing-before", "https://example.com/before", "whsec_before", app);
+        Endpoint endpointAfterRange = new Endpoint("testing-after", "https://example.com/after", "whsec_after", app);
         Attempt atFrom = new Attempt(app, message, endpoint, 1);
-        Attempt atTo = new Attempt(app, message, endpoint, 1);
-        Attempt beforeRange = new Attempt(app, message, endpoint, 1);
-        Attempt afterRange = new Attempt(app, message, endpoint, 1);
+        Attempt atTo = new Attempt(app, message, endpointAtTo, 1);
+        Attempt beforeRange = new Attempt(app, message, endpointBeforeRange, 1);
+        Attempt afterRange = new Attempt(app, message, endpointAfterRange, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
         testEntityManager.persistAndFlush(app);
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(endpointAtTo);
+        testEntityManager.persistAndFlush(endpointBeforeRange);
+        testEntityManager.persistAndFlush(endpointAfterRange);
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(atFrom);
         testEntityManager.persistAndFlush(atTo);
@@ -881,14 +913,18 @@ public class AttemptRepositoryTest {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
+        // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
+        // row per (message_id, endpoint_id) pair, and both attempts here default to CREATED.
+        Endpoint endpointNewer = new Endpoint("testing-newer", "https://example.com/newer", "whsec_newer", app);
         Attempt older = new Attempt(app, message, endpoint, 1);
-        Attempt newer = new Attempt(app, message, endpoint, 1);
+        Attempt newer = new Attempt(app, message, endpointNewer, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
         testEntityManager.persistAndFlush(app);
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
+        testEntityManager.persistAndFlush(endpointNewer);
         testEntityManager.persistAndFlush(message);
         testEntityManager.persistAndFlush(older);
         testEntityManager.persistAndFlush(newer);

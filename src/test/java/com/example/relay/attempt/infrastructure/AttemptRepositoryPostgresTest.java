@@ -85,10 +85,27 @@ class AttemptRepositoryPostgresTest {
         return attempt;
     }
 
+    private Attempt persistAttempt(int attemptNo, Endpoint targetEndpoint) {
+        Attempt attempt = new Attempt(app, message, targetEndpoint, attemptNo);
+        testEntityManager.persistAndFlush(attempt);
+        return attempt;
+    }
+
+    private Attempt persistAttemptWithMessage(int attemptNo, Message targetMessage) {
+        Attempt attempt = new Attempt(app, targetMessage, endpoint, attemptNo);
+        testEntityManager.persistAndFlush(attempt);
+        return attempt;
+    }
+
     @Test
     void findByAppIdAndFilters_returnsEveryAttempt_whenNoFilterIsSupplied() {
+        // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
+        // (CREATED/IN_FLIGHT/SCHEDULED) row per (message_id, endpoint_id) pair, and both attempts
+        // here default to CREATED. Endpoint identity is irrelevant to this test.
+        Endpoint endpoint2 = new Endpoint("testing2", "https://example.com/2", "whsec_2", app);
+        testEntityManager.persistAndFlush(endpoint2);
         persistAttempt(1);
-        persistAttempt(2);
+        persistAttempt(2, endpoint2);
 
         // The regression: on Postgres this threw 42P18 before the query was rewritten, so the
         // delivery-history list endpoint returned a masked 401 for every caller.
@@ -99,9 +116,14 @@ class AttemptRepositoryPostgresTest {
     }
 
     @Test
-    void findByAppIdAndFilters_appliesEveryFilterTogether() {
+    void findByAppIdAndFilters_appliesEveryFilterTogether() throws Exception {
+        // Distinct messages, same endpoint: both rows must match endpoint.getId() below, so the
+        // pair that idx_attempts_one_active_per_message_endpoint keys on (message_id, endpoint_id)
+        // must differ by message instead. Both attempts here default to CREATED.
+        Message message2 = new Message(app, message.getEvent(), new ObjectMapper().readTree("{\"name\": \"hello2\"}"));
+        testEntityManager.persistAndFlush(message2);
         Attempt matching = persistAttempt(1);
-        persistAttempt(2);
+        persistAttemptWithMessage(2, message2);
 
         Page<Attempt> result = underTest.findByAppIdAndFilters(app.getId(), endpoint.getId(), AttemptStatus.CREATED,
                 Instant.now().minus(1, ChronoUnit.DAYS), Instant.now().plus(1, ChronoUnit.DAYS),
