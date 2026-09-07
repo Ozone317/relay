@@ -6,14 +6,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.relay.user.domain.User;
 import java.util.Optional;
+import com.example.relay.support.SharedPostgresContainer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.dao.DataIntegrityViolationException;
 
 @DataJpaTest
-public class UserRepositoryTest {
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+public class UserRepositoryTest implements SharedPostgresContainer {
 
     @Autowired
     private TestEntityManager entityManager;

@@ -19,8 +19,10 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.message.domain.Message;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.relay.support.SharedPostgresContainer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.data.domain.Limit;
@@ -29,7 +31,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
 @DataJpaTest
-public class AttemptRepositoryTest {
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+public class AttemptRepositoryTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository underTest;
