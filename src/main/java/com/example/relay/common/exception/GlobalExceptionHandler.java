@@ -2,6 +2,9 @@ package com.example.relay.common.exception;
 
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
+import com.example.relay.attempt.exception.AttemptNotDeadException;
+import com.example.relay.attempt.exception.ReplayEndpointInactiveException;
+import com.example.relay.attempt.exception.ActiveAttemptAlreadyExistsException;
 import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
 import com.example.relay.endpoint.exception.EndpointNotFoundException;
@@ -122,6 +125,24 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleAttemptNotFoundException(AttemptNotFoundException ex) {
         ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    @ExceptionHandler(AttemptNotDeadException.class)
+    public ResponseEntity<ApiError> handleAttemptNotDeadException(AttemptNotDeadException ex) {
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(ReplayEndpointInactiveException.class)
+    public ResponseEntity<ApiError> handleReplayEndpointInactiveException(ReplayEndpointInactiveException ex) {
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(ActiveAttemptAlreadyExistsException.class)
+    public ResponseEntity<ApiError> handleActiveAttemptAlreadyExistsException(ActiveAttemptAlreadyExistsException ex) {
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**
