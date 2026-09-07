@@ -55,6 +55,13 @@ public class AttemptService {
     }
 
     @Transactional
+    public Attempt createReplay(Attempt original) {
+        Attempt replay = new Attempt(original.getApp(), original.getMessage(), original.getEndpoint(),
+                original.getAttemptNo() + 1);
+        return attemptRepository.saveAndFlush(replay);
+    }
+
+    @Transactional
     public Attempt markSucceeded(Attempt attempt, Integer responseCode, String responseBody, Long latencyMs) {
         attempt.setResponseCode(responseCode);
         attempt.setResponseBody(responseBody);
