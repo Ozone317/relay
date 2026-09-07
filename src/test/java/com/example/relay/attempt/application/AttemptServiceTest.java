@@ -286,4 +286,31 @@ public class AttemptServiceTest {
         // Verify - both writes happened
         verify(attemptRepository, times(2)).save(any());
     }
+
+    @Test
+    void createReplay_buildsANewAttemptOneNumberHigherThanTheOriginal_andSavesAndFlushesIt() {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_1", app);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        Message message = new Message(app, event, body);
+        Attempt original = new Attempt(app, message, endpoint, 6);
+        original.setStatus(AttemptStatus.DEAD);
+
+        // Stub
+        when(attemptRepository.saveAndFlush(any(Attempt.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Act
+        Attempt replay = underTest.createReplay(original);
+
+        // Assert
+        assertEquals(7, replay.getAttemptNo());
+        assertEquals(AttemptStatus.CREATED, replay.getStatus());
+        assertEquals(original.getMessage().getId(), replay.getMessage().getId());
+        assertEquals(original.getEndpoint().getId(), replay.getEndpoint().getId());
+        verify(attemptRepository).saveAndFlush(any(Attempt.class));
+    }
 }
