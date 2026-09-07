@@ -14,43 +14,32 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
+import com.example.relay.support.SharedPostgresContainer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * The same repository queries as {@link AttemptRepositoryTest}, but against real PostgreSQL.
+ * The same repository queries as {@link AttemptRepositoryTest}, kept as its own regression test rather than folded
+ * back in.
  *
  * <p>
- * Every other repository test in this project runs on H2, which is far more forgiving than Postgres about untyped bind
- * parameters. That divergence hid a total failure of the attempts list endpoint: `findByAppIdAndFilters` threw
- * `SQLState 42P18 - could not determine data type of parameter $6` on every single call against Postgres, while the H2
- * suite stayed green. Since Postgres is what the app actually runs on (the `docker` profile), the endpoint had never
- * once worked in a real deployment.
- *
- * <p>
- * Postgres determines parameter types at PREPARE time from the SQL text alone, so a parameter whose only appearance is
- * `? IS NULL` has no inferable type — which is why the failure did not depend on whether a filter value was actually
- * supplied.
+ * Before the project moved to PostgreSQL-only testing, every other repository test ran on H2, which was far more
+ * forgiving than Postgres about untyped bind parameters. That divergence once hid a total failure of the attempts
+ * list endpoint: `findByAppIdAndFilters` threw `SQLState 42P18 - could not determine data type of parameter $6` on
+ * every single call against Postgres, while the H2 suite stayed green — Postgres determines parameter types at
+ * PREPARE time from the SQL text alone, so a parameter whose only appearance is `? IS NULL` has no inferable type.
+ * The fix is now covered here directly, and this class stays as the named regression test for that specific bug.
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Testcontainers
-class AttemptRepositoryPostgresTest {
-
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16");
+class AttemptRepositoryPostgresTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository underTest;
