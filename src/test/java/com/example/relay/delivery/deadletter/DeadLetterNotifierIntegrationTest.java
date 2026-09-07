@@ -23,6 +23,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.example.relay.app.domain.App;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
@@ -44,7 +45,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 @SpringBootTest
 @Testcontainers
-class DeadLetterNotifierIntegrationTest {
+class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection

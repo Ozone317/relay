@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
 import com.example.relay.attempt.application.AttemptQueryService;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.RefreshToken;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -43,7 +44,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-class UnhandledExceptionIntegrationTest {
+class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
 
     private static final String EMAIL = "unhandled-exception-probe@example.com";
 

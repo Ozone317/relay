@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import com.example.relay.delivery.config.RabbitMqConfig;
+import com.example.relay.support.SharedPostgresContainer;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
@@ -22,7 +23,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 @Testcontainers
-class AttemptPublisherIntegrationTest {
+class AttemptPublisherIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection

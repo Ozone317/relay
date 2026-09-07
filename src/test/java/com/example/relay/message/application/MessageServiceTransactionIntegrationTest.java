@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doThrow;
 
 import com.example.relay.app.domain.App;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -31,7 +32,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest
-public class MessageServiceTransactionIntegrationTest {
+public class MessageServiceTransactionIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private MessageService underTest;

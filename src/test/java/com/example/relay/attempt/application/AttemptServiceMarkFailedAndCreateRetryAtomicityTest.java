@@ -16,6 +16,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import com.example.relay.app.domain.App;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
@@ -36,7 +37,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 @SpringBootTest
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-class AttemptServiceMarkFailedAndCreateRetryAtomicityTest {
+class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptService attemptService;

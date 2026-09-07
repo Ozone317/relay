@@ -3,6 +3,7 @@ package com.example.relay.message.application;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.example.relay.app.domain.App;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -26,7 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest
 @Transactional
-public class MessageServiceIntegrationTest {
+public class MessageServiceIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private MessageService underTest;

@@ -17,7 +17,14 @@ public interface SharedPostgresContainer {
     PostgreSQLContainer<?> POSTGRES = createAndStart();
 
     private static PostgreSQLContainer<?> createAndStart() {
-        PostgreSQLContainer<?> container = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"));
+        // Every distinct @SpringBootTest/@DataJpaTest configuration gets its own cached Spring
+        // ApplicationContext (and therefore its own HikariCP pool) against this one shared
+        // container. With ~30 test classes and several genuinely distinct configurations, enough
+        // pools can be open at once to exceed Postgres's default max_connections (observed: "sorry,
+        // too many clients already"). Raised well above what even a large number of concurrently
+        // cached contexts could need; this only affects the test container, not application config.
+        PostgreSQLContainer<?> container = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"))
+                .withCommand("postgres", "-c", "max_connections=300");
         container.start();
         return container;
     }

@@ -2,6 +2,7 @@ package com.example.relay.delivery.reconciliation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.example.relay.support.SharedPostgresContainer;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,7 +18,7 @@ import org.springframework.test.context.TestPropertySource;
         "relay.reconciliation.scheduled-slack=2m",
         "relay.reconciliation.dead-letter-grace=3m"
 })
-class ReconciliationPropertiesTest {
+class ReconciliationPropertiesTest implements SharedPostgresContainer {
 
     @Autowired
     private ReconciliationProperties properties;
