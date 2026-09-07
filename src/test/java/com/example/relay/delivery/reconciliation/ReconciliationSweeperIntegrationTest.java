@@ -23,6 +23,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.example.relay.app.domain.App;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
@@ -56,7 +57,7 @@ import jakarta.persistence.PersistenceContext;
         "relay.reconciliation.batch-size=2",
         "relay.reconciliation.scheduled-slack=5m"
 })
-public class ReconciliationSweeperIntegrationTest {
+public class ReconciliationSweeperIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.RefreshToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
@@ -28,7 +29,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
  */
 @SpringBootTest
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-class AuthServiceRegisterAtomicityTest {
+class AuthServiceRegisterAtomicityTest implements SharedPostgresContainer {
 
     private static final String EMAIL = "register-atomicity@example.com";
 

@@ -3,6 +3,7 @@ package com.example.relay.common.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
+import com.example.relay.support.SharedPostgresContainer;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,7 +21,7 @@ import org.springframework.test.context.TestPropertySource;
 @SpringBootTest
 @TestPropertySource(properties = {"relay.auth.access-token-ttl=7m", "relay.auth.refresh-idle-window=3d",
         "relay.auth.cookie-secure=false", "relay.auth.allowed-origin=https://relay.example.test"})
-class AuthPropertiesBindingTest {
+class AuthPropertiesBindingTest implements SharedPostgresContainer {
 
     @Autowired
     private AuthProperties authProperties;

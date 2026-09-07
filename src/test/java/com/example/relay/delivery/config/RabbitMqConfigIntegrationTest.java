@@ -3,6 +3,7 @@ package com.example.relay.delivery.config;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Logger;
+import com.example.relay.support.SharedPostgresContainer;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import java.util.UUID;
@@ -22,7 +23,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @Testcontainers
-class RabbitMqConfigIntegrationTest {
+class RabbitMqConfigIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection

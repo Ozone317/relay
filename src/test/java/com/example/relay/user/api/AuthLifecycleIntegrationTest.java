@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.api.dto.AuthResponse;
 import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
@@ -21,7 +22,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-public class AuthLifecycleIntegrationTest {
+public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 
     // This class is the only one in the suite that drives real, committing writes through the
     // embedded HTTP server rather than through Mockito or a rolled-back @DataJpaTest transaction.
