@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -28,6 +29,7 @@ import com.example.relay.app.domain.App;
 import com.example.relay.attempt.api.dto.AttemptDetailDto;
 import com.example.relay.attempt.api.dto.AttemptSummaryDto;
 import com.example.relay.attempt.application.AttemptQueryService;
+import com.example.relay.attempt.application.AttemptReplayService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
@@ -56,6 +58,9 @@ public class AttemptControllerTest {
 
     @MockitoBean
     private AttemptQueryService attemptQueryService;
+
+    @MockitoBean
+    private AttemptReplayService attemptReplayService;
 
     @MockitoBean
     private AttemptMapper attemptMapper;
@@ -187,6 +192,60 @@ public class AttemptControllerTest {
         // Act + Assert
         mockMvc.perform(get("/api/v1/environments/{environmentId}/apps/{appId}/attempts/{attemptId}", env.getId(),
                 app.getId(), attemptId).with(authentication(auth))).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("Attempt not found with id " + attemptId));
+    }
+
+    @Test
+    void replay_returns201WithTheNewAttempt_whenEligible() throws Exception {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
+        Message message = new Message(app, event, new ObjectMapper().readTree("{}"));
+        Attempt originalDead = new Attempt(app, message, endpoint, 6);
+        originalDead.setStatus(AttemptStatus.DEAD);
+        Attempt replayAttempt = new Attempt(app, message, endpoint, 7);
+        AttemptSummaryDto dto = new AttemptSummaryDto(replayAttempt.getId(), event.getName(), endpoint.getId(),
+                endpoint.getName(), replayAttempt.getAttemptNo(), replayAttempt.getStatus(), null, null,
+                replayAttempt.getCreatedAt());
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        // Stubs
+        when(attemptReplayService.replay(originalDead.getId(), app.getId(), env.getId(), user.getId()))
+                .thenReturn(replayAttempt);
+        when(attemptMapper.toSummaryDto(replayAttempt)).thenReturn(dto);
+
+        // Act
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/attempts/{attemptId}/replay",
+                        env.getId(), app.getId(), originalDead.getId())
+                .with(authentication(auth)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(dto.id().toString()))
+                .andExpect(jsonPath("$.attemptNo").value(7));
+    }
+
+    @Test
+    void replay_returns404_whenAttemptNotFound() throws Exception {
+        // Arrange
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        UUID attemptId = UUID.randomUUID();
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        // Stub
+        when(attemptReplayService.replay(attemptId, app.getId(), env.getId(), user.getId()))
+                .thenThrow(new AttemptNotFoundException(attemptId));
+
+        // Act + Assert
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/attempts/{attemptId}/replay",
+                        env.getId(), app.getId(), attemptId)
+                .with(authentication(auth)))
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Attempt not found with id " + attemptId));
     }
 }
