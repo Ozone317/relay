@@ -15,7 +15,7 @@ import com.example.relay.attempt.exception.AttemptNotDeadException;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.exception.ReplayEndpointInactiveException;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
-import com.example.relay.delivery.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
