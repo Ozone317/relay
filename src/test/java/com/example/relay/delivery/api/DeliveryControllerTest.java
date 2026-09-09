@@ -133,4 +133,25 @@ class DeliveryControllerTest {
                 environmentId, appId, deliveryId, attemptId).with(authentication(auth)))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void replay_returns201_withTheUpdatedDeliverySummary() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        UUID environmentId = UUID.randomUUID();
+        UUID appId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        Authentication auth = authFor(user.getId(), user.getEmail());
+
+        when(deliveryReplayService.replay(deliveryId, appId, environmentId, user.getId()))
+                .thenReturn(new DeliveryStatus());
+        when(deliveryMapper.toSummaryDto(any())).thenReturn(new DeliverySummaryDto(deliveryId,
+                "payment.completed", UUID.randomUUID(), "EP 1", AttemptStatus.CREATED, 7, 7, null, null,
+                Instant.now(), Instant.now()));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/v1/environments/{environmentId}/apps/{appId}/deliveries/{deliveryId}/replay",
+                        environmentId, appId, deliveryId)
+                .with(authentication(auth)))
+                .andExpect(status().isCreated());
+    }
 }
