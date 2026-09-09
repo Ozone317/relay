@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 class DeliveryReplayServiceTest {
@@ -162,5 +163,25 @@ class DeliveryReplayServiceTest {
 
         assertEquals(updatedStatus, result);
         verify(attemptPublisher).publish(replayAttempt.getId());
+    }
+
+    @Test
+    void replay_throwsActiveAttemptAlreadyExists_whenCreateReplayLosesTheInsertRace() throws Exception {
+        // The existsByMessageIdAndEndpointIdAndStatusIn check above is only a fast path;
+        // idx_attempts_one_active_per_message_endpoint is the real authority. A concurrent replay
+        // for the same (message, endpoint) pair can win the check-then-insert race and still fail
+        // at createReplay's insert - that must surface as the same conflict the fast path reports.
+        when(deliveryRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(delivery.getId(), appId,
+                environmentId, userId)).thenReturn(Optional.of(delivery));
+        when(deliveryStatusRepository.findById(delivery.getId()))
+                .thenReturn(Optional.of(statusOf(AttemptStatus.DEAD)));
+        when(attemptRepository.existsByMessageIdAndEndpointIdAndStatusIn(any(), any(), any())).thenReturn(false);
+        when(attemptRepository.findById(deadAttempt.getId())).thenReturn(Optional.of(deadAttempt));
+        when(attemptService.createReplay(deadAttempt)).thenThrow(new DataIntegrityViolationException("lost race"));
+
+        assertThrows(ActiveAttemptAlreadyExistsException.class,
+                () -> underTest.replay(delivery.getId(), appId, environmentId, userId));
+
+        verify(attemptPublisher, never()).publish(any());
     }
 }
