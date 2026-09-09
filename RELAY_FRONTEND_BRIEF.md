@@ -381,16 +381,36 @@ Query parameters on the top-level list (`GET /`), all optional:
 | `createdTo` | ISO-8601 instant | inclusive |
 | `page` | int | 0-based, default `0` |
 | `size` | int | default `20` |
-| `sort` | string | e.g. `createdAt,desc` |
+| `sort` | string | see the ⚠️ below — do **not** use `createdAt` here |
 
 `GET /{deliveryId}/attempts` takes only standard pagination params (`page`, `size`, `sort`) — no
 filters, since you're already scoped to one delivery.
 
 ⚠️ **There is no default sort on either list endpoint.** Neither the top-level delivery query nor
 the nested attempts query declares a `@PageableDefault` or an `ORDER BY`, so results come back in
-whatever order the database returns them. **Always pass `sort=createdAt,desc` explicitly** on the
-delivery list, and something like `sort=attemptNo,asc` on the nested attempt list, or your tables
-will appear to shuffle between pages.
+whatever order the database returns them if you omit `sort` — your table will appear to shuffle
+between pages if you don't pass one explicitly.
+
+🐛 **Confirmed bug, live-tested 2026-09-09: `sort=createdAt,desc` on the top-level delivery list
+(`GET /{appId}/deliveries`) crashes with a `500`,** not the `400` you'd expect for a bad parameter.
+The list is backed by a `DeliveryStatus` JPA projection whose actual field is named
+`deliveryCreatedAt` — `DeliverySummaryDto.createdAt` is renamed on the way out, but Spring Data's
+sort parsing runs against the entity's real field name, not the DTO's, and there's no
+`@JsonProperty`-style aliasing for it. Passing `createdAt` throws
+`PropertyReferenceException: No property 'createdAt' found for type 'DeliveryStatus'`, which the
+generic exception handler reports as a `500 "Internal server error"` — indistinguishable from a real
+server fault from the response body alone. **Use `sort=deliveryCreatedAt,desc` instead** (confirmed
+working, verbatim response verified below) — this is the one place in the whole API where the query
+parameter name doesn't match the JSON field name it appears to sort. This has been reported; treat it
+as a live bug, not a documentation error, until you hear otherwise.
+
+```json
+// GET .../deliveries?sort=deliveryCreatedAt,desc  →  200, works
+// GET .../deliveries?sort=createdAt,desc          →  500 {"status":500,"message":"Internal server error"}
+```
+
+The nested attempt list has no such problem — `sort=attemptNo,asc` (or any real `Attempt` field name,
+including `createdAt`, which genuinely exists on that entity) works as expected, confirmed live.
 
 Date filters on the delivery list apply to the **delivery's own** `createdAt` (when the underlying
 message/endpoint pairing was first created), not to individual attempt timestamps.
@@ -441,14 +461,28 @@ Treat `content`, `totalElements`, `totalPages`, `number`, and `size` as the stab
 
 This is what the artifact's Retry button should actually call. No request body.
 
-**Success:** `201` with the delivery's **updated** `DeliverySummaryDto`, reflecting the newly created
-attempt (`attemptCount` incremented, `latestAttemptNo` bumped, `status` back to `CREATED`/`IN_FLIGHT`,
-`responseCode`/`latencyMs` reset to whatever the new attempt has so far — typically null immediately
-after creation). The **new attempt's id is not in this response body.** If you need it — e.g. to open
-its detail view — call `GET /{deliveryId}/attempts` again and take the row with the highest
-`attemptNo`, then `GET /{deliveryId}/attempts/{newAttemptId}` for the full detail (there's nothing
-interesting to show yet: `responseCode`/`responseBody`/`lastError` are all still null at creation
-time).
+**Success:** `201` with a `DeliverySummaryDto`. **In principle** this is meant to be the delivery's
+updated state, reflecting the newly created attempt (`attemptCount` incremented, `latestAttemptNo`
+bumped, `status` back to `CREATED`/`IN_FLIGHT`).
+
+🐛 **Confirmed bug, live-tested 2026-09-09: the response body is stale — do not trust it.** Two
+back-to-back live tests both showed the same thing: `POST /replay`'s `201` body reported the
+delivery's state **from immediately before the replay** (e.g. `attemptCount: 7, status: "DEAD",
+responseCode: 500`), while a separate `GET /{deliveryId}` issued right after — sometimes only
+seconds later, once the new attempt had actually resolved — correctly showed the up-to-date state
+(`attemptCount: 8, status: "SUCCEEDED", responseCode: 200`). The `201` status code and the fact that
+a new attempt row genuinely gets created are both real; only the **body** of this specific response
+is unreliable. **Do not render anything from the replay response directly — treat the `201` purely
+as "the replay was accepted," then immediately re-`GET /{deliveryId}` (and `/{deliveryId}/attempts`
+if you need the new attempt's id) to get the real, current state.** This contradicts a comment in the
+backend source claiming this read happens "after commit" and reflects the new attempt — that intent
+is not what was observed. This has been reported; treat it as a live bug, not a documentation error,
+until you hear otherwise.
+
+The **new attempt's id is never in this response body regardless of the staleness bug above** — by
+design, this endpoint returns a delivery-shaped DTO, not an attempt-shaped one. To find it, call
+`GET /{deliveryId}/attempts` and take the row with the highest `attemptNo`, then
+`GET /{deliveryId}/attempts/{newAttemptId}` for the full detail.
 
 **Failure modes, all `ApiError` shape (§6.1), now keyed by `deliveryId` rather than `attemptId`:**
 
@@ -638,9 +672,9 @@ authenticated data. If you use Next.js, mark the authenticated tree `"use client
 4. **Events and endpoints tabs**, including the show-secret-once modal.
 5. **Subscriptions** (the `PUT`-based checkbox panel).
 6. **Push message tab.** Handle the 422 no-subscribers case explicitly.
-7. **History tab.** Now a delivery list (§5.8): pagination, filters, `sort=createdAt,desc`, a
-   delivery detail view, and a drill-down to that delivery's attempts (`sort=attemptNo,asc`), all six
-   statuses.
+7. **History tab.** Now a delivery list (§5.8): pagination, filters, `sort=deliveryCreatedAt,desc`
+   (**not** `createdAt` — see §5.8's ⚠️, that crashes with a 500), a delivery detail view, and a
+   drill-down to that delivery's attempts (`sort=attemptNo,asc`), all six statuses.
 8. **Replay.** Wire the Retry button (§5.8.1) to `POST .../deliveries/{deliveryId}/replay`, gated to
    `DEAD` deliveries only. If you built step 7 against the v2 flat-attempts contract, this is likely
    the one place you need to revisit existing code rather than just add new code — the routes, DTOs,
