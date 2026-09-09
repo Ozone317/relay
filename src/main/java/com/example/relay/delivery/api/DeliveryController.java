@@ -1,7 +1,11 @@
 package com.example.relay.delivery.api;
 
+import com.example.relay.attempt.api.dto.AttemptDetailDto;
+import com.example.relay.attempt.domain.Attempt;
+import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.mapper.AttemptMapper;
 import com.example.relay.common.security.AuthenticatedUser;
+import com.example.relay.delivery.api.dto.DeliveryAttemptSummaryDto;
 import com.example.relay.delivery.api.dto.DeliveryDetailDto;
 import com.example.relay.delivery.api.dto.DeliverySummaryDto;
 import com.example.relay.delivery.application.DeliveryQueryService;
@@ -68,5 +72,33 @@ public class DeliveryController {
     ) throws DeliveryNotFoundException {
         DeliveryDetail detail = deliveryQueryService.getById(deliveryId, appId, environmentId, user.getId());
         return ResponseEntity.ok(deliveryMapper.toDetailDto(detail.status(), detail.payload()));
+    }
+
+    @GetMapping("/{deliveryId}/attempts")
+    public ResponseEntity<Page<DeliveryAttemptSummaryDto>> getAttempts(
+        @PathVariable UUID environmentId,
+        @PathVariable UUID appId,
+        @PathVariable UUID deliveryId,
+        @AuthenticationPrincipal AuthenticatedUser user,
+        Pageable pageable
+    ) throws DeliveryNotFoundException {
+        Page<Attempt> attempts = deliveryQueryService.getAttempts(deliveryId, appId, environmentId, user.getId(),
+                pageable);
+
+        return ResponseEntity.ok(attempts.map(deliveryMapper::toAttemptSummaryDto));
+    }
+
+    @GetMapping("/{deliveryId}/attempts/{attemptId}")
+    public ResponseEntity<AttemptDetailDto> getAttemptDetail(
+        @PathVariable UUID environmentId,
+        @PathVariable UUID appId,
+        @PathVariable UUID deliveryId,
+        @PathVariable UUID attemptId,
+        @AuthenticationPrincipal AuthenticatedUser user
+    ) throws AttemptNotFoundException {
+        Attempt attempt = deliveryQueryService.getAttemptDetail(attemptId, deliveryId, appId, environmentId,
+                user.getId());
+
+        return ResponseEntity.ok(attemptMapper.toDetailDto(attempt));
     }
 }

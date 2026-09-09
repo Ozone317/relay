@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
-import com.example.relay.attempt.application.AttemptQueryService;
+import com.example.relay.delivery.application.DeliveryQueryService;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.RefreshToken;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
@@ -58,12 +58,12 @@ class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
     private RefreshTokenRepository refreshTokenRepository;
 
     @MockitoSpyBean
-    private AttemptQueryService attemptQueryService;
+    private DeliveryQueryService deliveryQueryService;
 
     private String accessToken;
 
     private final String attemptsUrl =
-            "/api/v1/environments/" + UUID.randomUUID() + "/apps/" + UUID.randomUUID() + "/attempts";
+            "/api/v1/environments/" + UUID.randomUUID() + "/apps/" + UUID.randomUUID() + "/deliveries";
 
     @BeforeEach
     void registerAUser() {
@@ -86,7 +86,7 @@ class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void aFailureInsideTheControllerIsReportedAs500_notAsA401() {
-        doThrow(new IllegalStateException("simulated server-side fault")).when(attemptQueryService).getPage(any(),
+        doThrow(new IllegalStateException("simulated server-side fault")).when(deliveryQueryService).getPage(any(),
                 any(), any(), any(), any(), any(), any(), any());
 
         ResponseEntity<String> response =

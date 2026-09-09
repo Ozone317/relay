@@ -42,8 +42,8 @@ import org.springframework.data.domain.Limit;
  *
  * <p>
  * Before the project moved to PostgreSQL-only testing, every repository test ran on H2, which was materially more
- * permissive than Postgres — most importantly about bind parameters whose type it cannot infer. That gap let
- * {@code findByAppIdAndFilters} ship completely broken on the database the application actually runs on, while the
+ * permissive than Postgres — most importantly about bind parameters whose type it cannot infer. That gap once let a
+ * hand-written attempts query ship completely broken on the database the application actually runs on, while the
  * suite stayed green. Semantics are covered elsewhere; the job here is narrower and complementary: prove each
  * hand-written statement is one PostgreSQL will accept and execute.
  *
@@ -82,6 +82,7 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
     private Event event;
     private Endpoint endpoint;
     private Message message;
+    private Delivery delivery;
     private Attempt attempt;
 
     @BeforeEach
@@ -92,7 +93,7 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
         event = new Event("audit.event", app);
         endpoint = new Endpoint("EP", "https://example.com/hook", "whsec_secret", app);
         message = new Message(app, event, new ObjectMapper().readTree("{\"a\":1}"));
-        Delivery delivery = new Delivery(app, message, endpoint);
+        delivery = new Delivery(app, message, endpoint);
         attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
@@ -131,8 +132,10 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
                 Limit.of(100)));
         assertDoesNotThrow(() -> attemptRepository.findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(
                 AttemptStatus.DEAD, future, Limit.of(100)));
-        assertTrue(attemptRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(attempt.getId(),
-                app.getId(), environment.getId(), user.getId()).isPresent());
+        assertTrue(attemptRepository
+                .findByIdAndDeliveryIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(attempt.getId(),
+                        delivery.getId(), app.getId(), environment.getId(), user.getId())
+                .isPresent());
     }
 
     @Test

@@ -1,5 +1,7 @@
 package com.example.relay.delivery.mapper;
 
+import com.example.relay.attempt.domain.Attempt;
+import com.example.relay.delivery.api.dto.DeliveryAttemptSummaryDto;
 import com.example.relay.delivery.api.dto.DeliveryDetailDto;
 import com.example.relay.delivery.api.dto.DeliverySummaryDto;
 import com.example.relay.delivery.domain.DeliveryStatus;
@@ -40,6 +42,17 @@ public class DeliveryMapper {
             status.getLatencyMs(),
             status.getDeliveryCreatedAt(),
             status.getLastAttemptAt()
+        );
+    }
+
+    public DeliveryAttemptSummaryDto toAttemptSummaryDto(Attempt attempt) {
+        return new DeliveryAttemptSummaryDto(
+            attempt.getId(),
+            attempt.getAttemptNo(),
+            attempt.getStatus(),
+            attempt.getResponseCode(),
+            attempt.getLatencyMs(),
+            attempt.getCreatedAt()
         );
     }
 }

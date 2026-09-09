@@ -98,4 +98,39 @@ class DeliveryControllerTest {
                 environmentId, appId, deliveryId).with(authentication(auth)))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void getAttempts_returns200() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        UUID environmentId = UUID.randomUUID();
+        UUID appId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        Authentication auth = authFor(user.getId(), user.getEmail());
+
+        when(deliveryQueryService.getAttempts(eq(deliveryId), eq(appId), eq(environmentId), eq(user.getId()),
+                any())).thenReturn(Page.empty());
+
+        mockMvc.perform(get(
+                "/api/v1/environments/{environmentId}/apps/{appId}/deliveries/{deliveryId}/attempts",
+                environmentId, appId, deliveryId).with(authentication(auth)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void getAttemptDetail_returns404_whenAttemptNotFound() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        UUID environmentId = UUID.randomUUID();
+        UUID appId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        UUID attemptId = UUID.randomUUID();
+        Authentication auth = authFor(user.getId(), user.getEmail());
+
+        when(deliveryQueryService.getAttemptDetail(attemptId, deliveryId, appId, environmentId, user.getId()))
+                .thenThrow(new com.example.relay.attempt.exception.AttemptNotFoundException(attemptId));
+
+        mockMvc.perform(get(
+                "/api/v1/environments/{environmentId}/apps/{appId}/deliveries/{deliveryId}/attempts/{attemptId}",
+                environmentId, appId, deliveryId, attemptId).with(authentication(auth)))
+                .andExpect(status().isNotFound());
+    }
 }
