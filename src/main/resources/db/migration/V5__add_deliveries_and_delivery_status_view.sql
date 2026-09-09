@@ -43,9 +43,10 @@ CREATE INDEX idx_attempts_delivery_attempt_no ON attempts(delivery_id, attempt_n
 -- One row per delivery, already joined to its latest attempt and denormalized display names.
 -- attempt_count is a window function evaluated per input row BEFORE DISTINCT ON collapses the
 -- group, so it correctly reflects the full attempt count for that delivery at zero extra query
--- cost. Filtering/sorting on this view uses the same Specification-based dynamic-predicate pattern
--- AttemptSpecifications already established (see DeliveryStatusSpecifications, Task 5) rather than
--- a hand-rolled native query with IS NULL OR - see spec Section 5.1 for why.
+-- cost. Filtering/sorting on this view uses a Specification-based dynamic-predicate pattern rather
+-- than a hand-rolled native query with IS NULL OR - see DeliveryStatusSpecifications' javadoc for
+-- why (a real PostgreSQL bug this project hit before: untyped bind parameters and PREPARE-time
+-- type inference, SQLState 42P18).
 CREATE VIEW delivery_status AS
 SELECT DISTINCT ON (a.delivery_id)
     a.delivery_id                              AS delivery_id,
