@@ -14,7 +14,6 @@ import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
-import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -51,8 +50,14 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(delivery);
 
         // Two attempts for the same delivery: an earlier failed one, a later scheduled retry.
-        // The view must report the LATER one (attempt_no 2), not the earlier one, even though
-        // both rows exist.
+        // The view must report the one with the HIGHER attempt_no (2), not the earlier one, even
+        // though both rows exist. The second attempt is deliberately backdated below to BEFORE the
+        // first attempt's created_at, so attempt_no ordering and created_at ordering disagree - this
+        // is the only way to actually pin down that the view orders by attempt_no DESC (the correct,
+        // deliberate design - this project's own clock-skew lesson) rather than created_at DESC (the
+        // wrong ordering that was deliberately rejected). With both attempts persisted in ascending
+        // order and no backdating, attempt_no and created_at naturally agree, and the test would pass
+        // identically under either ordering - which was the bug in this test before this fix.
         Attempt first = new Attempt(app, message, endpoint, delivery, 1);
         testEntityManager.persist(first);
         entityManager.createNativeQuery("UPDATE attempts SET status = 'FAILED_RETRYING' WHERE id = ?")
@@ -61,8 +66,17 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
 
         Attempt second = new Attempt(app, message, endpoint, delivery, 2);
         testEntityManager.persist(second);
-        entityManager.createNativeQuery("UPDATE attempts SET status = 'SCHEDULED' WHERE id = ?")
-                .setParameter(1, second.getId())
+        // Backdate using a SQL-side subquery against the first attempt's own created_at, rather than
+        // reading Attempt#getCreatedAt() back in Java - @CreationTimestamp only actually populates
+        // that field once Hibernate flushes the insert, and relying on the in-memory value here would
+        // be fragile to exactly when that flush happens to occur.
+        entityManager.createNativeQuery("""
+                UPDATE attempts SET status = 'SCHEDULED',
+                    created_at = (SELECT created_at FROM attempts WHERE id = :firstId) - INTERVAL '60 seconds'
+                WHERE id = :secondId
+                """)
+                .setParameter("firstId", first.getId())
+                .setParameter("secondId", second.getId())
                 .executeUpdate();
         testEntityManager.flush();
 
