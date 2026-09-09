@@ -29,6 +29,7 @@ import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -57,7 +58,8 @@ public class AttemptQueryServiceTest {
         Event event = new Event("payment.completed", app);
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         Message message = new Message(app, event, new ObjectMapper().readTree("{}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         Pageable pageable = PageRequest.of(0, 10);
         Page<Attempt> page = new PageImpl<>(List.of(attempt));
 
@@ -131,7 +133,8 @@ public class AttemptQueryServiceTest {
         Event event = new Event("payment.completed", app);
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         Message message = new Message(app, event, new ObjectMapper().readTree("{}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         // Stub
         when(attemptRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(attempt.getId(), app.getId(),

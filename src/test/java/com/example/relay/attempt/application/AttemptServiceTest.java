@@ -12,6 +12,8 @@ import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -35,6 +37,9 @@ public class AttemptServiceTest {
     @Mock
     private AttemptRepository attemptRepository;
 
+    @Mock
+    private DeliveryRepository deliveryRepository;
+
     @InjectMocks
     private AttemptService underTest;
 
@@ -55,6 +60,7 @@ public class AttemptServiceTest {
 
         // Stub
         when(attemptRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(deliveryRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
         List<Attempt> result = underTest.createFromSubscriptionList(subscriptions, message);
@@ -66,6 +72,7 @@ public class AttemptServiceTest {
             assertEquals(AttemptStatus.CREATED, attempt.getStatus());
             assertEquals(message.getId(), attempt.getMessage().getId());
             assertEquals(app.getId(), attempt.getApp().getId());
+            assertEquals(message.getId(), attempt.getDelivery().getMessage().getId());
         }
         assertEquals(endpoint1.getId(), result.get(0).getEndpoint().getId());
         assertEquals(endpoint2.getId(), result.get(1).getEndpoint().getId());
@@ -133,7 +140,8 @@ public class AttemptServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
         Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         Instant nextRetryAt = Instant.now().plusSeconds(30);
 
         // Stub
@@ -158,7 +166,8 @@ public class AttemptServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
         Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         int responseCode = 200;
         String responseBody = "{\"success\": \"true\"}";
         Long latencyMs = 153L;
@@ -190,7 +199,8 @@ public class AttemptServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
         Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         AttemptStatus status = AttemptStatus.FAILED_RETRYING;
         Instant nextRetryAt = Instant.now();
         String lastError = "x".repeat(20_000);
@@ -225,7 +235,8 @@ public class AttemptServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
         Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         AttemptStatus status = AttemptStatus.DEAD;
         int responseCode = 500;
         String responseBody = "x".repeat(20_000);
@@ -259,7 +270,8 @@ public class AttemptServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
         Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         Instant nextRetryAt = Instant.now().plusSeconds(30);
         int responseCode = 500;
         String responseBody = "internal error";
@@ -297,7 +309,8 @@ public class AttemptServiceTest {
         Event event = new Event("payment.completed", app);
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
-        Attempt original = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt original = new Attempt(app, message, endpoint, delivery, 6);
         original.setStatus(AttemptStatus.DEAD);
 
         // Stub

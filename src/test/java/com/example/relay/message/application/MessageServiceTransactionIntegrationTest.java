@@ -9,6 +9,7 @@ import com.example.relay.app.domain.App;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -44,6 +45,9 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
     private AttemptRepository attemptRepository;
 
     @Autowired
+    private DeliveryRepository deliveryRepository;
+
+    @Autowired
     private EnvironmentRepository environmentRepository;
 
     @Autowired
@@ -74,7 +78,10 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
     void setUp() {
         // attemptRepository is @MockitoBean here, so it cannot clear real attempt rows left by
         // other test classes - and those rows FK-reference messages. Raw SQL first, then messages.
+        // deliveries must go before messages too - it FK-references messages directly, and
+        // AttemptService now creates one real Delivery row per (message, endpoint) pair.
         jdbcTemplate.update("DELETE FROM attempts");
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
     }
 
@@ -118,6 +125,7 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
         // Explicit cleanup to remove this test's created fixtures. This test is not @Transactional,
         // so manual cleanup ensures no data persists to affect subsequent tests.
         subscriptionRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();

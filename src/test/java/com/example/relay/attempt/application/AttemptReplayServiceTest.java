@@ -15,6 +15,7 @@ import com.example.relay.attempt.exception.AttemptNotDeadException;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.exception.ReplayEndpointInactiveException;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
@@ -62,7 +63,8 @@ class AttemptReplayServiceTest {
         Event event = new Event("payment.completed", app);
         Endpoint endpoint = new Endpoint("EP 1", "https://example.com/webhook", "whsec_1", app);
         Message message = new Message(app, event, new ObjectMapper().readTree("{\"amount\":1}"));
-        deadAttempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        deadAttempt = new Attempt(app, message, endpoint, delivery, 6);
         deadAttempt.setStatus(AttemptStatus.DEAD);
     }
 
@@ -114,7 +116,7 @@ class AttemptReplayServiceTest {
     @Test
     void replay_createsAndPublishesTheReplay_whenEligible() {
         Attempt replayAttempt = new Attempt(deadAttempt.getApp(), deadAttempt.getMessage(),
-                deadAttempt.getEndpoint(), 7);
+                deadAttempt.getEndpoint(), deadAttempt.getDelivery(), 7);
 
         when(attemptRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(deadAttempt.getId(),
                 appId, environmentId, userId)).thenReturn(Optional.of(deadAttempt));

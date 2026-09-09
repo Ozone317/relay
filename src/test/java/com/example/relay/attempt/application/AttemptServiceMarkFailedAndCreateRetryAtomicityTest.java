@@ -21,6 +21,8 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -66,12 +68,16 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
     @Autowired
     private MessageRepository messageRepository;
 
+    @Autowired
+    private DeliveryRepository deliveryRepository;
+
     private Endpoint endpoint;
     private Message message;
 
     @BeforeEach
     void setUp() {
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
@@ -92,7 +98,9 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
     @Test
     void aFailureWhileCreatingTheRetry_rollsBackTheMarkFailedWriteToo() {
         // Arrange - a claimed (IN_FLIGHT) attempt, matching what DeliveryWorker always passes in
-        UUID attemptId = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 1)).getId();
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
+        UUID attemptId = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 1))
+                .getId();
         attemptService.claim(attemptId, Instant.now());
 
         // The retry row is the only save() call that sets status=SCHEDULED - target only that

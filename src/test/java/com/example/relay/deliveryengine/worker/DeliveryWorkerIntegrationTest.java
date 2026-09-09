@@ -12,6 +12,8 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -67,6 +69,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     private AttemptRepository attemptRepository;
 
     @Autowired
+    private DeliveryRepository deliveryRepository;
+
+    @Autowired
     private RabbitTemplate rabbitTemplate;
 
     @Autowired
@@ -116,6 +121,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     private void clearDatabase() {
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
@@ -139,8 +145,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         Endpoint endpoint = endpointRepository.save(new Endpoint("EP 1", url, "whsec_1", app));
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = messageRepository.save(new Message(app, event, body));
+        Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
 
-        return attemptRepository.save(new Attempt(app, message, endpoint, attemptNo));
+        return attemptRepository.save(new Attempt(app, message, endpoint, delivery, attemptNo));
     }
 
     @Test

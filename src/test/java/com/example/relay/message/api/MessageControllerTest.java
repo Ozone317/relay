@@ -14,6 +14,7 @@ import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.common.security.AuthProperties;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CsrfHeaderFilter;
 import com.example.relay.common.security.CustomUserDetailsService;
@@ -93,8 +94,10 @@ public class MessageControllerTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         MessageCreateDto request = new MessageCreateDto(event.getId(), body);
         Message message = new Message(app, event, body);
-        List<Attempt> attempts =
-                List.of(new Attempt(app, message, endpointOne, 1), new Attempt(app, message, endpointTwo, 1));
+        Delivery deliveryOne = new Delivery(app, message, endpointOne);
+        Delivery deliveryTwo = new Delivery(app, message, endpointTwo);
+        List<Attempt> attempts = List.of(new Attempt(app, message, endpointOne, deliveryOne, 1),
+                new Attempt(app, message, endpointTwo, deliveryTwo, 1));
         MessageCreateResult result = new MessageCreateResult(message, attempts);
         MessageResponseDto response = new MessageResponseDto(message.getId(), app.getId(), event.getId(),
                 event.getName(), body, message.getCreatedAt());

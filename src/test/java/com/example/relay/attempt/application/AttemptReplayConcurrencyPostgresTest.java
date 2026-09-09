@@ -9,6 +9,8 @@ import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.exception.ActiveAttemptAlreadyExistsException;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -44,6 +46,8 @@ class AttemptReplayConcurrencyPostgresTest implements SharedPostgresContainer {
     @Autowired
     private AttemptRepository attemptRepository;
     @Autowired
+    private DeliveryRepository deliveryRepository;
+    @Autowired
     private UserRepository userRepository;
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
@@ -66,6 +70,7 @@ class AttemptReplayConcurrencyPostgresTest implements SharedPostgresContainer {
     @BeforeEach
     void setUp() throws Exception {
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
@@ -82,7 +87,8 @@ class AttemptReplayConcurrencyPostgresTest implements SharedPostgresContainer {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = messageRepository.save(new Message(app, event, body));
 
-        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
         deadAttempt = attemptRepository.save(attempt);
 

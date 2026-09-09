@@ -12,6 +12,7 @@ import com.example.relay.attempt.api.dto.AttemptDetailDto;
 import com.example.relay.attempt.api.dto.AttemptSummaryDto;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -39,7 +40,8 @@ public class AttemptMapperTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         JsonNode body = new ObjectMapper().readTree("{\"amount\": 4999}");
         Message message = new Message(app, event, body);
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         attempt.setStatus(AttemptStatus.SUCCEEDED);
         attempt.setResponseCode(200);
         attempt.setLatencyMs(120L);
@@ -69,7 +71,8 @@ public class AttemptMapperTest {
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         JsonNode body = new ObjectMapper().readTree("{\"amount\": 4999}");
         Message message = new Message(app, event, body);
-        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 2);
         attempt.setStatus(AttemptStatus.FAILED_RETRYING);
         attempt.setResponseCode(503);
         attempt.setResponseBody("Service Unavailable");

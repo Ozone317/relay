@@ -9,6 +9,8 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
@@ -53,6 +55,9 @@ public class WaitTierRoundTripIntegrationTest implements SharedPostgresContainer
     private AttemptRepository attemptRepository;
 
     @Autowired
+    private DeliveryRepository deliveryRepository;
+
+    @Autowired
     private RabbitTemplate rabbitTemplate;
 
     @Autowired
@@ -81,6 +86,7 @@ public class WaitTierRoundTripIntegrationTest implements SharedPostgresContainer
     @BeforeEach
     void setUp() throws IOException {
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
@@ -119,7 +125,8 @@ public class WaitTierRoundTripIntegrationTest implements SharedPostgresContainer
         com.example.relay.message.domain.Message message =
                 messageRepository.save(new com.example.relay.message.domain.Message(app, event, body));
 
-        Attempt retry = attemptRepository.save(new Attempt(app, message, endpoint, 2));
+        Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
+        Attempt retry = attemptRepository.save(new Attempt(app, message, endpoint, delivery, 2));
         retry.setStatus(AttemptStatus.SCHEDULED);
         retry.setNextRetryAt(Instant.now().plusSeconds(30));
         attemptRepository.save(retry);
