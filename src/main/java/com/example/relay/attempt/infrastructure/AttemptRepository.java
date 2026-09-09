@@ -88,9 +88,4 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
     Optional<Attempt> findByIdAndDeliveryIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(UUID attemptId,
             UUID deliveryId, UUID appId, UUID environmentId, UUID userId);
-
-    // Kept for AttemptReplayService, which is unaffected by this task and stays on the flat,
-    // non-delivery-scoped ownership check until Task 8 replaces it with DeliveryReplayService.
-    Optional<Attempt> findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(UUID attemptId, UUID appId,
-            UUID environmentId, UUID userId);
 }

@@ -1,4 +1,4 @@
-package com.example.relay.attempt.exception;
+package com.example.relay.delivery.exception;
 
 import java.util.UUID;
 

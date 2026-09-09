@@ -2,11 +2,11 @@ package com.example.relay.common.exception;
 
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
-import com.example.relay.attempt.exception.AttemptNotDeadException;
-import com.example.relay.attempt.exception.ReplayEndpointInactiveException;
-import com.example.relay.attempt.exception.ActiveAttemptAlreadyExistsException;
 import com.example.relay.common.security.RefreshCookieFactory;
+import com.example.relay.delivery.exception.ActiveAttemptAlreadyExistsException;
+import com.example.relay.delivery.exception.DeliveryNotDeadException;
 import com.example.relay.delivery.exception.DeliveryNotFoundException;
+import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
 import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
@@ -128,12 +128,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
 
-    @ExceptionHandler(AttemptNotDeadException.class)
-    public ResponseEntity<ApiError> handleAttemptNotDeadException(AttemptNotDeadException ex) {
-        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
-    }
-
     @ExceptionHandler(ReplayEndpointInactiveException.class)
     public ResponseEntity<ApiError> handleReplayEndpointInactiveException(ReplayEndpointInactiveException ex) {
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
@@ -150,6 +144,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleDeliveryNotFoundException(DeliveryNotFoundException ex) {
         ApiError error = ApiError.of(HttpStatus.NOT_FOUND.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    @ExceptionHandler(DeliveryNotDeadException.class)
+    public ResponseEntity<ApiError> handleDeliveryNotDeadException(DeliveryNotDeadException ex) {
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**
