@@ -386,31 +386,27 @@ Query parameters on the top-level list (`GET /`), all optional:
 `GET /{deliveryId}/attempts` takes only standard pagination params (`page`, `size`, `sort`) — no
 filters, since you're already scoped to one delivery.
 
-⚠️ **There is no default sort on either list endpoint.** Neither the top-level delivery query nor
-the nested attempts query declares a `@PageableDefault` or an `ORDER BY`, so results come back in
-whatever order the database returns them if you omit `sort` — your table will appear to shuffle
-between pages if you don't pass one explicitly.
+✅ **Fixed 2026-09-09: both list endpoints now default to a stable sort when you omit `sort`
+entirely** — `deliveryCreatedAt,desc` on the top-level delivery list, `attemptNo,desc` on the nested
+attempts list (`@PageableDefault` on both controller methods). Previously, omitting `sort` returned
+whatever order the database happened to produce, which could shuffle rows across pages; that's no
+longer the case. You can still pass an explicit `sort` to override the default.
 
-🐛 **Confirmed bug, live-tested 2026-09-09: `sort=createdAt,desc` on the top-level delivery list
-(`GET /{appId}/deliveries`) crashes with a `500`,** not the `400` you'd expect for a bad parameter.
-The list is backed by a `DeliveryStatus` JPA projection whose actual field is named
-`deliveryCreatedAt` — `DeliverySummaryDto.createdAt` is renamed on the way out, but Spring Data's
-sort parsing runs against the entity's real field name, not the DTO's, and there's no
-`@JsonProperty`-style aliasing for it. Passing `createdAt` throws
-`PropertyReferenceException: No property 'createdAt' found for type 'DeliveryStatus'`, which the
-generic exception handler reports as a `500 "Internal server error"` — indistinguishable from a real
-server fault from the response body alone. **Use `sort=deliveryCreatedAt,desc` instead** (confirmed
-working, verbatim response verified below) — this is the one place in the whole API where the query
-parameter name doesn't match the JSON field name it appears to sort. This has been reported; treat it
-as a live bug, not a documentation error, until you hear otherwise.
+✅ **Fixed 2026-09-09, commit `8d39714`.** `sort=createdAt` (and the other
+two DTO/entity aliasing mismatches — `id`/`deliveryId`, `latestAttemptNo`/`attemptNo`) used to crash
+with an unhandled `500` instead of a clean `400`. The list is backed by a `DeliveryStatus` JPA
+projection whose actual field is named `deliveryCreatedAt` — `DeliverySummaryDto.createdAt` is
+renamed on the way out — and Spring Data's sort parsing runs against the entity's real field name,
+not the DTO's. A `DeliverySortTranslator` now translates the DTO-facing aliases (`id`, `createdAt`,
+`latestAttemptNo`) to their real entity property names before the query runs, and rejects anything
+else with a clean **400** (`InvalidSortPropertyException`, listing the legal sortable fields) instead
+of a `500`. **You can now safely use either `sort=createdAt,desc` or `sort=deliveryCreatedAt,desc`** —
+both work identically.
 
-```json
-// GET .../deliveries?sort=deliveryCreatedAt,desc  →  200, works
-// GET .../deliveries?sort=createdAt,desc          →  500 {"status":500,"message":"Internal server error"}
-```
-
-The nested attempt list has no such problem — `sort=attemptNo,asc` (or any real `Attempt` field name,
-including `createdAt`, which genuinely exists on that entity) works as expected, confirmed live.
+The nested attempt list never had this problem — `sort=attemptNo,asc` (or any real `Attempt` field
+name, including `createdAt`, which genuinely exists on that entity) works as expected. A garbage
+`sort` value there now also gets a clean 400 (same `DeliverySortTranslator` mechanism) instead of
+whatever Spring Data's default behavior was before.
 
 Date filters on the delivery list apply to the **delivery's own** `createdAt` (when the underlying
 message/endpoint pairing was first created), not to individual attempt timestamps.
@@ -465,22 +461,21 @@ This is what the artifact's Retry button should actually call. No request body.
 updated state, reflecting the newly created attempt (`attemptCount` incremented, `latestAttemptNo`
 bumped, `status` back to `CREATED`/`IN_FLIGHT`).
 
-🐛 **Confirmed bug, live-tested 2026-09-09: the response body is stale — do not trust it.** Two
-back-to-back live tests both showed the same thing: `POST /replay`'s `201` body reported the
-delivery's state **from immediately before the replay** (e.g. `attemptCount: 7, status: "DEAD",
-responseCode: 500`), while a separate `GET /{deliveryId}` issued right after — sometimes only
-seconds later, once the new attempt had actually resolved — correctly showed the up-to-date state
-(`attemptCount: 8, status: "SUCCEEDED", responseCode: 200`). The `201` status code and the fact that
-a new attempt row genuinely gets created are both real; only the **body** of this specific response
-is unreliable. **Do not render anything from the replay response directly — treat the `201` purely
-as "the replay was accepted," then immediately re-`GET /{deliveryId}` (and `/{deliveryId}/attempts`
-if you need the new attempt's id) to get the real, current state.** This contradicts a comment in the
-backend source claiming this read happens "after commit" and reflects the new attempt — that intent
-is not what was observed. This has been reported; treat it as a live bug, not a documentation error,
-until you hear otherwise.
+✅ **Fixed 2026-09-09, commit `97b4261` — the response body is no longer
+stale.** Root cause: Spring's Open-Session-In-View binds one Hibernate session to the whole HTTP
+request; the `DeliveryStatus` row this endpoint loads early in the request stayed in that session's
+identity map, and because `DeliveryStatus` is `@Immutable`, the later "read after commit" `findById`
+silently returned the same pre-replay instance instead of hitting the database again. The fix detaches
+that row from the session (`entityManager.detach(...)`) right before the final read, so it now
+genuinely re-queries the `delivery_status` view post-commit. **The `201` response body now reliably
+reflects the newly-created attempt** (`attemptCount` incremented, `latestAttemptNo` bumped, `status`
+back to `CREATED`/`IN_FLIGHT`) — you can render it directly without a follow-up `GET`. A follow-up
+`GET /{deliveryId}` is no longer *required* for correctness, though polling it (or `/attempts`) is
+still the right move if you're waiting for the replay's eventual outcome (`SUCCEEDED`/`DEAD`), since
+that resolves asynchronously after this response returns.
 
-The **new attempt's id is never in this response body regardless of the staleness bug above** — by
-design, this endpoint returns a delivery-shaped DTO, not an attempt-shaped one. To find it, call
+The **new attempt's id is never in this response body** — by design, this endpoint returns a
+delivery-shaped DTO, not an attempt-shaped one, regardless of the staleness bug fixed above. To find it, call
 `GET /{deliveryId}/attempts` and take the row with the highest `attemptNo`, then
 `GET /{deliveryId}/attempts/{newAttemptId}` for the full detail.
 
@@ -673,7 +668,7 @@ authenticated data. If you use Next.js, mark the authenticated tree `"use client
 5. **Subscriptions** (the `PUT`-based checkbox panel).
 6. **Push message tab.** Handle the 422 no-subscribers case explicitly.
 7. **History tab.** Now a delivery list (§5.8): pagination, filters, `sort=deliveryCreatedAt,desc`
-   (**not** `createdAt` — see §5.8's ⚠️, that crashes with a 500), a delivery detail view, and a
+   (`sort=createdAt,desc` also works now — see §5.8), a delivery detail view, and a
    drill-down to that delivery's attempts (`sort=attemptNo,asc`), all six statuses.
 8. **Replay.** Wire the Retry button (§5.8.1) to `POST .../deliveries/{deliveryId}/replay`, gated to
    `DEAD` deliveries only. If you built step 7 against the v2 flat-attempts contract, this is likely
