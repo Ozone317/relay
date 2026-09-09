@@ -2,6 +2,7 @@ package com.example.relay.delivery.api;
 
 import com.example.relay.attempt.api.dto.AttemptDetailDto;
 import com.example.relay.attempt.domain.Attempt;
+import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.mapper.AttemptMapper;
 import com.example.relay.common.security.AuthenticatedUser;
@@ -18,6 +19,8 @@ import java.time.Instant;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -27,8 +30,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.example.relay.attempt.domain.AttemptStatus;
 
 @RestController
 @RequestMapping("/api/v1/environments/{environmentId}/apps/{appId}/deliveries")
@@ -56,10 +57,11 @@ public class DeliveryController {
         @RequestParam(required = false) Instant createdFrom,
         @RequestParam(required = false) Instant createdTo,
         @AuthenticationPrincipal AuthenticatedUser user,
-        Pageable pageable
+        @PageableDefault(sort = "deliveryCreatedAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
+        Pageable translated = DeliverySortTranslator.translateForDeliveryStatus(pageable);
         Page<DeliveryStatus> deliveries = deliveryQueryService.getPage(
-            appId, environmentId, user.getId(), endpointId, status, createdFrom, createdTo, pageable
+            appId, environmentId, user.getId(), endpointId, status, createdFrom, createdTo, translated
         );
 
         return ResponseEntity.ok(deliveries.map(deliveryMapper::toSummaryDto));
@@ -82,10 +84,11 @@ public class DeliveryController {
         @PathVariable UUID appId,
         @PathVariable UUID deliveryId,
         @AuthenticationPrincipal AuthenticatedUser user,
-        Pageable pageable
+        @PageableDefault(sort = "attemptNo", direction = Sort.Direction.DESC) Pageable pageable
     ) throws DeliveryNotFoundException {
+        Pageable translated = DeliverySortTranslator.translateForAttempt(pageable);
         Page<Attempt> attempts = deliveryQueryService.getAttempts(deliveryId, appId, environmentId, user.getId(),
-                pageable);
+                translated);
 
         return ResponseEntity.ok(attempts.map(deliveryMapper::toAttemptSummaryDto));
     }

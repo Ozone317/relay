@@ -6,6 +6,7 @@ import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.delivery.exception.ActiveAttemptAlreadyExistsException;
 import com.example.relay.delivery.exception.DeliveryNotDeadException;
 import com.example.relay.delivery.exception.DeliveryNotFoundException;
+import com.example.relay.delivery.exception.InvalidSortPropertyException;
 import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.endpoint.exception.EndpointAlreadyExistsException;
 import com.example.relay.endpoint.exception.EndpointNotFoundException;
@@ -150,6 +151,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleDeliveryNotDeadException(DeliveryNotDeadException ex) {
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(InvalidSortPropertyException.class)
+    public ResponseEntity<ApiError> handleInvalidSortPropertyException(InvalidSortPropertyException ex) {
+        ApiError error = ApiError.of(HttpStatus.BAD_REQUEST.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 
     /**
