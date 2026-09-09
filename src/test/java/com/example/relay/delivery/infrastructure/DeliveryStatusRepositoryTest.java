@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
-import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
@@ -28,9 +27,6 @@ class DeliveryStatusRepositoryTest implements SharedPostgresContainer {
 
     @Autowired
     private DeliveryStatusRepository underTest;
-
-    @Autowired
-    private AttemptRepository attemptRepository;
 
     @Autowired
     private TestEntityManager testEntityManager;

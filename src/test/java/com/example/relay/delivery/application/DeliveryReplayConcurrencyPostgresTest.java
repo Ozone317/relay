@@ -39,10 +39,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * Proves that idx_attempts_one_active_per_message_endpoint - not the app-level
- * existsByMessageIdAndEndpointIdAndStatusIn pre-check - is what actually stops a concurrent double
- * replay. The pre-check is only a fast path; two threads that both pass it and race into
- * AttemptService.createReplay can only be arbitrated by the real DB constraint.
+ * Proves that under concurrent replay of the same delivery, exactly one replay survives - whichever
+ * layer ends up arbitrating the race.
+ *
+ * <p>
+ * This does NOT prove that idx_attempts_one_active_per_message_endpoint specifically (rather than
+ * the app-level existsByMessageIdAndEndpointIdAndStatusIn pre-check) is what stops the loser: if
+ * thread A completes before thread B reaches its pre-check, B is rejected by the pre-check, not the
+ * DB constraint. Only when both threads pass the pre-check and race into
+ * AttemptService.createReplay does the real DB constraint arbitrate - this test cannot force that
+ * interleaving, so it should be read as "one winner, one loser, layer unspecified" rather than as
+ * proof the DB constraint is what's load-bearing. See DeliveryReplayServiceTest's
+ * replay_throwsActiveAttemptAlreadyExists_whenCreateReplayLosesTheInsertRace for a test that does
+ * pin down the DB-constraint path specifically, by mocking the fast-path check to pass and the
+ * insert to fail.
  *
  * <p>
  * Ported from the pre-Task-8 AttemptReplayConcurrencyPostgresTest onto DeliveryReplayService's
