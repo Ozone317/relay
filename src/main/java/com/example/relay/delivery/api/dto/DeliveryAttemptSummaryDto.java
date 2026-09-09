@@ -1,19 +1,14 @@
-package com.example.relay.attempt.api.dto;
+package com.example.relay.delivery.api.dto;
 
 import com.example.relay.attempt.domain.AttemptStatus;
 import java.time.Instant;
 import java.util.UUID;
 
-public record AttemptDetailDto(
+public record DeliveryAttemptSummaryDto(
     UUID id,
-    UUID deliveryId,
     int attemptNo,
     AttemptStatus status,
     Integer responseCode,
-    String responseBody,
-    String lastError,
     Long latencyMs,
-    Instant nextRetryAt,
-    Instant createdAt,
-    Instant updatedAt
+    Instant createdAt
 ) {}

@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.api.dto.AttemptDetailDto;
-import com.example.relay.attempt.api.dto.AttemptSummaryDto;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.delivery.domain.Delivery;
@@ -28,37 +27,6 @@ public class AttemptMapperTest {
     @BeforeEach
     void setUp() {
         underTest = new AttemptMapper();
-    }
-
-    @Test
-    void toSummaryDto_mapsAttemptToAttemptSummaryDto() throws Exception {
-        // Arrange
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
-        JsonNode body = new ObjectMapper().readTree("{\"amount\": 4999}");
-        Message message = new Message(app, event, body);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-        attempt.setStatus(AttemptStatus.SUCCEEDED);
-        attempt.setResponseCode(200);
-        attempt.setLatencyMs(120L);
-
-        // Act
-        AttemptSummaryDto result = underTest.toSummaryDto(attempt);
-
-        // Assert
-        assertEquals(attempt.getId(), result.id());
-        assertEquals("payment.completed", result.eventName());
-        assertEquals(endpoint.getId(), result.endpointId());
-        assertEquals("Production", result.endpointName());
-        assertEquals(1, result.attemptNo());
-        assertEquals(AttemptStatus.SUCCEEDED, result.status());
-        assertEquals(200, result.responseCode());
-        assertEquals(120L, result.latencyMs());
-        assertEquals(attempt.getCreatedAt(), result.createdAt());
     }
 
     @Test
@@ -84,11 +52,7 @@ public class AttemptMapperTest {
 
         // Assert
         assertEquals(attempt.getId(), result.id());
-        assertEquals("payment.completed", result.eventName());
-        assertEquals(endpoint.getId(), result.endpointId());
-        assertEquals("Production", result.endpointName());
-        assertEquals(message.getId(), result.messageId());
-        assertEquals(body, result.payload());
+        assertEquals(attempt.getDelivery().getId(), result.deliveryId());
         assertEquals(2, result.attemptNo());
         assertEquals(AttemptStatus.FAILED_RETRYING, result.status());
         assertEquals(503, result.responseCode());

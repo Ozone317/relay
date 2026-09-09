@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
+import com.example.relay.attempt.exception.AttemptNotFoundException;
+import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.exception.DeliveryNotFoundException;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
@@ -37,6 +39,8 @@ class DeliveryQueryServiceTest {
     private DeliveryStatusRepository deliveryStatusRepository;
     @Mock
     private DeliveryRepository deliveryRepository;
+    @Mock
+    private AttemptRepository attemptRepository;
 
     private DeliveryQueryService underTest;
 
@@ -49,7 +53,8 @@ class DeliveryQueryServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        underTest = new DeliveryQueryService(appRepository, deliveryStatusRepository, deliveryRepository);
+        underTest = new DeliveryQueryService(appRepository, deliveryStatusRepository, deliveryRepository,
+                attemptRepository);
 
         environmentId = UUID.randomUUID();
         appId = UUID.randomUUID();
@@ -108,5 +113,38 @@ class DeliveryQueryServiceTest {
 
         assertEquals(status, result.status());
         assertEquals(message.getBody(), result.payload());
+    }
+
+    @Test
+    void getAttempts_throwsDeliveryNotFound_whenNoMatchingDeliveryExists() {
+        UUID deliveryId = UUID.randomUUID();
+        when(deliveryRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(deliveryId, appId,
+                environmentId, userId)).thenReturn(Optional.empty());
+
+        assertThrows(DeliveryNotFoundException.class,
+                () -> underTest.getAttempts(deliveryId, appId, environmentId, userId, Pageable.unpaged()));
+    }
+
+    @Test
+    void getAttempts_delegatesToAttemptRepository_whenDeliveryExists() {
+        Delivery delivery = new Delivery(app, message, endpoint);
+        when(deliveryRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(delivery.getId(), appId,
+                environmentId, userId)).thenReturn(Optional.of(delivery));
+        when(attemptRepository.findByDeliveryId(delivery.getId(), Pageable.unpaged())).thenReturn(Page.empty());
+
+        Page<?> result = underTest.getAttempts(delivery.getId(), appId, environmentId, userId, Pageable.unpaged());
+
+        assertEquals(0, result.getTotalElements());
+    }
+
+    @Test
+    void getAttemptDetail_throwsAttemptNotFound_whenNoMatchExists() {
+        UUID attemptId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        when(attemptRepository.findByIdAndDeliveryIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(attemptId,
+                deliveryId, appId, environmentId, userId)).thenReturn(Optional.empty());
+
+        assertThrows(AttemptNotFoundException.class,
+                () -> underTest.getAttemptDetail(attemptId, deliveryId, appId, environmentId, userId));
     }
 }

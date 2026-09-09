@@ -2,7 +2,10 @@ package com.example.relay.delivery.application;
 
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
+import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.attempt.exception.AttemptNotFoundException;
+import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.domain.DeliveryStatus;
 import com.example.relay.delivery.exception.DeliveryNotFoundException;
@@ -22,12 +25,14 @@ public class DeliveryQueryService {
     private final AppRepository appRepository;
     private final DeliveryStatusRepository deliveryStatusRepository;
     private final DeliveryRepository deliveryRepository;
+    private final AttemptRepository attemptRepository;
 
     public DeliveryQueryService(AppRepository appRepository, DeliveryStatusRepository deliveryStatusRepository,
-            DeliveryRepository deliveryRepository) {
+            DeliveryRepository deliveryRepository, AttemptRepository attemptRepository) {
         this.appRepository = appRepository;
         this.deliveryStatusRepository = deliveryStatusRepository;
         this.deliveryRepository = deliveryRepository;
+        this.attemptRepository = attemptRepository;
     }
 
     public Page<DeliveryStatus> getPage(UUID appId, UUID environmentId, UUID userId, UUID endpointId,
@@ -51,4 +56,19 @@ public class DeliveryQueryService {
     }
 
     public record DeliveryDetail(DeliveryStatus status, JsonNode payload) {}
+
+    public Page<Attempt> getAttempts(UUID deliveryId, UUID appId, UUID environmentId, UUID userId,
+            Pageable pageable) {
+        deliveryRepository.findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(deliveryId, appId,
+                environmentId, userId).orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
+
+        return attemptRepository.findByDeliveryId(deliveryId, pageable);
+    }
+
+    public Attempt getAttemptDetail(UUID attemptId, UUID deliveryId, UUID appId, UUID environmentId, UUID userId) {
+        return attemptRepository
+                .findByIdAndDeliveryIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(attemptId, deliveryId, appId,
+                        environmentId, userId)
+                .orElseThrow(() -> new AttemptNotFoundException(attemptId));
+    }
 }
