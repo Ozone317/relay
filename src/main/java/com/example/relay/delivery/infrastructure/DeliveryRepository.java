@@ -7,8 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface DeliveryRepository extends JpaRepository<Delivery, UUID> {
 
-    Optional<Delivery> findByMessageIdAndEndpointId(UUID messageId, UUID endpointId);
-
     Optional<Delivery> findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(UUID id, UUID appId,
             UUID environmentId, UUID userId);
 }

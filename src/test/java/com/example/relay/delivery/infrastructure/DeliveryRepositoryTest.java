@@ -1,6 +1,5 @@
 package com.example.relay.delivery.infrastructure;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,18 +49,6 @@ class DeliveryRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
-    }
-
-    @Test
-    void save_thenFindByMessageIdAndEndpointId_returnsTheSameDelivery() throws Exception {
-        arrangeFixtures();
-        Delivery delivery = new Delivery(app, message, endpoint);
-        testEntityManager.persistAndFlush(delivery);
-
-        Optional<Delivery> found = underTest.findByMessageIdAndEndpointId(message.getId(), endpoint.getId());
-
-        assertTrue(found.isPresent());
-        assertEquals(delivery.getId(), found.get().getId());
     }
 
     @Test

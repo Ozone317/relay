@@ -49,6 +49,12 @@ public class DeliveryQueryService {
                 .findByIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(deliveryId, appId, environmentId, userId)
                 .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
 
+        // Structurally unreachable in practice: delivery_status inner-joins attempts (V5), and a
+        // Delivery is only ever created in the same transaction as its first Attempt (see
+        // AttemptService), so a Delivery row existing (checked above) guarantees a matching
+        // delivery_status row exists too. Kept as a defensive orElseThrow rather than an unchecked
+        // .get() so a future change to that invariant fails loudly instead of NPE-ing - do not
+        // "simplify" this into believing the row can never be missing.
         DeliveryStatus status = deliveryStatusRepository.findById(deliveryId)
                 .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
 
