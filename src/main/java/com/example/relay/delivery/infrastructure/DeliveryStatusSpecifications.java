@@ -10,11 +10,26 @@ import java.util.UUID;
 import org.springframework.data.jpa.domain.Specification;
 
 /**
- * Mirrors {@link com.example.relay.attempt.infrastructure.AttemptSpecifications} exactly - builds
- * the deliveries-list query from only the filters actually supplied, using JPA Criteria so every
- * bind parameter is correctly typed. Do not replace this with a native query using
- * {@code (:param IS NULL OR ...)} - see AttemptSpecifications' own javadoc for why that broke on
- * PostgreSQL (handoff Section 16, commit 3c66e67).
+ * Builds the deliveries-list query from only the filters actually supplied, using JPA Criteria so
+ * every bind parameter is correctly typed.
+ *
+ * <p>
+ * This deliberately avoids a single JPQL/native query of the shape {@code (:param IS NULL OR column
+ * = :param)}, which is broken on PostgreSQL: Postgres fixes parameter types at PREPARE time from the
+ * SQL text alone, and a parameter whose only appearance is {@code ? IS NULL} offers nothing to infer
+ * from, so the statement fails with {@code SQLState 42P18 - could not determine data type of
+ * parameter}. That happened on every call regardless of which filters the caller passed, because it
+ * is the syntactic position that defeats inference, not the runtime value. H2 (used for repository
+ * tests at the time this was first discovered, in {@code AttemptSpecifications}) accepted the same
+ * SQL happily, which is why those tests stayed green while the endpoint was completely dead on the
+ * real database (handoff Section 16, commit 3c66e67).
+ *
+ * <p>
+ * Omitting an absent filter instead of neutralising it with {@code IS NULL} sidesteps the whole
+ * class of problem - no untyped parameter is ever emitted - and it keeps the predicate list short
+ * enough for supporting indexes to remain usable, which an {@code OR}-based filter would defeat.
+ * This mirrors the pattern this project first established for attempts in the (now-deleted, see
+ * Task 7) {@code AttemptSpecifications}.
  */
 public final class DeliveryStatusSpecifications {
 
