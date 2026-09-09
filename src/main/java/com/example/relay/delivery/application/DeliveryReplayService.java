@@ -13,6 +13,7 @@ import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.delivery.infrastructure.DeliveryStatusRepository;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
+import jakarta.persistence.EntityManager;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -29,15 +30,17 @@ public class DeliveryReplayService {
     private final AttemptRepository attemptRepository;
     private final AttemptService attemptService;
     private final AttemptPublisher attemptPublisher;
+    private final EntityManager entityManager;
 
     public DeliveryReplayService(DeliveryRepository deliveryRepository,
             DeliveryStatusRepository deliveryStatusRepository, AttemptRepository attemptRepository,
-            AttemptService attemptService, AttemptPublisher attemptPublisher) {
+            AttemptService attemptService, AttemptPublisher attemptPublisher, EntityManager entityManager) {
         this.deliveryRepository = deliveryRepository;
         this.deliveryStatusRepository = deliveryStatusRepository;
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.attemptPublisher = attemptPublisher;
+        this.entityManager = entityManager;
     }
 
     public DeliveryStatus replay(UUID deliveryId, UUID appId, UUID environmentId, UUID userId) {
@@ -78,7 +81,13 @@ public class DeliveryReplayService {
 
         attemptPublisher.publish(replay.getId());
 
-        // Read after commit, not before - reflects the just-created replay attempt.
+        // The DeliveryStatus row loaded at the top of this method is in the session's identity
+        // map, and open-in-view binds one session to the whole request - so a plain findById here
+        // returns that stale instance without issuing any SQL. Re-querying via JPQL would not help
+        // either (Hibernate returns the managed instance without refreshing its state), and
+        // @Immutable means it is never refreshed on flush. Evict it so the read below really hits
+        // the delivery_status view after createReplay's commit.
+        entityManager.detach(current);
         return deliveryStatusRepository.findById(deliveryId)
                 .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
     }
