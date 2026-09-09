@@ -2,7 +2,7 @@ package com.example.relay.message.api;
 
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.common.security.AuthenticatedUser;
-import com.example.relay.delivery.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.message.api.dto.MessageCreateDto;
 import com.example.relay.message.api.dto.MessageCreateResult;
 import com.example.relay.message.api.dto.MessageResponseDto;

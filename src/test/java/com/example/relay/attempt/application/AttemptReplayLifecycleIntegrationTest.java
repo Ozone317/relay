@@ -10,7 +10,7 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
-import com.example.relay.delivery.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;

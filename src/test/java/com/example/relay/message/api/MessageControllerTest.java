@@ -20,7 +20,7 @@ import com.example.relay.common.security.CustomUserDetailsService;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.common.security.SecurityConfig;
-import com.example.relay.delivery.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
