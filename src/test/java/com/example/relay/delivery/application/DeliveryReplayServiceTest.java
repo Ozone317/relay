@@ -27,6 +27,7 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.message.domain.Message;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Optional;
@@ -51,6 +52,8 @@ class DeliveryReplayServiceTest {
     private AttemptService attemptService;
     @Mock
     private AttemptPublisher attemptPublisher;
+    @Mock
+    private EntityManager entityManager;
 
     private DeliveryReplayService underTest;
 
@@ -63,7 +66,7 @@ class DeliveryReplayServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         underTest = new DeliveryReplayService(deliveryRepository, deliveryStatusRepository, attemptRepository,
-                attemptService, attemptPublisher);
+                attemptService, attemptPublisher, entityManager);
 
         environmentId = UUID.randomUUID();
         appId = UUID.randomUUID();
@@ -145,6 +148,13 @@ class DeliveryReplayServiceTest {
     }
 
     @Test
+    // NOTE: this test cannot, by construction, catch the open-in-view stale-read bug that
+    // motivated DeliveryReplayService.replay()'s entityManager.detach(current) call - stubbing two
+    // consecutive findById calls to return different objects encodes the *intended* post-fix
+    // behaviour as if it were automatically true. It is kept as documentation of intent only; the
+    // real regression test is DeliveryReplayHttpIntegrationTest, which goes through the actual HTTP
+    // layer (and therefore the real OSIV-bound Hibernate session) where this bug was only
+    // observable in the first place.
     void replay_createsAndPublishesTheReplay_whenEligible() throws Exception {
         Attempt replayAttempt = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(),
                 delivery, 7);
