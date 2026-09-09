@@ -9,6 +9,7 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -91,7 +92,8 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
         event = new Event("audit.event", app);
         endpoint = new Endpoint("EP", "https://example.com/hook", "whsec_secret", app);
         message = new Message(app, event, new ObjectMapper().readTree("{\"a\":1}"));
-        attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -99,6 +101,7 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
         testEntityManager.persistAndFlush(new Subscription(app, event, endpoint));
     }

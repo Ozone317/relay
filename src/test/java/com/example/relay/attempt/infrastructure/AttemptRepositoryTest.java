@@ -13,6 +13,7 @@ import java.util.UUID;
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -52,7 +53,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -60,6 +62,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -82,7 +85,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -90,6 +94,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now());
@@ -117,9 +122,12 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpointFresh = new Endpoint("testing-fresh", "https://example.com/fresh", "whsec_fresh", app);
         Endpoint endpointStaleWrongStatus =
                 new Endpoint("testing-swrong", "https://example.com/swrong", "whsec_swrong", app);
-        Attempt stale = new Attempt(app, message, endpoint, 1);
-        Attempt fresh = new Attempt(app, message, endpointFresh, 1);
-        Attempt staleButWrongStatus = new Attempt(app, message, endpointStaleWrongStatus, 1);
+        Delivery staleDelivery = new Delivery(app, message, endpoint);
+        Delivery freshDelivery = new Delivery(app, message, endpointFresh);
+        Delivery staleButWrongStatusDelivery = new Delivery(app, message, endpointStaleWrongStatus);
+        Attempt stale = new Attempt(app, message, endpoint, staleDelivery, 1);
+        Attempt fresh = new Attempt(app, message, endpointFresh, freshDelivery, 1);
+        Attempt staleButWrongStatus = new Attempt(app, message, endpointStaleWrongStatus, staleButWrongStatusDelivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -129,6 +137,9 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpointFresh);
         testEntityManager.persistAndFlush(endpointStaleWrongStatus);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(staleDelivery);
+        testEntityManager.persistAndFlush(freshDelivery);
+        testEntityManager.persistAndFlush(staleButWrongStatusDelivery);
         testEntityManager.persistAndFlush(stale);
         testEntityManager.persistAndFlush(fresh);
         testEntityManager.persistAndFlush(staleButWrongStatus);
@@ -174,7 +185,9 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
             Endpoint iterationEndpoint =
                     new Endpoint("testing-" + i, "https://example.com/" + i, "whsec_" + i, app);
             testEntityManager.persistAndFlush(iterationEndpoint);
-            Attempt attempt = new Attempt(app, message, iterationEndpoint, 1);
+            Delivery iterationDelivery = new Delivery(app, message, iterationEndpoint);
+            testEntityManager.persistAndFlush(iterationDelivery);
+            Attempt attempt = new Attempt(app, message, iterationEndpoint, iterationDelivery, 1);
             testEntityManager.persistAndFlush(attempt);
             backdateUpdatedAt(attempt.getId(), longAgo);
         }
@@ -196,7 +209,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -204,6 +218,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now()); // CREATED -> IN_FLIGHT
@@ -226,7 +241,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -234,6 +250,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now()); // updated_at is "now", not stale
@@ -255,7 +272,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1); // stays CREATED
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1); // stays CREATED
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -263,6 +281,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
@@ -284,7 +303,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -292,6 +312,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Simulate a retry that sat in a wait tier for hours before being claimed.
@@ -316,7 +337,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -324,6 +346,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now());
@@ -348,7 +371,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 2);
         attempt.setStatus(AttemptStatus.SCHEDULED);
 
         testEntityManager.persistAndFlush(user);
@@ -357,6 +381,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -382,11 +407,13 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         // are SCHEDULED at once.
         Endpoint endpointNotYetDue =
                 new Endpoint("testing-notyetdue", "https://example.com/notyetdue", "whsec_notyetdue", app);
-        Attempt overdue = new Attempt(app, message, endpoint, 2);
+        Delivery overdueDelivery = new Delivery(app, message, endpoint);
+        Attempt overdue = new Attempt(app, message, endpoint, overdueDelivery, 2);
         overdue.setStatus(AttemptStatus.SCHEDULED);
         overdue.setNextRetryAt(Instant.now().minusSeconds(3600));
 
-        Attempt notYetDue = new Attempt(app, message, endpointNotYetDue, 2);
+        Delivery notYetDueDelivery = new Delivery(app, message, endpointNotYetDue);
+        Attempt notYetDue = new Attempt(app, message, endpointNotYetDue, notYetDueDelivery, 2);
         notYetDue.setStatus(AttemptStatus.SCHEDULED);
         notYetDue.setNextRetryAt(Instant.now().plusSeconds(3600));
 
@@ -397,6 +424,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(endpointNotYetDue);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(overdueDelivery);
+        testEntityManager.persistAndFlush(notYetDueDelivery);
         testEntityManager.persistAndFlush(overdue);
         testEntityManager.persistAndFlush(notYetDue);
 
@@ -418,7 +447,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 2);
         attempt.setStatus(AttemptStatus.SCHEDULED);
         attempt.setNextRetryAt(Instant.now().minusSeconds(3600));
 
@@ -428,6 +458,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -447,7 +478,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 2);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 2);
         attempt.setStatus(AttemptStatus.SCHEDULED);
         attempt.setNextRetryAt(Instant.now().plusSeconds(3600));
 
@@ -457,6 +489,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -476,7 +509,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -484,6 +518,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
@@ -507,7 +542,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -515,6 +551,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now()); // moves it to IN_FLIGHT
@@ -535,7 +572,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
@@ -544,6 +582,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
@@ -567,7 +606,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
         attempt.setDeadLetterNotifiedAt(Instant.now());
 
@@ -577,6 +617,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
@@ -598,7 +639,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
@@ -607,6 +649,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt); // updated_at is "now"
 
         // Act
@@ -628,14 +671,18 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
 
-        Attempt staleUnnotified = new Attempt(app, message, endpoint, 6);
+        // All three share one Delivery: same (message, endpoint) pair, and deliveries has a real
+        // unique constraint on (message_id, endpoint_id).
+        Delivery delivery = new Delivery(app, message, endpoint);
+
+        Attempt staleUnnotified = new Attempt(app, message, endpoint, delivery, 6);
         staleUnnotified.setStatus(AttemptStatus.DEAD);
 
-        Attempt staleButNotified = new Attempt(app, message, endpoint, 6);
+        Attempt staleButNotified = new Attempt(app, message, endpoint, delivery, 6);
         staleButNotified.setStatus(AttemptStatus.DEAD);
         staleButNotified.setDeadLetterNotifiedAt(Instant.now());
 
-        Attempt freshUnnotified = new Attempt(app, message, endpoint, 6);
+        Attempt freshUnnotified = new Attempt(app, message, endpoint, delivery, 6);
         freshUnnotified.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
@@ -644,6 +691,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(staleUnnotified);
         testEntityManager.persistAndFlush(staleButNotified);
         testEntityManager.persistAndFlush(freshUnnotified);
@@ -670,7 +718,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
@@ -679,6 +728,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -701,7 +751,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
@@ -710,6 +761,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claimDeadLetterNotification(attempt.getId(), Instant.now());
@@ -733,8 +785,10 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
         // row per (message_id, endpoint_id) pair, and both attempts here default to CREATED.
         Endpoint endpoint2 = new Endpoint("testing2", "https://example.com/2", "whsec_2", app);
-        Attempt attempt1 = new Attempt(app, message, endpoint, 1);
-        Attempt attempt2 = new Attempt(app, message, endpoint2, 2);
+        Delivery delivery1 = new Delivery(app, message, endpoint);
+        Delivery delivery2 = new Delivery(app, message, endpoint2);
+        Attempt attempt1 = new Attempt(app, message, endpoint, delivery1, 1);
+        Attempt attempt2 = new Attempt(app, message, endpoint2, delivery2, 2);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -743,6 +797,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(endpoint2);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery1);
+        testEntityManager.persistAndFlush(delivery2);
         testEntityManager.persistAndFlush(attempt1);
         testEntityManager.persistAndFlush(attempt2);
 
@@ -767,8 +823,10 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         objectMapper = new ObjectMapper();
         Message message1 = new Message(app1, event1, objectMapper.readTree("{\"name\": \"hello\"}"));
         Message message2 = new Message(app2, event2, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attemptInApp1 = new Attempt(app1, message1, endpoint1, 1);
-        Attempt attemptInApp2 = new Attempt(app2, message2, endpoint2, 1);
+        Delivery deliveryInApp1 = new Delivery(app1, message1, endpoint1);
+        Delivery deliveryInApp2 = new Delivery(app2, message2, endpoint2);
+        Attempt attemptInApp1 = new Attempt(app1, message1, endpoint1, deliveryInApp1, 1);
+        Attempt attemptInApp2 = new Attempt(app2, message2, endpoint2, deliveryInApp2, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -780,6 +838,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpoint2);
         testEntityManager.persistAndFlush(message1);
         testEntityManager.persistAndFlush(message2);
+        testEntityManager.persistAndFlush(deliveryInApp1);
+        testEntityManager.persistAndFlush(deliveryInApp2);
         testEntityManager.persistAndFlush(attemptInApp1);
         testEntityManager.persistAndFlush(attemptInApp2);
 
@@ -802,8 +862,10 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint2 = new Endpoint("testing2", "https://example.com/2", "whsec_2", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attemptToEndpoint1 = new Attempt(app, message, endpoint1, 1);
-        Attempt attemptToEndpoint2 = new Attempt(app, message, endpoint2, 1);
+        Delivery deliveryToEndpoint1 = new Delivery(app, message, endpoint1);
+        Delivery deliveryToEndpoint2 = new Delivery(app, message, endpoint2);
+        Attempt attemptToEndpoint1 = new Attempt(app, message, endpoint1, deliveryToEndpoint1, 1);
+        Attempt attemptToEndpoint2 = new Attempt(app, message, endpoint2, deliveryToEndpoint2, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -812,6 +874,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpoint1);
         testEntityManager.persistAndFlush(endpoint2);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(deliveryToEndpoint1);
+        testEntityManager.persistAndFlush(deliveryToEndpoint2);
         testEntityManager.persistAndFlush(attemptToEndpoint1);
         testEntityManager.persistAndFlush(attemptToEndpoint2);
 
@@ -833,9 +897,11 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt succeeded = new Attempt(app, message, endpoint, 1);
+        // Same (message, endpoint) pair, so they share one Delivery.
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt succeeded = new Attempt(app, message, endpoint, delivery, 1);
         succeeded.setStatus(AttemptStatus.SUCCEEDED);
-        Attempt dead = new Attempt(app, message, endpoint, 6);
+        Attempt dead = new Attempt(app, message, endpoint, delivery, 6);
         dead.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
@@ -844,6 +910,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(succeeded);
         testEntityManager.persistAndFlush(dead);
 
@@ -871,10 +938,14 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpointBeforeRange =
                 new Endpoint("testing-before", "https://example.com/before", "whsec_before", app);
         Endpoint endpointAfterRange = new Endpoint("testing-after", "https://example.com/after", "whsec_after", app);
-        Attempt atFrom = new Attempt(app, message, endpoint, 1);
-        Attempt atTo = new Attempt(app, message, endpointAtTo, 1);
-        Attempt beforeRange = new Attempt(app, message, endpointBeforeRange, 1);
-        Attempt afterRange = new Attempt(app, message, endpointAfterRange, 1);
+        Delivery atFromDelivery = new Delivery(app, message, endpoint);
+        Delivery atToDelivery = new Delivery(app, message, endpointAtTo);
+        Delivery beforeRangeDelivery = new Delivery(app, message, endpointBeforeRange);
+        Delivery afterRangeDelivery = new Delivery(app, message, endpointAfterRange);
+        Attempt atFrom = new Attempt(app, message, endpoint, atFromDelivery, 1);
+        Attempt atTo = new Attempt(app, message, endpointAtTo, atToDelivery, 1);
+        Attempt beforeRange = new Attempt(app, message, endpointBeforeRange, beforeRangeDelivery, 1);
+        Attempt afterRange = new Attempt(app, message, endpointAfterRange, afterRangeDelivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -885,6 +956,10 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpointBeforeRange);
         testEntityManager.persistAndFlush(endpointAfterRange);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(atFromDelivery);
+        testEntityManager.persistAndFlush(atToDelivery);
+        testEntityManager.persistAndFlush(beforeRangeDelivery);
+        testEntityManager.persistAndFlush(afterRangeDelivery);
         testEntityManager.persistAndFlush(atFrom);
         testEntityManager.persistAndFlush(atTo);
         testEntityManager.persistAndFlush(beforeRange);
@@ -920,8 +995,10 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         // Distinct endpoints: idx_attempts_one_active_per_message_endpoint allows only one active
         // row per (message_id, endpoint_id) pair, and both attempts here default to CREATED.
         Endpoint endpointNewer = new Endpoint("testing-newer", "https://example.com/newer", "whsec_newer", app);
-        Attempt older = new Attempt(app, message, endpoint, 1);
-        Attempt newer = new Attempt(app, message, endpointNewer, 1);
+        Delivery olderDelivery = new Delivery(app, message, endpoint);
+        Delivery newerDelivery = new Delivery(app, message, endpointNewer);
+        Attempt older = new Attempt(app, message, endpoint, olderDelivery, 1);
+        Attempt newer = new Attempt(app, message, endpointNewer, newerDelivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -930,6 +1007,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(endpointNewer);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(olderDelivery);
+        testEntityManager.persistAndFlush(newerDelivery);
         testEntityManager.persistAndFlush(older);
         testEntityManager.persistAndFlush(newer);
 
@@ -958,7 +1037,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -966,6 +1046,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -988,7 +1069,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment1);
@@ -997,6 +1079,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -1018,7 +1101,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user1);
         testEntityManager.persistAndFlush(user2);
@@ -1027,6 +1111,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -1048,7 +1133,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app1);
         objectMapper = new ObjectMapper();
         Message message = new Message(app1, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app1, message, endpoint, 1);
+        Delivery delivery = new Delivery(app1, message, endpoint);
+        Attempt attempt = new Attempt(app1, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -1057,6 +1143,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act
@@ -1076,7 +1163,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
 
         testEntityManager.persistAndFlush(user);
         testEntityManager.persistAndFlush(environment);
@@ -1084,6 +1172,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(event);
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
+        testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
         // Act & Assert

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -14,7 +15,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.math.BigInteger;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -47,39 +47,28 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(endpoint);
         testEntityManager.persistAndFlush(message);
 
-        UUID deliveryId = UUID.randomUUID();
-        entityManager.createNativeQuery(
-                "INSERT INTO deliveries (id, app_id, message_id, endpoint_id) VALUES (?, ?, ?, ?)")
-                .setParameter(1, deliveryId)
-                .setParameter(2, app.getId())
-                .setParameter(3, message.getId())
-                .setParameter(4, endpoint.getId())
-                .executeUpdate();
+        Delivery delivery = new Delivery(app, message, endpoint);
+        testEntityManager.persistAndFlush(delivery);
 
         // Two attempts for the same delivery: an earlier failed one, a later scheduled retry.
         // The view must report the LATER one (attempt_no 2), not the earlier one, even though
-        // both rows exist. Uses the CURRENT (pre-Task-4) 4-argument Attempt constructor - Task 4
-        // is what adds the delivery field/argument, and updates this file's two calls to the new
-        // 5-argument form with a real, persisted Delivery, at the same time it removes the
-        // native-SQL delivery_id assignment below in favor of the entity actually carrying it.
-        Attempt first = new Attempt(app, message, endpoint, 1);
+        // both rows exist.
+        Attempt first = new Attempt(app, message, endpoint, delivery, 1);
         testEntityManager.persist(first);
-        entityManager.createNativeQuery("UPDATE attempts SET delivery_id = ?, status = 'FAILED_RETRYING' WHERE id = ?")
-                .setParameter(1, deliveryId)
-                .setParameter(2, first.getId())
+        entityManager.createNativeQuery("UPDATE attempts SET status = 'FAILED_RETRYING' WHERE id = ?")
+                .setParameter(1, first.getId())
                 .executeUpdate();
 
-        Attempt second = new Attempt(app, message, endpoint, 2);
+        Attempt second = new Attempt(app, message, endpoint, delivery, 2);
         testEntityManager.persist(second);
-        entityManager.createNativeQuery("UPDATE attempts SET delivery_id = ?, status = 'SCHEDULED' WHERE id = ?")
-                .setParameter(1, deliveryId)
-                .setParameter(2, second.getId())
+        entityManager.createNativeQuery("UPDATE attempts SET status = 'SCHEDULED' WHERE id = ?")
+                .setParameter(1, second.getId())
                 .executeUpdate();
         testEntityManager.flush();
 
         Object[] row = (Object[]) entityManager
                 .createNativeQuery("SELECT status, attempt_no, attempt_count FROM delivery_status WHERE delivery_id = ?")
-                .setParameter(1, deliveryId)
+                .setParameter(1, delivery.getId())
                 .getSingleResult();
 
         assertEquals("SCHEDULED", row[0]);

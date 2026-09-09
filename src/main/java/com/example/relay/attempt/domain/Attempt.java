@@ -1,6 +1,7 @@
 package com.example.relay.attempt.domain;
 
 import com.example.relay.app.domain.App;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.message.domain.Message;
 import jakarta.persistence.Column;
@@ -44,6 +45,11 @@ public class Attempt {
     @JoinColumn(name = "endpoint_id", nullable = false, updatable = false)
     @Getter
     private Endpoint endpoint;
+
+    @ManyToOne
+    @JoinColumn(name = "delivery_id", nullable = false, updatable = false)
+    @Getter
+    private Delivery delivery;
 
     @Column(name = "attempt_no", nullable = false, updatable = false)
     @Getter
@@ -95,11 +101,12 @@ public class Attempt {
     @Getter
     private Instant updatedAt;
 
-    public Attempt(App app, Message message, Endpoint endpoint, Integer attemptNo) {
+    public Attempt(App app, Message message, Endpoint endpoint, Delivery delivery, Integer attemptNo) {
         this.id = UUID.randomUUID();
         this.app = app;
         this.message = message;
         this.endpoint = endpoint;
+        this.delivery = delivery;
         this.attemptNo = attemptNo;
         this.status = AttemptStatus.CREATED;
     }

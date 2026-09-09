@@ -35,6 +35,7 @@ import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.exception.AttemptNotFoundException;
 import com.example.relay.attempt.mapper.AttemptMapper;
 import com.example.relay.common.security.AuthProperties;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CsrfHeaderFilter;
 import com.example.relay.common.security.CustomUserDetailsService;
@@ -83,7 +84,8 @@ public class AttemptControllerTest {
         Event event = new Event("payment.completed", app);
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         Message message = new Message(app, event, new ObjectMapper().readTree("{}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         AttemptSummaryDto summary = new AttemptSummaryDto(attempt.getId(), event.getName(), endpoint.getId(),
                 endpoint.getName(), attempt.getAttemptNo(), attempt.getStatus(), null, null, attempt.getCreatedAt());
         Page<Attempt> attemptPage = new PageImpl<>(List.of(attempt));
@@ -154,7 +156,8 @@ public class AttemptControllerTest {
         Event event = new Event("payment.completed", app);
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         Message message = new Message(app, event, new ObjectMapper().readTree("{\"amount\": 4999}"));
-        Attempt attempt = new Attempt(app, message, endpoint, 1);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
         AttemptDetailDto detail = new AttemptDetailDto(attempt.getId(), event.getName(), endpoint.getId(),
                 endpoint.getName(), message.getId(), message.getBody(), attempt.getAttemptNo(), attempt.getStatus(),
                 attempt.getResponseCode(), attempt.getResponseBody(), attempt.getLastError(), attempt.getLatencyMs(),
@@ -204,9 +207,10 @@ public class AttemptControllerTest {
         Event event = new Event("payment.completed", app);
         Endpoint endpoint = new Endpoint("Production", "https://example.com/webhook", "whsec_test", app);
         Message message = new Message(app, event, new ObjectMapper().readTree("{}"));
-        Attempt originalDead = new Attempt(app, message, endpoint, 6);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        Attempt originalDead = new Attempt(app, message, endpoint, delivery, 6);
         originalDead.setStatus(AttemptStatus.DEAD);
-        Attempt replayAttempt = new Attempt(app, message, endpoint, 7);
+        Attempt replayAttempt = new Attempt(app, message, endpoint, delivery, 7);
         AttemptSummaryDto dto = new AttemptSummaryDto(replayAttempt.getId(), event.getName(), endpoint.getId(),
                 endpoint.getName(), replayAttempt.getAttemptNo(), replayAttempt.getStatus(), null, null,
                 replayAttempt.getCreatedAt());

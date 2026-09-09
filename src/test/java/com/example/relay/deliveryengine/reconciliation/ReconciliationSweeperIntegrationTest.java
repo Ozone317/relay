@@ -29,6 +29,8 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
@@ -70,6 +72,9 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     private AttemptRepository attemptRepository;
 
     @Autowired
+    private DeliveryRepository deliveryRepository;
+
+    @Autowired
     private RabbitTemplate rabbitTemplate;
 
     @Autowired
@@ -108,6 +113,7 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     @BeforeEach
     void setUp() {
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
@@ -140,8 +146,9 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     }
 
     private Attempt persistAttemptWithUpdatedAt(AttemptStatus status, Instant updatedAt) {
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
         Attempt attempt = attemptRepository.save(new Attempt(
-                endpoint.getApp(), message, endpoint, 1));
+                endpoint.getApp(), message, endpoint, delivery, 1));
         if (status == AttemptStatus.IN_FLIGHT) {
             attemptService.claim(attempt.getId(), Instant.now());
         }
@@ -150,14 +157,16 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     }
 
     private Attempt persistScheduledAttempt(Instant nextRetryAt) {
-        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 2));
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 2));
         attempt.setStatus(AttemptStatus.SCHEDULED);
         attempt.setNextRetryAt(nextRetryAt);
         return attemptRepository.save(attempt);
     }
 
     private Attempt persistDeadAttempt(Instant updatedAt, Instant deadLetterNotifiedAt) {
-        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 6));
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 6));
         attempt.setStatus(AttemptStatus.DEAD);
         attempt.setDeadLetterNotifiedAt(deadLetterNotifiedAt);
         attempt = attemptRepository.save(attempt);
@@ -259,8 +268,10 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
             Endpoint iterationEndpoint = endpointRepository
                     .save(new Endpoint("batch-" + i, "https://example.com/batch-" + i, "whsec_batch_" + i,
                             endpoint.getApp()));
+            Delivery iterationDelivery = deliveryRepository
+                    .save(new Delivery(iterationEndpoint.getApp(), message, iterationEndpoint));
             Attempt attempt = attemptRepository.save(new Attempt(iterationEndpoint.getApp(), message,
-                    iterationEndpoint, 1));
+                    iterationEndpoint, iterationDelivery, 1));
             backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
         }
 
@@ -342,7 +353,8 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         // Reproduces D1: before the fix, claim() left updated_at at its pre-claim value, so a retry
         // claimed after (e.g.) six hours in a wait tier looked immediately stale to recoverInFlight,
         // which would reset it back to CREATED and republish it WHILE the HTTP call was still running.
-        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, 1));
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 1));
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600)); // 6 hours, pre-claim
 
         attemptService.claim(attempt.getId(), Instant.now()); // should stamp updated_at to ~now (Task 2's fix)

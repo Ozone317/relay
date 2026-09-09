@@ -28,6 +28,8 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
@@ -53,6 +55,9 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository attemptRepository;
+
+    @Autowired
+    private DeliveryRepository deliveryRepository;
 
     @Autowired
     private RabbitTemplate rabbitTemplate;
@@ -84,6 +89,7 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
     @BeforeEach
     void setUp() {
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
@@ -102,7 +108,8 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
     }
 
     private Attempt persistDeadAttempt() {
-        Attempt attempt = new Attempt(endpoint.getApp(), message, endpoint, 6);
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
+        Attempt attempt = new Attempt(endpoint.getApp(), message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
         return attemptRepository.save(attempt);
     }

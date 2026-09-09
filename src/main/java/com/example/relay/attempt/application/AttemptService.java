@@ -3,6 +3,8 @@ package com.example.relay.attempt.application;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.subscription.domain.Subscription;
 
@@ -18,9 +20,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class AttemptService {
 
     private final AttemptRepository attemptRepository;
+    private final DeliveryRepository deliveryRepository;
 
-    public AttemptService(AttemptRepository attemptRepository) {
+    public AttemptService(AttemptRepository attemptRepository, DeliveryRepository deliveryRepository) {
         this.attemptRepository = attemptRepository;
+        this.deliveryRepository = deliveryRepository;
     }
 
     @Transactional
@@ -33,7 +37,13 @@ public class AttemptService {
     private List<Attempt> createAttempts(List<Subscription> subscriptions, Message message) {
         List<Attempt> attempts = new ArrayList<>();
         for (Subscription sub : subscriptions) {
-            Attempt attempt = new Attempt(sub.getApp(), message, sub.getEndpoint(), 1);
+            // One Delivery per (message, endpoint) pair, created exactly once here at fan-out
+            // time, in the same transaction as this pair's first Attempt - see
+            // docs/superpowers/specs/2026-09-09-delivery-entity-design.md Section 4. Automatic
+            // retries and manual replays never create another Delivery; they carry this one
+            // forward (see createRetry/createReplay below).
+            Delivery delivery = deliveryRepository.save(new Delivery(sub.getApp(), message, sub.getEndpoint()));
+            Attempt attempt = new Attempt(sub.getApp(), message, sub.getEndpoint(), delivery, 1);
             attempts.add(attempt);
         }
 
@@ -48,7 +58,7 @@ public class AttemptService {
     @Transactional
     public Attempt createRetry(Attempt previous, Instant nextRetryAt) {
         Attempt retry = new Attempt(previous.getApp(), previous.getMessage(), previous.getEndpoint(),
-                previous.getAttemptNo() + 1);
+                previous.getDelivery(), previous.getAttemptNo() + 1);
         retry.setStatus(AttemptStatus.SCHEDULED);
         retry.setNextRetryAt(nextRetryAt);
         return attemptRepository.save(retry);
@@ -57,7 +67,7 @@ public class AttemptService {
     @Transactional
     public Attempt createReplay(Attempt original) {
         Attempt replay = new Attempt(original.getApp(), original.getMessage(), original.getEndpoint(),
-                original.getAttemptNo() + 1);
+                original.getDelivery(), original.getAttemptNo() + 1);
         return attemptRepository.saveAndFlush(replay);
     }
 

@@ -6,6 +6,7 @@ import com.example.relay.app.domain.App;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -39,6 +40,9 @@ public class MessageServiceIntegrationTest implements SharedPostgresContainer {
     private AttemptRepository attemptRepository;
 
     @Autowired
+    private DeliveryRepository deliveryRepository;
+
+    @Autowired
     private EnvironmentRepository environmentRepository;
 
     @Autowired
@@ -61,8 +65,10 @@ public class MessageServiceIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void create_shouldPersistMessageAndAttempt_whenMessageCreationAndAttemptCreationBothPass() throws Exception {
-        // Clean up any leftover data from previous tests to ensure count assertions are scoped correctly
+        // Clean up any leftover data from previous tests to ensure count assertions are scoped correctly.
+        // deliveries must go before messages/endpoints - it FK-references both.
         attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
         messageRepository.deleteAll();
 
         // Arrange

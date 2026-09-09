@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -69,19 +70,25 @@ class AttemptRepositoryPostgresTest implements SharedPostgresContainer {
     }
 
     private Attempt persistAttempt(int attemptNo) {
-        Attempt attempt = new Attempt(app, message, endpoint, attemptNo);
+        Delivery delivery = new Delivery(app, message, endpoint);
+        testEntityManager.persistAndFlush(delivery);
+        Attempt attempt = new Attempt(app, message, endpoint, delivery, attemptNo);
         testEntityManager.persistAndFlush(attempt);
         return attempt;
     }
 
     private Attempt persistAttempt(int attemptNo, Endpoint targetEndpoint) {
-        Attempt attempt = new Attempt(app, message, targetEndpoint, attemptNo);
+        Delivery delivery = new Delivery(app, message, targetEndpoint);
+        testEntityManager.persistAndFlush(delivery);
+        Attempt attempt = new Attempt(app, message, targetEndpoint, delivery, attemptNo);
         testEntityManager.persistAndFlush(attempt);
         return attempt;
     }
 
     private Attempt persistAttemptWithMessage(int attemptNo, Message targetMessage) {
-        Attempt attempt = new Attempt(app, targetMessage, endpoint, attemptNo);
+        Delivery delivery = new Delivery(app, targetMessage, endpoint);
+        testEntityManager.persistAndFlush(delivery);
+        Attempt attempt = new Attempt(app, targetMessage, endpoint, delivery, attemptNo);
         testEntityManager.persistAndFlush(attempt);
         return attempt;
     }
