@@ -19,4 +19,16 @@ class DeliveryHttpClientConnectTimeoutTest {
         assertEquals(Duration.ofMillis(DeliveryHttpClientConfig.DELIVERY_TIMEOUT_MILLIS),
                 httpClient.connectTimeout().get());
     }
+
+    @Test
+    void buildHttpClient_hasAVirtualThreadExecutor() {
+        HttpClient httpClient = new DeliveryHttpClientConfig().buildHttpClient();
+
+        assertTrue(httpClient.executor().isPresent(),
+                "expected an explicit virtual-thread executor to be configured on the HttpClient - "
+                        + "without one, JdkClientHttpRequestFactory falls back to a fresh unpooled "
+                        + "platform thread per request (SimpleAsyncTaskExecutor) and the JDK HttpClient "
+                        + "spins up its own unbounded platform-thread pool, defeating the point of the "
+                        + "virtual-thread delivery redesign");
+    }
 }

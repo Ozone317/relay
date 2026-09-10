@@ -240,6 +240,38 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     @Test
+    void redirectResponse_isNotFollowed_andTreatedAsFailure() {
+        // DeliveryHttpClientConfig explicitly sets Redirect.NEVER (a deliberate change from the old
+        // SimpleClientHttpRequestFactory/HttpURLConnection client, which followed redirects by
+        // default). A 302 from the endpoint must therefore be recorded as the delivery outcome itself
+        // - a non-2xx failure - not silently followed to whatever the Location header points at.
+        mockWebServer.enqueue(
+                new MockResponse()
+                        .setResponseCode(302)
+                        .setHeader("Location", "/somewhere-else")
+                        .setBody("redirecting"));
+
+        Attempt attempt = persistAttempt(
+                mockWebServer.url("/webhook").toString(),
+                1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt original = attemptRepository
+                    .findById(attempt.getId())
+                    .orElseThrow();
+
+            assertEquals(AttemptStatus.FAILED_RETRYING, original.getStatus());
+            assertEquals(302, original.getResponseCode());
+        });
+
+        // Exactly one request reached the mock server - if the redirect had been followed, a second
+        // request to /somewhere-else would show up too.
+        assertEquals(1, mockWebServer.getRequestCount());
+    }
+
+    @Test
     void exception_beforeFinalAttempt_marksAttemptFailedAndCreatesRetry() throws IOException {
         int port = mockWebServer.getPort();
 
