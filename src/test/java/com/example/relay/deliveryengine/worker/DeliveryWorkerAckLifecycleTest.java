@@ -135,10 +135,15 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
 
     @Test
     void successfulDelivery_staysUnackedUntilFutureCompletes_thenAcks() throws Exception {
+        // The RabbitMQ management API's queue stats (messages_unacknowledged) are refreshed on the
+        // broker's own collection interval (~5s by default), not in real time on every request. The
+        // mock delivery here must stay in flight for comfortably longer than that interval so the
+        // mid-flight await() below has real headroom to observe at least one stats refresh landing
+        // while the message is genuinely still unacked, rather than racing a stale/delayed reading.
         mockWebServer.setDispatcher(new Dispatcher() {
             @Override
             public MockResponse dispatch(RecordedRequest request) throws InterruptedException {
-                Thread.sleep(3000);
+                Thread.sleep(12000);
                 return new MockResponse().setResponseCode(200).setBody("ok");
             }
         });
@@ -147,17 +152,22 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
         attemptPublisher.publish(attempt.getId());
 
         // Mid-flight: the HTTP call is still sleeping, so the future hasn't settled - the message
-        // must still be unacknowledged on the broker.
+        // must still be unacknowledged on the broker. The await window (1s-9s after publish) covers
+        // at least one full ~5s management-stats refresh cycle while delivery is still in flight
+        // (it doesn't complete until ~12s), so a stale reading from before publish can't survive the
+        // whole window undetected.
         Thread.sleep(1000);
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        await().atMost(Duration.ofSeconds(8)).untilAsserted(() ->
                 assertEquals(1, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
         });
 
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        // Post-completion: give the management API at least one full stats-refresh cycle of margin
+        // to catch up and report the ack.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertEquals(0, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
     }
 
@@ -172,7 +182,8 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
             assertEquals(AttemptStatus.FAILED_RETRYING, reloaded.getStatus());
         });
 
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        // Same management-API stats-refresh headroom as the successful-delivery test above.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertEquals(0, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
     }
 }
