@@ -429,16 +429,25 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         // the queue, so a queue-depth reading (even a single non-polled one after a delay) almost
         // always reads 0 regardless of whether it's actually looping - confirmed empirically by
         // temporarily flipping default-requeue-rejected to true and observing 8000+ redeliveries
-        // in 12 seconds while messageCount stayed 0. Instead, count how many times Spring AMQP's
-        // container error handler actually logs a failed delivery: exactly once if the message is
-        // dropped after the first failure, a rapidly growing count if it's looping.
+        // in 12 seconds while messageCount stayed 0. Instead, count how many times Spring AMQP
+        // actually logs a failed delivery: exactly once if the message is dropped after the first
+        // failure, a rapidly growing count if it's looping.
+        //
+        // Since Task 3, onMessage returns a CompletableFuture<Void>, so an exception thrown inside
+        // the CompletableFuture.runAsync Runnable never reaches the container's synchronous
+        // ConditionalRejectingErrorHandler ("Execution of Rabbit message listener failed") - it's
+        // routed instead through MessagingMessageListenerAdapter.asyncFailure, which logs via its
+        // own logger and calls channel.basicReject(tag, requeue) directly using the same
+        // default-requeue-rejected-derived ContainerUtils.shouldRequeue(...) decision. Observe that
+        // path's logger/message instead; the no-requeue-loop property being proven is unchanged.
         Logger errorHandlerLogger = (Logger) LoggerFactory
-                .getLogger("org.springframework.amqp.rabbit.listener.ConditionalRejectingErrorHandler");
+                .getLogger("org.springframework.amqp.rabbit.listener.adapter.MessagingMessageListenerAdapter");
         AtomicInteger failureCount = new AtomicInteger(0);
         AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
             @Override
             protected void append(ILoggingEvent event) {
-                if (event.getFormattedMessage().contains("Execution of Rabbit message listener failed")) {
+                if (event.getFormattedMessage()
+                        .contains("Future, Mono, or suspend function was completed with an exception for")) {
                     failureCount.incrementAndGet();
                 }
             }
