@@ -7,7 +7,10 @@ import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.boot.autoconfigure.amqp.RabbitTemplateCustomizer;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -136,5 +139,17 @@ public class RabbitMqConfig {
                         returnedMessage.getReplyText());
             });
         };
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory deliveryListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer, ConnectionFactory connectionFactory,
+            DeliveryListenerProperties deliveryListenerProperties) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        configurer.configure(factory, connectionFactory);
+        factory.setConcurrentConsumers(deliveryListenerProperties.getConsumerConcurrency());
+        factory.setMaxConcurrentConsumers(deliveryListenerProperties.getConsumerConcurrency());
+        factory.setPrefetchCount(deliveryListenerProperties.getPrefetchCount());
+        return factory;
     }
 }
