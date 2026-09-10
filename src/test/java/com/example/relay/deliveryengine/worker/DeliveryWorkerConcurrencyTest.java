@@ -113,11 +113,14 @@ class DeliveryWorkerConcurrencyTest implements SharedPostgresContainer {
     }
 
     @Test
-    void consumerConcurrencyAlone_yieldsRealParallelHttpCalls() throws InterruptedException {
-        // Everything responds after a 3s delay. With consumer-concurrency=4 (the configured
-        // default) and 4 attempts published, all 4 should be received by the mock server within a
-        // tight window of each other - proving 4 genuinely separate consumer threads, not one
-        // thread working through them serially (which would space the arrivals ~3s apart).
+    void fourSlowDeliveries_arriveInParallelNotSerially() throws InterruptedException {
+        // Everything responds after a 3s delay. With 4 attempts published, all 4 should be received
+        // by the mock server within a tight window of each other - a smoke check that deliveries
+        // genuinely run in parallel, not one thread working through them serially (which would space
+        // the arrivals ~3s apart). This is NOT a proof specifically attributable to
+        // consumer-concurrency: since Task 3's CompletableFuture hand-off, prefetch + virtual threads
+        // supply the parallelism, so the same parallel arrivals would occur even with
+        // consumer-concurrency=1.
         mockWebServer.setDispatcher(new Dispatcher() {
             @Override
             public MockResponse dispatch(RecordedRequest request) throws InterruptedException {
@@ -131,8 +134,8 @@ class DeliveryWorkerConcurrencyTest implements SharedPostgresContainer {
             attemptPublisher.publish(attempt.getId());
         }
 
-        long firstRequestNanos = System.nanoTime();
         mockWebServer.takeRequest(10, TimeUnit.SECONDS);
+        long firstRequestNanos = System.nanoTime();
         for (int i = 0; i < 3; i++) {
             RecordedRequest request = mockWebServer.takeRequest(2, TimeUnit.SECONDS);
             assertTrue(request != null,

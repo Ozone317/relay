@@ -89,7 +89,12 @@ class DeliveryHttpClientPinningTest {
         oldFactory.setReadTimeout(DELIVERY_TIMEOUT_MILLIS);
         RestClient oldClient = RestClient.builder().requestFactory(oldFactory).build();
 
-        JdkClientHttpRequestFactory newFactory = new JdkClientHttpRequestFactory();
+        // Exercise the real production construction path (DeliveryHttpClientConfig.buildHttpClient())
+        // rather than reimplementing it here with a bare no-arg JdkClientHttpRequestFactory - a
+        // no-arg factory builds its own HttpClient.newHttpClient(), which is materially different
+        // (no virtual-thread executor, no explicit redirect policy) from what actually ships.
+        JdkClientHttpRequestFactory newFactory = new JdkClientHttpRequestFactory(
+                new DeliveryHttpClientConfig().buildHttpClient());
         newFactory.setReadTimeout(DELIVERY_TIMEOUT_MILLIS);
         RestClient newClient = RestClient.builder().requestFactory(newFactory).build();
 

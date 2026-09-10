@@ -111,6 +111,9 @@ class DeliveryWorkerInFlightStateTest implements SharedPostgresContainer {
         return attemptRepository.save(new Attempt(app, message, endpoint, delivery, 1));
     }
 
+    // Companion test: ReconciliationSweeperIntegrationTest.staleInFlightAttempt_isResetAndRepublished
+    // proves the reconciliation sweep actually recovers the IN_FLIGHT state this test establishes -
+    // that recovery is not itself exercised here.
     @Test
     void attemptStaysGenuinelyInFlight_whileItsDeliveryTaskIsStillRunning_thenCompletesNormallyOnceReleased()
             throws Exception {
