@@ -39,7 +39,8 @@ public class DeliveryWorker {
         this.attemptPublisher = attemptPublisher;
     }
 
-    @RabbitListener(queues = RabbitMqConfig.TASKS_QUEUE)
+    @RabbitListener(id = "deliveryWorker", queues = RabbitMqConfig.TASKS_QUEUE,
+            containerFactory = "deliveryListenerContainerFactory")
     public void onMessage(String attemptIdRaw) {
         UUID attemptId = UUID.fromString(attemptIdRaw);
 
