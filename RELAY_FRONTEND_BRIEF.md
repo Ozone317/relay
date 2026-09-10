@@ -403,10 +403,13 @@ else with a clean **400** (`InvalidSortPropertyException`, listing the legal sor
 of a `500`. **You can now safely use either `sort=createdAt,desc` or `sort=deliveryCreatedAt,desc`** —
 both work identically.
 
-The nested attempt list never had this problem — `sort=attemptNo,asc` (or any real `Attempt` field
-name, including `createdAt`, which genuinely exists on that entity) works as expected. A garbage
-`sort` value there now also gets a clean 400 (same `DeliverySortTranslator` mechanism) instead of
-whatever Spring Data's default behavior was before.
+The nested attempt list never had the aliasing problem (its DTO field names already match `Attempt`'s
+own), but `sort` there is validated against the same `DeliverySortTranslator` mechanism, against an
+explicit allowlist rather than "any real field on the entity": `id`, `attemptNo`, `status`,
+`responseCode`, `latencyMs`, `nextRetryAt`, `deadLetterNotifiedAt`, `createdAt`, `updatedAt`. Sorting
+by `responseBody`/`lastError` (large text fields — never a sane sort target) or by a relation field
+(`app`/`message`/`endpoint`/`delivery`) now gets the same clean **400** a garbage value would, instead
+of whatever Spring Data's default behavior was before.
 
 Date filters on the delivery list apply to the **delivery's own** `createdAt` (when the underlying
 message/endpoint pairing was first created), not to individual attempt timestamps.
