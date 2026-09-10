@@ -10,6 +10,8 @@ import com.example.relay.deliveryengine.signing.HmacSigner;
 import com.example.relay.endpoint.domain.Endpoint;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -29,19 +31,25 @@ public class DeliveryWorker {
     private final AttemptService attemptService;
     private final HmacSigner hmacSigner;
     private final RestClient deliveryRestClient;
+    private final ExecutorService virtualThreadExecutor;
 
     public DeliveryWorker(AttemptRepository attemptRepository, AttemptService attemptService, HmacSigner hmacSigner,
-            RestClient deliveryRestClient, AttemptPublisher attemptPublisher) {
+            RestClient deliveryRestClient, AttemptPublisher attemptPublisher, ExecutorService virtualThreadExecutor) {
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;
         this.deliveryRestClient = deliveryRestClient;
         this.attemptPublisher = attemptPublisher;
+        this.virtualThreadExecutor = virtualThreadExecutor;
     }
 
     @RabbitListener(id = "deliveryWorker", queues = RabbitMqConfig.TASKS_QUEUE,
             containerFactory = "deliveryListenerContainerFactory")
-    public void onMessage(String attemptIdRaw) {
+    public CompletableFuture<Void> onMessage(String attemptIdRaw) {
+        return CompletableFuture.runAsync(() -> processMessage(attemptIdRaw), virtualThreadExecutor);
+    }
+
+    private void processMessage(String attemptIdRaw) {
         UUID attemptId = UUID.fromString(attemptIdRaw);
 
         if (!attemptService.claim(attemptId, Instant.now())) {
