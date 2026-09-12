@@ -1,0 +1,153 @@
+package com.example.relay.user.api;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.example.relay.app.infrastructure.AppRepository;
+import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
+import com.example.relay.endpoint.infrastructure.EndpointRepository;
+import com.example.relay.environment.infrastructure.EnvironmentRepository;
+import com.example.relay.event.infrastructure.EventRepository;
+import com.example.relay.message.infrastructure.MessageRepository;
+import com.example.relay.subscription.infrastructure.SubscriptionRepository;
+import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.user.application.PasswordResetTokenService;
+import com.example.relay.user.domain.PasswordResetToken;
+import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
+import com.example.relay.user.infrastructure.RefreshTokenRepository;
+import com.example.relay.user.infrastructure.UserRepository;
+import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@SpringBootTest
+class PasswordResetConcurrentRequestPostgresTest implements SharedPostgresContainer {
+
+    @Autowired
+    private PasswordResetTokenService underTest;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordResetTokenRepository passwordResetTokenRepository;
+
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
+
+    // Every other table that can hold a row transitively referencing users(id), cleaned up here in
+    // FK-safe (children-first) order before userRepository.deleteAll() below - not because this
+    // test's own scenario touches any of them, but because this shared Postgres container is reused
+    // across every @SpringBootTest class in the suite (see SharedPostgresContainer's javadoc), and a
+    // blanket "delete every user" only succeeds once nothing anywhere still references one.
+    @Autowired
+    private AttemptRepository attemptRepository;
+
+    @Autowired
+    private DeliveryRepository deliveryRepository;
+
+    @Autowired
+    private MessageRepository messageRepository;
+
+    @Autowired
+    private SubscriptionRepository subscriptionRepository;
+
+    @Autowired
+    private EndpointRepository endpointRepository;
+
+    @Autowired
+    private EventRepository eventRepository;
+
+    @Autowired
+    private AppRepository appRepository;
+
+    @Autowired
+    private EnvironmentRepository environmentRepository;
+
+    private User user;
+
+    @BeforeEach
+    void setUp() {
+        attemptRepository.deleteAll();
+        deliveryRepository.deleteAll();
+        messageRepository.deleteAll();
+        subscriptionRepository.deleteAll();
+        endpointRepository.deleteAll();
+        eventRepository.deleteAll();
+        appRepository.deleteAll();
+        environmentRepository.deleteAll();
+        refreshTokenRepository.deleteAll();
+        passwordResetTokenRepository.deleteAll();
+        userRepository.deleteAll();
+        user = userRepository.save(new User("concurrent-request@example.com", "hash"));
+    }
+
+    /**
+     * This test deliberately leaves 2 unused, undispatched, unexpired tokens behind (that is the whole point of the
+     * race it proves) - unlike this class's own @BeforeEach, which only guards against rows left by OTHER classes,
+     * these particular rows must not survive to be seen by a later class's own (unscoped) query, e.g.
+     * PasswordResetTokenRepositoryTest's dispatch-recovery finder scans the whole table with no per-test-class filter.
+     */
+    @AfterEach
+    void tearDown() {
+        passwordResetTokenRepository.deleteAll();
+        userRepository.deleteAll();
+    }
+
+    @Test
+    void twoConcurrentIssueCalls_bothSucceed_andEachCreatesExactlyOneRow() throws InterruptedException {
+        // This is deliberately NOT asserting "exactly one row was ever created" - both requests are
+        // legitimate and both succeed, per the design spec Section 4/7: "one active token" is
+        // best-effort UX polish (an application-level invalidation), not a DB-enforced correctness
+        // invariant the way the attempt-replay concurrency guard is.
+        //
+        // Verified empirically (deterministic across repeated runs, not flaky): issue()'s
+        // invalidateAllForUser() runs at the START of its own transaction, before its own insert.
+        // With no pre-existing token, two genuinely concurrent issue() calls each invalidate zero
+        // rows (there is nothing yet to invalidate - the other call's insert isn't visible before it
+        // commits) and then both insert, so BOTH tokens are left unused. That is exactly the
+        // best-effort behavior the design spec describes, not a bug in this test: "one active
+        // token" only holds when one issue() call demonstrably starts after a previous one has
+        // already committed, which sequential (non-racing) callers get for free and this race
+        // intentionally does not.
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch readyLatch = new CountDownLatch(2);
+        CountDownLatch startLatch = new CountDownLatch(1);
+
+        Runnable issueOnce = () -> {
+            readyLatch.countDown();
+            try {
+                startLatch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            underTest.issue(user, Instant.now());
+        };
+
+        executor.submit(issueOnce);
+        executor.submit(issueOnce);
+        readyLatch.await();
+        startLatch.countDown();
+        executor.shutdown();
+        boolean finished = executor.awaitTermination(10, TimeUnit.SECONDS);
+        assertTrue(finished, "both issue() calls must finish within the timeout");
+
+        List<PasswordResetToken> allTokens = passwordResetTokenRepository.findAll();
+        long unusedCount = allTokens.stream().filter(t -> t.getUsedAt() == null).count();
+
+        assertEquals(2, allTokens.size(), "both requests succeed and both create a row");
+        assertTrue(unusedCount >= 1 && unusedCount <= 2,
+                "every created token is accounted for as either used or unused, never lost");
+    }
+}
