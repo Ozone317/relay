@@ -1,20 +1,15 @@
 package com.example.relay.deliveryengine.deadletter;
 
 import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +17,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -55,7 +51,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 @SpringBootTest
 @Testcontainers
-class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
+@TestPropertySource(properties = {"relay.reconciliation.interval=2s", "relay.reconciliation.created-grace=2s",
+        "relay.reconciliation.dead-letter-grace=2s"})
+class DeadLetterNotifierRecoveryIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
@@ -96,7 +94,6 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
 
     private Endpoint endpoint;
     private Message message;
-    private User user;
 
     @BeforeEach
     void setUp() {
@@ -110,10 +107,7 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
 
-        reset(emailService);
-        when(emailService.send(any(), anyMap(), anyString(), anyString())).thenReturn(EmailSendResult.SENT);
-
-        user = userRepository.save(new User("test" + UUID.randomUUID() + "@mail.com", "hash"));
+        User user = userRepository.save(new User("test" + UUID.randomUUID() + "@mail.com", "hash"));
         Environment env = environmentRepository.save(new Environment("Env 1", "Desc 1", user));
         App app = appRepository.save(new App("App 1", env));
         Event event = eventRepository.save(new Event("payment.completed", app));
@@ -122,77 +116,31 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
         message = messageRepository.save(new Message(app, event, body));
     }
 
-    private Attempt persistDeadAttempt() {
+    @Test
+    void sendFailsOnce_thenRecoverDeadLetterSweepRetries_andEventuallyClaims() {
         Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
         Attempt attempt = new Attempt(endpoint.getApp(), message, endpoint, delivery, 6);
         attempt.setStatus(AttemptStatus.DEAD);
-        return attemptRepository.save(attempt);
-    }
+        attempt = attemptRepository.save(attempt);
 
-    @Test
-    void deadLetterMessage_sendsEmail_thenSetsNotifiedAt() {
-        Attempt attempt = persistDeadAttempt();
-
-        rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.DEADLETTER_ROUTING_KEY,
-                attempt.getId().toString());
-
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertNotNull(reloaded.getDeadLetterNotifiedAt());
+        AtomicInteger callCount = new AtomicInteger(0);
+        when(emailService.send(any(), anyMap(), anyString(), anyString())).thenAnswer(invocation -> {
+            if (callCount.getAndIncrement() == 0) {
+                throw new EmailSendException("simulated Brevo outage on first attempt");
+            }
+            return EmailSendResult.SENT;
         });
 
-        verify(emailService, times(1)).send(eq(com.example.relay.email.EmailTemplate.DEAD_LETTER_NOTIFICATION),
-                anyMap(), eq(user.getEmail()), eq(attempt.getId().toString()));
-    }
-
-    @Test
-    void redeliveredDeadLetterMessage_doesNotSendEmailTwice() throws InterruptedException {
-        Attempt attempt = persistDeadAttempt();
-
-        // Simulate RabbitMQ at-least-once redelivery: two messages for the same attempt. This proves
-        // DB-level (read-side) dedup only - by the time the second message is consumed, the first has
-        // already claimed the row, so the early deadLetterNotifiedAt check short-circuits it. Genuine
-        // provider-level idempotency (both consumers racing before either claims) is proven separately
-        // in DeadLetterNotifierTest (the DUPLICATE-still-claims unit test) and BrevoEmailSenderTest
-        // (the duplicate_parameter case) - see spec Section 6.1/Section 8 for why this distinction
-        // matters and isn't just re-testing the same thing twice.
-        rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.DEADLETTER_ROUTING_KEY,
-                attempt.getId().toString());
         rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.DEADLETTER_ROUTING_KEY,
                 attempt.getId().toString());
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        // The first delivery fails and is dropped (see DeadLetterNotifierIntegrationTest for why);
+        // recoverDeadLetter() - running on the shortened interval/grace above - republishes the row
+        // once it's stale, the second delivery succeeds, and the row is finally claimed.
+        UUID attemptId = attempt.getId();
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attemptId).orElseThrow();
             assertNotNull(reloaded.getDeadLetterNotifiedAt());
-        });
-
-        Thread.sleep(2000);
-        verify(emailService, times(1)).send(any(), anyMap(), any(), any());
-    }
-
-    @Test
-    void sendFailure_doesNotClaimTheNotification() {
-        // Regression test for send-then-claim ordering (spec Section 6). Verified (not assumed):
-        // this listener has no explicit AcknowledgeMode, so it runs under Spring AMQP's default AUTO
-        // mode; default-requeue-rejected=false is set project-wide; delivery.deadletter's queue
-        // definition has no dead-letter-exchange argument. So the thrown exception here causes the
-        // message to be rejected and simply dropped from the queue - not requeued, not redirected.
-        // That's fine because recovery is entirely DB-state-driven (recoverDeadLetter() checks
-        // dead_letter_notified_at IS NULL, independent of what happened to the queue message) - see
-        // DeadLetterNotifierRecoveryIntegrationTest for the end-to-end proof of that recovery path.
-        // Sabotage this test by temporarily reverting DeadLetterNotifier to claim-then-send and
-        // confirm it then fails, before trusting it as a real regression test.
-        when(emailService.send(any(), anyMap(), anyString(), anyString()))
-                .thenThrow(new EmailSendException("simulated Brevo outage"));
-
-        Attempt attempt = persistDeadAttempt();
-
-        rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.DEADLETTER_ROUTING_KEY,
-                attempt.getId().toString());
-
-        await().pollDelay(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertNull(reloaded.getDeadLetterNotifiedAt());
         });
     }
 }
