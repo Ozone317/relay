@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:replace="~{email/layout :: layout(~{::#content})}">
+    <div id="content">
+        <p>Delivery permanently failed for <strong th:text="${appName}">App name</strong>.</p>
+        <p>Endpoint: <span th:text="${endpointUrl}">https://example.com</span></p>
+        <p>Last error: <span th:text="${lastError}">error</span></p>
+        <p>All automatic retries have been exhausted. Manual handling is required.</p>
+    </div>
+</div>
+</body>
+</html>

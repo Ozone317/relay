@@ -1,0 +1,9 @@
+Delivery permanently failed for [[${appName}]].
+
+Endpoint: [[${endpointUrl}]]
+Last error: [[${lastError}]]
+
+All automatic retries have been exhausted. Manual handling is required.
+
+--
+This is an automated message from Relay.
