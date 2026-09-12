@@ -8,7 +8,7 @@ import java.util.HexFormat;
 import org.springframework.stereotype.Component;
 
 @Component
-public class RefreshTokenGenerator {
+public class SecureTokenGenerator {
 
     private static final int TOKEN_BYTES = 32;
 
