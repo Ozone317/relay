@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -34,7 +35,8 @@ public class DeliveryWorker {
     private final ExecutorService virtualThreadExecutor;
 
     public DeliveryWorker(AttemptRepository attemptRepository, AttemptService attemptService, HmacSigner hmacSigner,
-            RestClient deliveryRestClient, AttemptPublisher attemptPublisher, ExecutorService virtualThreadExecutor) {
+            @Qualifier("deliveryRestClient") RestClient deliveryRestClient, AttemptPublisher attemptPublisher,
+            ExecutorService virtualThreadExecutor) {
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;

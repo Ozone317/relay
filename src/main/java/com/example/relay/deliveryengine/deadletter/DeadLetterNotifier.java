@@ -13,6 +13,7 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.email.EmailSendResult;
 import com.example.relay.email.EmailService;
 import com.example.relay.email.EmailTemplate;
 
@@ -56,8 +57,14 @@ public class DeadLetterNotifier {
         // idempotency window between a successful send and this claim can still produce a duplicate.
         // SENT and DUPLICATE are both treated as "safe to claim" - see Section 6.1 for exactly what
         // DUPLICATE does and does not mean (it is not a delivery receipt).
-        emailService.send(EmailTemplate.DEAD_LETTER_NOTIFICATION, params, recipient, attemptId.toString());
+        EmailSendResult result =
+                emailService.send(EmailTemplate.DEAD_LETTER_NOTIFICATION, params, recipient, attemptId.toString());
+        log.info("Attempt {} dead-letter notification result: {}", attemptId, result);
 
-        attemptService.claimDeadLetterNotification(attemptId, Instant.now());
+        boolean claimed = attemptService.claimDeadLetterNotification(attemptId, Instant.now());
+        if (!claimed) {
+            log.warn("Attempt {} dead-letter notification sent but claim lost the race (already claimed)",
+                    attemptId);
+        }
     }
 }
