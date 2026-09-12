@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClient;
@@ -24,7 +25,8 @@ public class BrevoEmailSender implements EmailSender {
     private final EmailProperties emailProperties;
     private final ObjectMapper objectMapper;
 
-    public BrevoEmailSender(RestClient brevoRestClient, EmailProperties emailProperties, ObjectMapper objectMapper) {
+    public BrevoEmailSender(@Qualifier("brevoRestClient") RestClient brevoRestClient, EmailProperties emailProperties,
+            ObjectMapper objectMapper) {
         this.brevoRestClient = brevoRestClient;
         this.emailProperties = emailProperties;
         this.objectMapper = objectMapper;

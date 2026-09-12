@@ -3,6 +3,7 @@ package com.example.relay.deliveryengine.config;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.concurrent.Executors;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -33,6 +34,7 @@ public class DeliveryHttpClientConfig {
     }
 
     @Bean
+    @Qualifier("deliveryRestClient")
     public RestClient deliveryRestClient() {
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(buildHttpClient());
         // Unlike SimpleClientHttpRequestFactory's read timeout (per-read socket inactivity),
