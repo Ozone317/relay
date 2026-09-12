@@ -1,4 +1,13 @@
 services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
   app:
     build: .
     ports:
@@ -11,3 +20,6 @@ services:
       timeout: 5s
       retries: 5
     restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
