@@ -120,6 +120,19 @@
 			<artifactId>spring-boot-starter-thymeleaf</artifactId>
 		</dependency>
 
+		<!-- OGNL: spring-boot-starter-thymeleaf's transitive thymeleaf-spring6 dependency
+		     deliberately excludes ognl (its auto-configured "templateEngine" bean uses
+		     SpringStandardDialect/SpringEL instead). EmailTemplateConfig's textTemplateEngine bean
+		     is a plain org.thymeleaf.TemplateEngine (TEXT mode has no Spring-flavored dialect), which
+		     falls back to the default StandardDialect and needs OGNL on the classpath to evaluate
+		     ${...} expressions - without it, template processing throws NoClassDefFoundError at
+		     runtime. -->
+		<dependency>
+			<groupId>ognl</groupId>
+			<artifactId>ognl</artifactId>
+			<version>3.3.4</version>
+		</dependency>
+
 		<!-- JPA / Hibernate -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
