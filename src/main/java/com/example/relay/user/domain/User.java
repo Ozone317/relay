@@ -39,4 +39,8 @@ public class User {
     public String getPasswordHash() {
         return passwordHash;
     }
+
+    public void changePassword(String newPasswordHash) {
+        this.passwordHash = newPasswordHash;
+    }
 }
