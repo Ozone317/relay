@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,6 +55,20 @@ class EmailDispatchIntegrationTest implements SharedPostgresContainer {
         passwordResetTokenRepository.deleteAll();
         userRepository.deleteAll();
         user = userRepository.save(new User("dispatch-test-" + UUID.randomUUID() + "@example.com", "hash"));
+    }
+
+    /**
+     * passwordChangedMessage_sendsEmailAndDoesNotTouchAnyTokenRow deliberately leaves its token row with
+     * resetEmailDispatchedAt/usedAt both null and expiresAt far in the future - exactly what
+     * PasswordResetTokenRepositoryTest's (unscoped) dispatch-recovery finder query looks for. This is a
+     * real @SpringBootTest (not @DataJpaTest), so nothing rolls it back; without this cleanup it survives in the shared
+     * Postgres container for the rest of the suite and can intermittently break that other, unrelated test depending on
+     * Surefire's file-order-dependent class execution order.
+     */
+    @AfterEach
+    void tearDown() {
+        passwordResetTokenRepository.deleteAll();
+        userRepository.deleteAll();
     }
 
     @Test
