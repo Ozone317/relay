@@ -14,6 +14,7 @@ import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.message.exception.NoActiveSubscribersException;
+import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
 import com.example.relay.user.exception.InvalidRefreshTokenException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import java.util.HashMap;
@@ -84,6 +85,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(UserAlreadyExistsException.class)
     public ResponseEntity<ApiError> handleUserAlreadyExistsException(UserAlreadyExistsException ex) {
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * One merged outcome for token not-found, already-used, and expired - see AuthController's /refresh handling above
+     * for the same "don't tell a rejected caller which reason applied" reasoning. The real distinction stays in
+     * ex.getMessage(), logged here, never in the response.
+     */
+    @ExceptionHandler(InvalidOrExpiredResetTokenException.class)
+    public ResponseEntity<ApiError> handleInvalidOrExpiredResetToken(InvalidOrExpiredResetTokenException ex) {
+        log.warn("Password reset token rejected: {}", ex.getMessage());
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), "Invalid or expired password reset token.");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
