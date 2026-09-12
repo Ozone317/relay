@@ -113,6 +113,13 @@
 			<artifactId>spring-boot-starter-validation</artifactId>
 		</dependency>
 
+		<!-- Email templates: subject/HTML/text are rendered here, in this repo, and never
+		     hosted in the email provider's dashboard - see docs/superpowers/specs/2026-09-12-email-integration-design.md -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-thymeleaf</artifactId>
+		</dependency>
+
 		<!-- JPA / Hibernate -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
