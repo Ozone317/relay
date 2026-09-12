@@ -9,13 +9,13 @@ import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public class RefreshTokenGeneratorTest {
+public class SecureTokenGeneratorTest {
 
-    private RefreshTokenGenerator underTest;
+    private SecureTokenGenerator underTest;
 
     @BeforeEach
     void setUp() {
-        underTest = new RefreshTokenGenerator();
+        underTest = new SecureTokenGenerator();
     }
 
     @Test

@@ -1,7 +1,7 @@
 package com.example.relay.user.application;
 
 import com.example.relay.common.security.AuthProperties;
-import com.example.relay.common.security.RefreshTokenGenerator;
+import com.example.relay.common.security.SecureTokenGenerator;
 import com.example.relay.user.domain.RefreshToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.InvalidRefreshTokenException;
@@ -15,20 +15,20 @@ import org.springframework.transaction.annotation.Transactional;
 public class RefreshTokenService {
 
     private final RefreshTokenRepository refreshTokenRepository;
-    private final RefreshTokenGenerator refreshTokenGenerator;
+    private final SecureTokenGenerator secureTokenGenerator;
     private final AuthProperties authProperties;
 
-    public RefreshTokenService(RefreshTokenRepository refreshTokenRepository,
-            RefreshTokenGenerator refreshTokenGenerator, AuthProperties authProperties) {
+    public RefreshTokenService(RefreshTokenRepository refreshTokenRepository, SecureTokenGenerator secureTokenGenerator,
+            AuthProperties authProperties) {
         this.refreshTokenRepository = refreshTokenRepository;
-        this.refreshTokenGenerator = refreshTokenGenerator;
+        this.secureTokenGenerator = secureTokenGenerator;
         this.authProperties = authProperties;
     }
 
     @Transactional
     public String issue(User user, Instant now) {
-        String rawToken = refreshTokenGenerator.generateRawToken();
-        refreshTokenRepository.save(new RefreshToken(user, refreshTokenGenerator.hash(rawToken),
+        String rawToken = secureTokenGenerator.generateRawToken();
+        refreshTokenRepository.save(new RefreshToken(user, secureTokenGenerator.hash(rawToken),
                 now.plus(authProperties.getRefreshIdleWindow()), now));
         return rawToken;
     }
@@ -39,7 +39,7 @@ public class RefreshTokenService {
             throw new InvalidRefreshTokenException("No refresh token supplied");
         }
 
-        RefreshToken token = refreshTokenRepository.findByTokenHash(refreshTokenGenerator.hash(rawToken))
+        RefreshToken token = refreshTokenRepository.findByTokenHash(secureTokenGenerator.hash(rawToken))
                 .orElseThrow(() -> new InvalidRefreshTokenException("Refresh token is not recognised"));
 
         if (token.getRevokedAt() != null) {
@@ -60,7 +60,7 @@ public class RefreshTokenService {
         if (rawToken == null || rawToken.isBlank()) {
             return;
         }
-        refreshTokenRepository.revokeByTokenHash(refreshTokenGenerator.hash(rawToken), now);
+        refreshTokenRepository.revokeByTokenHash(secureTokenGenerator.hash(rawToken), now);
     }
 
     @Transactional

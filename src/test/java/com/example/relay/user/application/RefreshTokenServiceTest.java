@@ -10,7 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.relay.common.security.AuthProperties;
-import com.example.relay.common.security.RefreshTokenGenerator;
+import com.example.relay.common.security.SecureTokenGenerator;
 import com.example.relay.user.domain.RefreshToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.InvalidRefreshTokenException;
@@ -33,7 +33,7 @@ public class RefreshTokenServiceTest {
     private RefreshTokenRepository refreshTokenRepository;
 
     @Mock
-    private RefreshTokenGenerator refreshTokenGenerator;
+    private SecureTokenGenerator secureTokenGenerator;
 
     private RefreshTokenService underTest;
 
@@ -42,7 +42,7 @@ public class RefreshTokenServiceTest {
 
     @BeforeEach
     void setUp() {
-        underTest = new RefreshTokenService(refreshTokenRepository, refreshTokenGenerator, new AuthProperties());
+        underTest = new RefreshTokenService(refreshTokenRepository, secureTokenGenerator, new AuthProperties());
         user = new User("daksh@example.com", "hash");
         now = Instant.now();
     }
@@ -53,8 +53,8 @@ public class RefreshTokenServiceTest {
 
     @Test
     void issue_persistsTheHashAndReturnsTheRawToken() {
-        when(refreshTokenGenerator.generateRawToken()).thenReturn("raw");
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.generateRawToken()).thenReturn("raw");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
 
         String raw = underTest.issue(user, now);
 
@@ -73,7 +73,7 @@ public class RefreshTokenServiceTest {
 
     @Test
     void validateAndSlide_throws_whenHashMatchesNoRow() {
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.empty());
 
         assertThrows(InvalidRefreshTokenException.class, () -> underTest.validateAndSlide("raw", now));
@@ -83,7 +83,7 @@ public class RefreshTokenServiceTest {
     void validateAndSlide_throws_whenTheTokenIsRevoked() {
         RefreshToken revoked = mock(RefreshToken.class);
         when(revoked.getRevokedAt()).thenReturn(now);
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(revoked));
 
         assertThrows(InvalidRefreshTokenException.class, () -> underTest.validateAndSlide("raw", now));
@@ -93,7 +93,7 @@ public class RefreshTokenServiceTest {
     @Test
     void validateAndSlide_throws_whenTheIdleWindowHasLapsed() {
         RefreshToken expired = new RefreshToken(user, "hashed", now.minusSeconds(1), now);
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(expired));
 
         assertThrows(InvalidRefreshTokenException.class, () -> underTest.validateAndSlide("raw", now));
@@ -103,7 +103,7 @@ public class RefreshTokenServiceTest {
     @Test
     void validateAndSlide_slidesTheWindowAndReturnsTheUser_onTheHappyPath() {
         RefreshToken live = liveToken();
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(live));
         when(refreshTokenRepository.slide(any(), any())).thenReturn(1);
 
@@ -116,7 +116,7 @@ public class RefreshTokenServiceTest {
     @Test
     void validateAndSlide_throws_whenSlideMatchesZeroRows_becauseLogoutRacedTheRefresh() {
         RefreshToken live = liveToken();
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
         when(refreshTokenRepository.findByTokenHash("hashed")).thenReturn(Optional.of(live));
         when(refreshTokenRepository.slide(any(), any())).thenReturn(0);
 
@@ -132,7 +132,7 @@ public class RefreshTokenServiceTest {
 
     @Test
     void revoke_revokesByHash() {
-        when(refreshTokenGenerator.hash("raw")).thenReturn("hashed");
+        when(secureTokenGenerator.hash("raw")).thenReturn("hashed");
 
         underTest.revoke("raw", now);
 
