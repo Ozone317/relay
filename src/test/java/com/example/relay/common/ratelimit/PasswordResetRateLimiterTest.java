@@ -67,11 +67,21 @@ class PasswordResetRateLimiterTest implements SharedPostgresContainer {
     }
 
     @Test
-    void hourlyCapScript_doesNotExtendTheWindowTtlOnRepeatedIncrements() {
+    void hourlyCapScript_doesNotExtendTheWindowTtlOnRepeatedIncrements() throws InterruptedException {
         String key = "password-reset:hourly:email:ttl-check@example.com";
 
         underTest.allow("ttl-check@example.com", "10.0.3.1");
+        // getExpire() has whole-second resolution. If firstTtl were read immediately after the
+        // first increment, it would round to the same 3600 as a freshly-reset TTL would - so a
+        // real reset by the second call could hide behind that rounding. Sleeping here lets
+        // firstTtl reflect real decay, so a reset on the second call is visible as secondTtl
+        // jumping back up instead of continuing to count down.
+        Thread.sleep(2000);
         Long firstTtl = redisTemplate.getExpire(key);
+        // Same email as the first call above, deliberately: clearing the cooldown key lets the
+        // second allow() reach the email-hourly-cap check instead of being short-circuited by
+        // claimCooldown(), so this test actually re-invokes the hourly-cap script on the same key.
+        redisTemplate.delete("password-reset:cooldown:ttl-check@example.com");
         underTest.allow("ttl-check@example.com", "10.0.3.2");
         Long secondTtl = redisTemplate.getExpire(key);
 
