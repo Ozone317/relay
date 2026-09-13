@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doThrow;
 
 import com.example.relay.app.domain.App;
-import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
@@ -20,7 +19,9 @@ import com.example.relay.message.api.dto.MessageCreateDto;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -67,6 +68,9 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private PasswordResetTokenRepository passwordResetTokenRepository;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -132,6 +136,9 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        // password_reset_tokens FKs to users (added in Task 4, after this test was written) - must be
+        // cleared before userRepository.deleteAll() below, same as refreshTokenRepository above.
+        passwordResetTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 }
