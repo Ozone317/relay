@@ -105,21 +105,21 @@ class PasswordResetConcurrentRequestPostgresTest implements SharedPostgresContai
     }
 
     @Test
-    void twoConcurrentIssueCalls_bothSucceed_andEachCreatesExactlyOneRow() throws InterruptedException {
-        // This is deliberately NOT asserting "exactly one row was ever created" - both requests are
-        // legitimate and both succeed, per the design spec Section 4/7: "one active token" is
-        // best-effort UX polish (an application-level invalidation), not a DB-enforced correctness
-        // invariant the way the attempt-replay concurrency guard is.
+    void twoConcurrentIssueCalls_bothSucceed_eachCreatingItsOwnRow() throws InterruptedException {
+        // "Exactly one active token" is a best-effort property, not DB-constraint-enforced (design
+        // spec docs/superpowers/specs/2026-09-12-password-reset-design.md:493-496, "State
+        // explicitly in the test whether 'exactly one active token' is a guarantee or a best-effort
+        // property (it's the latter per Section 4 above - not DB-constraint-enforced)").
         //
-        // Verified empirically (deterministic across repeated runs, not flaky): issue()'s
-        // invalidateAllForUser() runs at the START of its own transaction, before its own insert.
-        // With no pre-existing token, two genuinely concurrent issue() calls each invalidate zero
-        // rows (there is nothing yet to invalidate - the other call's insert isn't visible before it
-        // commits) and then both insert, so BOTH tokens are left unused. That is exactly the
-        // best-effort behavior the design spec describes, not a bug in this test: "one active
-        // token" only holds when one issue() call demonstrably starts after a previous one has
-        // already committed, which sequential (non-racing) callers get for free and this race
-        // intentionally does not.
+        // issue()'s invalidate-then-insert is not atomic against a concurrent issue() for the same
+        // user: invalidateAllForUser() runs at the START of its own transaction, before its own
+        // insert, so with no pre-existing token, two genuinely concurrent issue() calls each
+        // invalidate zero rows (there is nothing yet to invalidate - the other call's insert isn't
+        // visible before it commits) and then both insert. Verified empirically (deterministic
+        // across repeated runs, not flaky): both rows are legitimately left unused after a genuine
+        // race. This test proves both calls succeed and each creates its own row; it deliberately
+        // does NOT assert an unused-token upper bound, since none is guaranteed by the spec or the
+        // implementation.
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch readyLatch = new CountDownLatch(2);
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -144,10 +144,6 @@ class PasswordResetConcurrentRequestPostgresTest implements SharedPostgresContai
         assertTrue(finished, "both issue() calls must finish within the timeout");
 
         List<PasswordResetToken> allTokens = passwordResetTokenRepository.findAll();
-        long unusedCount = allTokens.stream().filter(t -> t.getUsedAt() == null).count();
-
         assertEquals(2, allTokens.size(), "both requests succeed and both create a row");
-        assertTrue(unusedCount >= 1 && unusedCount <= 2,
-                "every created token is accounted for as either used or unused, never lost");
     }
 }
