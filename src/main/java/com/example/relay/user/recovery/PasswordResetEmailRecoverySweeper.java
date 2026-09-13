@@ -23,6 +23,15 @@ import org.springframework.stereotype.Component;
  * password" again. That call's own PasswordResetTokenService.issue(...) invalidates this stale row as an intrinsic side
  * effect (sets used_at), which is what removes it from this sweeper's candidate query on the very next tick - no
  * separate touch/staleness-bump guard is needed.
+ *
+ * <p>
+ * Known accepted gap - no bounded retry: because recovery here mints a brand-new token row (fresh id, fresh expires_at,
+ * fresh updated_at) rather than resending the original message, a user whose Brevo sends keep failing is recovered
+ * again roughly every {@code grace} period indefinitely. There is currently no cap on recovery attempts and no point at
+ * which this sweeper gives up on a persistently-affected user. This is unlike a resend-based design, where the sweep
+ * predicate's own expires_at bound would eventually retire a stuck row on its own. Bounding this (e.g. capping recovery
+ * attempts per user, or giving up after N ticks) needs its own design decision and is deliberately out of scope here -
+ * this comment exists so the gap is visible rather than silently assumed away.
  */
 @Component
 public class PasswordResetEmailRecoverySweeper {
