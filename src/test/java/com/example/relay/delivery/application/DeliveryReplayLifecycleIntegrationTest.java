@@ -23,6 +23,7 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,13 +45,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Full-stack replay lifecycle through the real worker pipeline (publish -> worker consumes -> HTTP
- * call via MockWebServer -> status transition), ported from the pre-Task-8
- * AttemptReplayLifecycleIntegrationTest onto DeliveryReplayService's delivery-scoped API
- * (replay(UUID deliveryId, ...): DeliveryStatus instead of replay(UUID attemptId, ...): Attempt)
- * after AttemptReplayService was deleted as dead code. Delivery is write-once, so a delivery replayed
- * twice is still replay(delivery.getId(), ...) both times - the same Delivery carried forward, never
- * a new one.
+ * Full-stack replay lifecycle through the real worker pipeline (publish -> worker consumes -> HTTP call via
+ * MockWebServer -> status transition), ported from the pre-Task-8 AttemptReplayLifecycleIntegrationTest onto
+ * DeliveryReplayService's delivery-scoped API (replay(UUID deliveryId, ...): DeliveryStatus instead of replay(UUID
+ * attemptId, ...): Attempt) after AttemptReplayService was deleted as dead code. Delivery is write-once, so a delivery
+ * replayed twice is still replay(delivery.getId(), ...) both times - the same Delivery carried forward, never a new
+ * one.
  */
 @SpringBootTest
 @Testcontainers
@@ -80,6 +80,8 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+    @Autowired
+    private PasswordResetTokenRepository passwordResetTokenRepository;
 
     @Autowired
     private EnvironmentRepository environmentRepository;
@@ -151,6 +153,9 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        // password_reset_tokens FKs to users (added in Task 4, after this test was written) - must be
+        // cleared before userRepository.deleteAll() below, same as refreshTokenRepository above.
+        passwordResetTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 
@@ -167,8 +172,9 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     void replaySucceeds_marksTheNewAttemptSucceeded() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
         Delivery delivery = persistDeadDelivery(mockWebServer.url("/webhook").toString());
-        Attempt dead = attemptRepository.findByDeliveryId(delivery.getId(),
-                org.springframework.data.domain.Pageable.unpaged()).getContent().get(0);
+        Attempt dead =
+                attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
+                        .getContent().get(0);
 
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
 
@@ -200,8 +206,9 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("still broken"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
         Delivery delivery = persistDeadDelivery(mockWebServer.url("/webhook").toString());
-        Attempt dead = attemptRepository.findByDeliveryId(delivery.getId(),
-                org.springframework.data.domain.Pageable.unpaged()).getContent().get(0);
+        Attempt dead =
+                attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
+                        .getContent().get(0);
 
         DeliveryStatus firstReplay = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(AttemptStatus.DEAD,

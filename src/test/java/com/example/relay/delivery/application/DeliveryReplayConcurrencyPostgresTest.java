@@ -21,6 +21,7 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,25 +40,23 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * Proves that under concurrent replay of the same delivery, exactly one replay survives - whichever
- * layer ends up arbitrating the race.
+ * Proves that under concurrent replay of the same delivery, exactly one replay survives - whichever layer ends up
+ * arbitrating the race.
  *
  * <p>
- * This does NOT prove that idx_attempts_one_active_per_message_endpoint specifically (rather than
- * the app-level existsByMessageIdAndEndpointIdAndStatusIn pre-check) is what stops the loser: if
- * thread A completes before thread B reaches its pre-check, B is rejected by the pre-check, not the
- * DB constraint. Only when both threads pass the pre-check and race into
- * AttemptService.createReplay does the real DB constraint arbitrate - this test cannot force that
- * interleaving, so it should be read as "one winner, one loser, layer unspecified" rather than as
- * proof the DB constraint is what's load-bearing. See DeliveryReplayServiceTest's
- * replay_throwsActiveAttemptAlreadyExists_whenCreateReplayLosesTheInsertRace for a test that does
- * pin down the DB-constraint path specifically, by mocking the fast-path check to pass and the
- * insert to fail.
+ * This does NOT prove that idx_attempts_one_active_per_message_endpoint specifically (rather than the app-level
+ * existsByMessageIdAndEndpointIdAndStatusIn pre-check) is what stops the loser: if thread A completes before thread B
+ * reaches its pre-check, B is rejected by the pre-check, not the DB constraint. Only when both threads pass the
+ * pre-check and race into AttemptService.createReplay does the real DB constraint arbitrate - this test cannot force
+ * that interleaving, so it should be read as "one winner, one loser, layer unspecified" rather than as proof the DB
+ * constraint is what's load-bearing. See DeliveryReplayServiceTest's
+ * replay_throwsActiveAttemptAlreadyExists_whenCreateReplayLosesTheInsertRace for a test that does pin down the
+ * DB-constraint path specifically, by mocking the fast-path check to pass and the insert to fail.
  *
  * <p>
- * Ported from the pre-Task-8 AttemptReplayConcurrencyPostgresTest onto DeliveryReplayService's
- * delivery-scoped API (replay(UUID deliveryId, ...): DeliveryStatus instead of replay(UUID
- * attemptId, ...): Attempt) after AttemptReplayService was deleted as dead code.
+ * Ported from the pre-Task-8 AttemptReplayConcurrencyPostgresTest onto DeliveryReplayService's delivery-scoped API
+ * (replay(UUID deliveryId, ...): DeliveryStatus instead of replay(UUID attemptId, ...): Attempt) after
+ * AttemptReplayService was deleted as dead code.
  */
 @SpringBootTest
 class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
@@ -72,6 +71,8 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
     private UserRepository userRepository;
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+    @Autowired
+    private PasswordResetTokenRepository passwordResetTokenRepository;
     @Autowired
     private EnvironmentRepository environmentRepository;
     @Autowired
@@ -98,14 +99,17 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        // password_reset_tokens FKs to users (added in Task 4, after this test was written) - must be
+        // cleared before userRepository.deleteAll() below, same as refreshTokenRepository above.
+        passwordResetTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         User user = userRepository.save(new User("replay-" + UUID.randomUUID() + "@mail.com", "hash"));
         Environment env = environmentRepository.save(new Environment("Env 1", "Desc 1", user));
         App app = appRepository.save(new App("App 1", env));
         Event event = eventRepository.save(new Event("payment.completed", app));
-        Endpoint endpoint = endpointRepository
-                .save(new Endpoint("EP 1", "https://example.com/webhook", "whsec_1", app));
+        Endpoint endpoint =
+                endpointRepository.save(new Endpoint("EP 1", "https://example.com/webhook", "whsec_1", app));
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = messageRepository.save(new Message(app, event, body));
 
@@ -127,9 +131,9 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger conflictCount = new AtomicInteger(0);
 
-        List<Future<?>> futures = List.of(
-                executor.submit(() -> race(readyLatch, startLatch, successCount, conflictCount)),
-                executor.submit(() -> race(readyLatch, startLatch, successCount, conflictCount)));
+        List<Future<?>> futures =
+                List.of(executor.submit(() -> race(readyLatch, startLatch, successCount, conflictCount)),
+                        executor.submit(() -> race(readyLatch, startLatch, successCount, conflictCount)));
 
         assertTrue(readyLatch.await(5, TimeUnit.SECONDS),
                 "both replay threads should reach the rendezvous point within 5 seconds");
