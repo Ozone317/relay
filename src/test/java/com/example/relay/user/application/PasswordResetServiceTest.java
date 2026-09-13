@@ -98,4 +98,41 @@ class PasswordResetServiceTest {
         verify(emailDispatchPublisher).publish(captor.capture());
         assertTrue(captor.getValue().template() == EmailTemplate.PASSWORD_CHANGED);
     }
+
+    @Test
+    void confirmReset_usesAnIdempotencyKeyDistinctFromTheResetDispatchForTheSameToken() {
+        User user = new User("real-user@example.com", "hash");
+        PasswordResetToken token = new PasswordResetToken(user, "hash", java.time.Instant.now().plusSeconds(1800),
+                java.time.Instant.now());
+        when(rateLimiter.allow("real-user@example.com", "1.2.3.4")).thenReturn(true);
+        when(userRepository.findByEmail("real-user@example.com")).thenReturn(Optional.of(user));
+        when(passwordResetTokenService.issue(any(), any()))
+                .thenReturn(new PasswordResetTokenService.IssuedResetToken(token, "raw-token-value"));
+        when(passwordResetTokenService.consumeAndResetPassword(any(), any(), any())).thenReturn(token);
+
+        underTest.requestReset("real-user@example.com", "1.2.3.4");
+        underTest.confirmReset("raw-token-value", "newPassword123");
+
+        org.mockito.ArgumentCaptor<EmailDispatchMessage> captor =
+                org.mockito.ArgumentCaptor.forClass(EmailDispatchMessage.class);
+        verify(emailDispatchPublisher, org.mockito.Mockito.times(2)).publish(captor.capture());
+
+        java.util.List<EmailDispatchMessage> published = captor.getAllValues();
+        EmailDispatchMessage resetMessage = published.get(0);
+        EmailDispatchMessage changedMessage = published.get(1);
+
+        assertTrue(resetMessage.template() == EmailTemplate.PASSWORD_RESET);
+        assertTrue(changedMessage.template() == EmailTemplate.PASSWORD_CHANGED);
+        assertTrue(resetMessage.idempotencyKey().equals(token.getId().toString()));
+        assertTrue(!changedMessage.idempotencyKey().equals(resetMessage.idempotencyKey()));
+        // Deterministic - the same token must always derive the same PASSWORD_CHANGED key, so that RabbitMQ
+        // redelivery of the same message still dedupes at Brevo instead of sending a second alert.
+        assertTrue(changedMessage.idempotencyKey()
+                .equals(java.util.UUID
+                        .nameUUIDFromBytes(
+                                ("password-changed:" + token.getId()).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                        .toString()));
+        // Must still pass BrevoEmailSender's UUID.fromString(...) validation.
+        assertTrue(java.util.UUID.fromString(changedMessage.idempotencyKey()) != null);
+    }
 }

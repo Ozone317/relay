@@ -9,8 +9,10 @@ import com.example.relay.user.application.PasswordResetTokenService.IssuedResetT
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
@@ -68,6 +70,18 @@ public class PasswordResetService {
                 passwordResetTokenService.consumeAndResetPassword(rawToken, newPassword, Instant.now());
 
         emailDispatchPublisher.publish(new EmailDispatchMessage(EmailTemplate.PASSWORD_CHANGED, Map.of(),
-                token.getUser().getEmail(), token.getId().toString()));
+                token.getUser().getEmail(), passwordChangedIdempotencyKey(token)));
+    }
+
+    /**
+     * Derived from, but deliberately distinct from, the token id used as the PASSWORD_RESET dispatch's own idempotency
+     * key (see issueAndDispatch above). Brevo's Idempotency-Key header is scoped per key value, not per template -
+     * reusing the token id verbatim here would make Brevo see this as a retry of the already-sent PASSWORD_RESET email
+     * and silently return DUPLICATE instead of sending the password-changed alert. Deterministic on the token id so
+     * that redelivery of the same RabbitMQ message still dedupes correctly at Brevo.
+     */
+    private String passwordChangedIdempotencyKey(PasswordResetToken token) {
+        return UUID.nameUUIDFromBytes(("password-changed:" + token.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
     }
 }
