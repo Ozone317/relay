@@ -3,7 +3,6 @@ package com.example.relay.email;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Map;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.support.ResourceBundleMessageSource;
@@ -45,8 +44,8 @@ class EmailRendererTest {
 
     @Test
     void render_producesSubjectHtmlAndText_withParamsInterpolated() {
-        RenderedEmail email = emailRenderer.render(EmailTemplate.DEAD_LETTER_NOTIFICATION, Map.of("appName",
-                "My App", "endpointUrl", "https://example.com/webhook", "lastError", "Connection refused"));
+        RenderedEmail email = emailRenderer.render(EmailTemplate.DEAD_LETTER_NOTIFICATION, Map.of("appName", "My App",
+                "endpointUrl", "https://example.com/webhook", "lastError", "Connection refused"));
 
         assertThat(email.subject()).isEqualTo("Delivery failed permanently for My App");
         assertThat(email.html()).contains("My App");
@@ -58,8 +57,8 @@ class EmailRendererTest {
 
     @Test
     void render_escapesHtmlUnsafeValues_inHtmlBody() {
-        RenderedEmail email = emailRenderer.render(EmailTemplate.DEAD_LETTER_NOTIFICATION, Map.of("appName",
-                "My App", "endpointUrl", "https://example.com/webhook", "lastError", "<script>alert(1)</script>"));
+        RenderedEmail email = emailRenderer.render(EmailTemplate.DEAD_LETTER_NOTIFICATION, Map.of("appName", "My App",
+                "endpointUrl", "https://example.com/webhook", "lastError", "<script>alert(1)</script>"));
 
         assertThat(email.html()).doesNotContain("<script>alert(1)</script>");
         assertThat(email.html()).contains("&lt;script&gt;");
@@ -67,12 +66,30 @@ class EmailRendererTest {
 
     @Test
     void render_stripsCrLf_fromInterpolatedSubject() {
-        RenderedEmail email = emailRenderer.render(EmailTemplate.DEAD_LETTER_NOTIFICATION,
-                Map.of("appName", "Evil\r\nBcc: attacker@example.test", "endpointUrl", "https://example.com",
-                        "lastError", "boom"));
+        RenderedEmail email = emailRenderer.render(EmailTemplate.DEAD_LETTER_NOTIFICATION, Map.of("appName",
+                "Evil\r\nBcc: attacker@example.test", "endpointUrl", "https://example.com", "lastError", "boom"));
 
         assertThat(email.subject()).doesNotContain("\r");
         assertThat(email.subject()).doesNotContain("\n");
+    }
+
+    @Test
+    void render_producesSubjectHtmlAndText_forPasswordReset_withResetUrlInterpolated() {
+        RenderedEmail email = emailRenderer.render(EmailTemplate.PASSWORD_RESET,
+                Map.of("resetUrl", "https://app.relay.example/reset-password?token=raw-token-value"));
+
+        assertThat(email.subject()).isEqualTo("Reset your Relay password");
+        assertThat(email.html()).contains("https://app.relay.example/reset-password?token=raw-token-value");
+        assertThat(email.text()).contains("https://app.relay.example/reset-password?token=raw-token-value");
+    }
+
+    @Test
+    void render_producesSubjectHtmlAndText_forPasswordChanged() {
+        RenderedEmail email = emailRenderer.render(EmailTemplate.PASSWORD_CHANGED, Map.of());
+
+        assertThat(email.subject()).isEqualTo("Your Relay password was changed");
+        assertThat(email.html()).contains("Your Relay password was changed");
+        assertThat(email.text()).contains("Your Relay password was changed");
     }
 
     @Test
