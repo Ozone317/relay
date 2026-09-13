@@ -1,6 +1,8 @@
 package com.example.relay.user.recovery;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
@@ -8,6 +10,9 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.relay.email.EmailSendResult;
 import com.example.relay.email.EmailService;
 import com.example.relay.support.SharedPostgresContainer;
@@ -18,8 +23,10 @@ import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -33,7 +40,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @Testcontainers
 @TestPropertySource(properties = {"relay.password-reset.email-recovery.interval=2s",
-        "relay.password-reset.email-recovery.grace=2s"})
+        "relay.password-reset.email-recovery.grace=2s", "relay.password-reset.email-recovery.max-recovery-window=1h"})
 // This class's fast 2s-interval sweeper runs in a dedicated Spring context (distinct properties from
 // every other @SpringBootTest class), which Spring's test-context cache would otherwise keep alive -
 // and its @Scheduled thread running - for the rest of the suite once cached. Left uncontained, that
@@ -61,6 +68,7 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
 
     private User user;
     private PasswordResetToken staleToken;
+    private ListAppender<ILoggingEvent> sweeperLogAppender;
 
     @BeforeEach
     void setUp() {
@@ -73,6 +81,19 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
                 .save(new PasswordResetToken(user, "stale-hash", longAgo.plusSeconds(1800), longAgo));
 
         when(emailService.send(any(), anyMap(), anyString(), anyString())).thenReturn(EmailSendResult.SENT);
+
+        sweeperLogAppender = new ListAppender<>();
+        sweeperLogAppender.start();
+        sweeperLogger().addAppender(sweeperLogAppender);
+    }
+
+    @AfterEach
+    void tearDown() {
+        sweeperLogger().detachAppender(sweeperLogAppender);
+    }
+
+    private Logger sweeperLogger() {
+        return (Logger) LoggerFactory.getLogger(PasswordResetEmailRecoverySweeper.class);
     }
 
     @Test
@@ -89,6 +110,25 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
             assertNull(reloadedStale.getResetEmailDispatchedAt(),
                     "the stale row itself was never dispatched - only a NEW row's email gets sent");
         });
+    }
+
+    @Test
+    void tokenPastMaxRecoveryWindow_isGivenUpOn_withNoSuccessorRowReissued() {
+        passwordResetTokenRepository.deleteAll();
+        Instant staleSince = Instant.now().minusSeconds(120);
+        Instant longPastFirstRequest = Instant.now().minusSeconds(3600 + 120);
+        PasswordResetToken pastWindow = passwordResetTokenRepository.save(new PasswordResetToken(user,
+                "past-window-hash", staleSince.plusSeconds(1800), staleSince, longPastFirstRequest));
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+            PasswordResetToken reloaded = passwordResetTokenRepository.findById(pastWindow.getId()).orElseThrow();
+            assertNotNull(reloaded.getUsedAt(), "a chain past its recovery window must be given up on");
+        });
+
+        assertEquals(1, passwordResetTokenRepository.count(),
+                "giving up must retire the row in place, never reissue a successor");
+        assertThat(sweeperLogAppender.list.stream().map(ILoggingEvent::getFormattedMessage))
+                .anyMatch(message -> message.contains("Giving up"));
     }
 
     @Test

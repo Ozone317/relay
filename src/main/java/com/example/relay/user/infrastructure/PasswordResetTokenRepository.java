@@ -47,6 +47,16 @@ public interface PasswordResetTokenRepository extends JpaRepository<PasswordRese
 
     @Modifying(clearAutomatically = true)
     @Query(value = """
+                UPDATE password_reset_tokens
+                SET used_at = :now
+                WHERE id = :tokenId
+                AND used_at IS NULL
+                AND reset_email_dispatched_at IS NULL
+            """, nativeQuery = true)
+    int giveUpOn(UUID tokenId, Instant now);
+
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
                 DELETE FROM password_reset_tokens
                 WHERE expires_at < :threshold
             """, nativeQuery = true)

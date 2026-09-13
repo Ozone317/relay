@@ -8,6 +8,7 @@ import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
+import java.util.UUID;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,10 +50,41 @@ public class PasswordResetTokenService {
      */
     @Transactional
     public IssuedResetToken issue(User user, Instant now) {
+        return issue(user, now, now);
+    }
+
+    /**
+     * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper: reissues a token exactly like
+     * {@link #issue(User, Instant)}, except {@code firstRequestedAt} is carried forward from the row being superseded
+     * rather than reset to {@code now} - this is what lets
+     * com.example.relay.user.recovery.PasswordResetEmailRecoveryProperties#maxRecoveryWindow bound an entire recovery
+     * chain instead of restarting on every reissue.
+     */
+    @Transactional
+    public IssuedResetToken reissueForRecovery(User user, Instant now, Instant firstRequestedAt) {
+        return issue(user, now, firstRequestedAt);
+    }
+
+    /**
+     * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper's give-up path - a thin
+     * 
+     * @Transactional wrapper, the same shape as deliveryengine's AttemptService#claimDeadLetterNotification, since
+     *                PasswordResetTokenRepository#giveUpOn is a custom @Modifying @Query method and Spring Data JPA
+     *                does not wrap such methods in a transaction on its own (unlike SimpleJpaRepository's built-in CRUD
+     *                methods) - calling it directly from the sweeper's un-transactional sweep() throws
+     *                TransactionRequiredException.
+     */
+    @Transactional
+    public boolean giveUpOnRecovery(UUID tokenId, Instant now) {
+        return passwordResetTokenRepository.giveUpOn(tokenId, now) == 1;
+    }
+
+    private IssuedResetToken issue(User user, Instant now, Instant firstRequestedAt) {
         passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
         String rawToken = secureTokenGenerator.generateRawToken();
-        PasswordResetToken token = passwordResetTokenRepository.saveAndFlush(new PasswordResetToken(user,
-                secureTokenGenerator.hash(rawToken), now.plus(passwordResetProperties.getTokenTtl()), now));
+        PasswordResetToken token = passwordResetTokenRepository
+                .saveAndFlush(new PasswordResetToken(user, secureTokenGenerator.hash(rawToken),
+                        now.plus(passwordResetProperties.getTokenTtl()), now, firstRequestedAt));
         return new IssuedResetToken(token, rawToken);
     }
 

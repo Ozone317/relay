@@ -57,7 +57,20 @@ public class PasswordResetService {
      * raw token is never persisted and so cannot be reconstructed from the database (see the design spec Section 7.2).
      */
     public void issueAndDispatch(User user) {
-        IssuedResetToken issued = passwordResetTokenService.issue(user, Instant.now());
+        dispatch(passwordResetTokenService.issue(user, Instant.now()), user);
+    }
+
+    /**
+     * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper: reissues and dispatches exactly
+     * like {@link #issueAndDispatch(User)}, except the reissued token carries {@code firstRequestedAt} forward from the
+     * row being superseded instead of restarting the window at {@code now} - see
+     * PasswordResetTokenService#reissueForRecovery.
+     */
+    public void issueAndDispatchForRecovery(User user, Instant firstRequestedAt) {
+        dispatch(passwordResetTokenService.reissueForRecovery(user, Instant.now(), firstRequestedAt), user);
+    }
+
+    private void dispatch(IssuedResetToken issued, User user) {
         PasswordResetToken token = issued.token();
         String resetUrl = passwordResetProperties.getBaseUrl() + "?token=" + issued.rawToken();
 

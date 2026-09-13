@@ -50,13 +50,31 @@ public class PasswordResetToken {
     @Column(name = "reset_email_dispatched_at")
     private Instant resetEmailDispatchedAt;
 
+    @Column(name = "first_requested_at", nullable = false, updatable = false)
+    private Instant firstRequestedAt;
+
+    /**
+     * Convenience constructor for the ordinary issuance path - a token issued in direct response to a user's own
+     * "forgot password" click always starts its own fresh {@code firstRequestedAt} window, identical to {@code now}.
+     */
     public PasswordResetToken(User user, String tokenHash, Instant expiresAt, Instant now) {
+        this(user, tokenHash, expiresAt, now, now);
+    }
+
+    /**
+     * Used when com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper reissues a token to recover an
+     * undispatched row - {@code firstRequestedAt} is carried forward from the row being superseded, not reset to
+     * {@code now}, so PasswordResetEmailRecoveryProperties.maxRecoveryWindow bounds the whole recovery chain rather
+     * than restarting on every reissue.
+     */
+    public PasswordResetToken(User user, String tokenHash, Instant expiresAt, Instant now, Instant firstRequestedAt) {
         this.id = UUID.randomUUID();
         this.user = user;
         this.tokenHash = tokenHash;
         this.expiresAt = expiresAt;
         this.createdAt = now;
         this.updatedAt = now;
+        this.firstRequestedAt = firstRequestedAt;
     }
 
     public UUID getId() {
@@ -89,5 +107,9 @@ public class PasswordResetToken {
 
     public Instant getResetEmailDispatchedAt() {
         return resetEmailDispatchedAt;
+    }
+
+    public Instant getFirstRequestedAt() {
+        return firstRequestedAt;
     }
 }

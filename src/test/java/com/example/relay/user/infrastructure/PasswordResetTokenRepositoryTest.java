@@ -41,6 +41,17 @@ class PasswordResetTokenRepositoryTest implements SharedPostgresContainer {
     }
 
     @Test
+    void firstRequestedAt_defaultsToNow_butCanBeCarriedForwardDistinctlyFromCreatedAt() {
+        Instant original = now.minusSeconds(3600);
+        PasswordResetToken recovered = underTest
+                .save(new PasswordResetToken(user, "hash-recovered", now.plus(30, ChronoUnit.MINUTES), now, original));
+
+        PasswordResetToken reloaded = underTest.findByTokenHash("hash-recovered").orElseThrow();
+        assertEquals(original, reloaded.getFirstRequestedAt());
+        assertEquals(now, reloaded.getCreatedAt());
+    }
+
+    @Test
     void findByTokenHash_returnsTheMatchingRow() {
         persisted("hash-a", now.plus(30, ChronoUnit.MINUTES));
 
@@ -72,6 +83,33 @@ class PasswordResetTokenRepositoryTest implements SharedPostgresContainer {
 
         assertEquals(1, updated);
         assertTrue(underTest.findByTokenHash("hash-e").orElseThrow().getUsedAt() != null);
+    }
+
+    @Test
+    void giveUpOn_returns1thenZero_soAGivenUpRowCanNeverBeGivenUpOnTwice() {
+        PasswordResetToken token = persisted("hash-give-up", now.plus(30, ChronoUnit.MINUTES));
+
+        assertEquals(1, underTest.giveUpOn(token.getId(), now));
+        assertEquals(0, underTest.giveUpOn(token.getId(), now));
+        assertTrue(underTest.findByTokenHash("hash-give-up").orElseThrow().getUsedAt() != null);
+    }
+
+    @Test
+    void giveUpOn_doesNotReviveAnAlreadyUsedToken() {
+        PasswordResetToken token = persisted("hash-already-used", now.plus(30, ChronoUnit.MINUTES));
+        underTest.consume("hash-already-used", now);
+
+        assertEquals(0, underTest.giveUpOn(token.getId(), now.plusSeconds(1)));
+    }
+
+    @Test
+    void giveUpOn_doesNotTouchATokenThatHasAlreadyBeenDispatched() {
+        PasswordResetToken token = persisted("hash-already-dispatched", now.plus(30, ChronoUnit.MINUTES));
+        underTest.claimResetEmailDispatch(token.getId(), now);
+
+        assertEquals(0, underTest.giveUpOn(token.getId(), now.plusSeconds(1)));
+        assertTrue(underTest.findByTokenHash("hash-already-dispatched").orElseThrow().getUsedAt() == null,
+                "a token whose email genuinely dispatched must never be retroactively invalidated by give-up");
     }
 
     @Test

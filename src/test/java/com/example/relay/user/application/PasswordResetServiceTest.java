@@ -2,6 +2,7 @@ package com.example.relay.user.application;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -16,6 +17,7 @@ import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -82,6 +84,24 @@ class PasswordResetServiceTest {
         assertTrue(published.template() == EmailTemplate.PASSWORD_RESET);
         assertTrue(published.params().get("resetUrl").toString().contains("raw-token-value"));
         assertTrue(published.idempotencyKey().equals(token.getId().toString()));
+    }
+
+    @Test
+    void issueAndDispatchForRecovery_reissuesCarryingFirstRequestedAtForward_andDispatchesTheResetEmail() {
+        User user = new User("recovery-user@example.com", "hash");
+        Instant originalFirstRequestedAt = Instant.now().minusSeconds(1800);
+        PasswordResetToken token = new PasswordResetToken(user, "hash", Instant.now().plusSeconds(1800), Instant.now());
+        when(passwordResetTokenService.reissueForRecovery(any(), any(), eq(originalFirstRequestedAt)))
+                .thenReturn(new PasswordResetTokenService.IssuedResetToken(token, "raw-token-value"));
+
+        underTest.issueAndDispatchForRecovery(user, originalFirstRequestedAt);
+
+        verify(passwordResetTokenService).reissueForRecovery(eq(user), any(), eq(originalFirstRequestedAt));
+        org.mockito.ArgumentCaptor<EmailDispatchMessage> captor =
+                org.mockito.ArgumentCaptor.forClass(EmailDispatchMessage.class);
+        verify(emailDispatchPublisher).publish(captor.capture());
+        assertTrue(captor.getValue().template() == EmailTemplate.PASSWORD_RESET);
+        assertTrue(captor.getValue().params().get("resetUrl").toString().contains("raw-token-value"));
     }
 
     @Test

@@ -61,6 +61,37 @@ class PasswordResetTokenServiceTest {
         verify(passwordResetTokenRepository).invalidateAllForUser(user.getId(), now);
         assertEquals("raw-token", result.rawToken());
         assertEquals("hashed-token", result.token().getTokenHash());
+        assertEquals(now, result.token().getFirstRequestedAt(),
+                "an ordinary user-initiated issuance always starts its own fresh recovery window");
+    }
+
+    @Test
+    void reissueForRecovery_invalidatesOldTokensThenSavesANewOne_carryingFirstRequestedAtForward() {
+        User user = new User("recovery-test@example.com", "hash");
+        Instant now = Instant.now();
+        Instant originalFirstRequestedAt = now.minusSeconds(1800);
+
+        PasswordResetTokenService.IssuedResetToken result =
+                underTest.reissueForRecovery(user, now, originalFirstRequestedAt);
+
+        verify(passwordResetTokenRepository).invalidateAllForUser(user.getId(), now);
+        assertEquals("raw-token", result.rawToken());
+        assertEquals(originalFirstRequestedAt, result.token().getFirstRequestedAt(),
+                "recovery must carry the ORIGINAL request's timestamp forward, not restart the window at now");
+        assertEquals(now, result.token().getCreatedAt(), "the reissued row's own createdAt is still genuinely new");
+    }
+
+    @Test
+    void giveUpOnRecovery_delegatesToTheRepositorysAtomicGiveUp() {
+        User user = new User("give-up-test@example.com", "hash");
+        Instant now = Instant.now();
+        java.util.UUID tokenId = java.util.UUID.randomUUID();
+        when(passwordResetTokenRepository.giveUpOn(tokenId, now)).thenReturn(1);
+
+        boolean result = underTest.giveUpOnRecovery(tokenId, now);
+
+        assertEquals(true, result);
+        verify(passwordResetTokenRepository).giveUpOn(tokenId, now);
     }
 
     @Test
