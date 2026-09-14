@@ -76,7 +76,6 @@ public class AuthServiceTest {
         String email = "dakshkant8@gmail.com";
         User existing = new User(email, "existing-hash");
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(existing));
-        when(passwordEncoder.encode("somePassword")).thenReturn("newly-encoded-hash");
 
         com.example.relay.user.exception.ExistingUnverifiedAccountException thrown = assertThrows(
                 com.example.relay.user.exception.ExistingUnverifiedAccountException.class,
@@ -84,8 +83,6 @@ public class AuthServiceTest {
 
         assertEquals(email, thrown.getEmail());
         verify(userRepository, never()).saveAndFlush(any());
-        verify(userRepository).save(existing);
-        assertEquals("newly-encoded-hash", existing.getPasswordHash());
         verify(emailVerificationTokenService, never()).issue(any(), any());
     }
 
@@ -96,10 +93,7 @@ public class AuthServiceTest {
         // nothing else could have verified it in that window. Both detection paths must produce
         // the identical outcome - see the design spec Section 5.
         String email = "daksh@example.com";
-        User existingRow = new User(email, "some-other-hash");
-        when(userRepository.findByEmail(email))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(existingRow));
+        when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
         when(passwordEncoder.encode("pw")).thenReturn("hashed");
         when(userRepository.saveAndFlush(any(User.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
@@ -109,7 +103,6 @@ public class AuthServiceTest {
                 () -> underTest.register(email, "pw"));
 
         assertEquals(email, thrown.getEmail());
-        assertEquals("hashed", existingRow.getPasswordHash());
         verify(emailVerificationTokenService, never()).issue(any(), any());
     }
 

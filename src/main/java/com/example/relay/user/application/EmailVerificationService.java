@@ -64,8 +64,12 @@ public class EmailVerificationService {
                 .ifPresent(user -> dispatch(emailVerificationTokenService.issue(user, Instant.now()), user));
     }
 
-    public void verify(String rawToken) {
-        emailVerificationTokenService.consumeAndVerify(rawToken, Instant.now());
+    /**
+     * Consuming the token is also what sets the account's real password - see
+     * EmailVerificationTokenService.consumeAndVerify for the security property this provides.
+     */
+    public void verify(String rawToken, String password) {
+        emailVerificationTokenService.consumeAndVerify(rawToken, password, Instant.now());
     }
 
     private void dispatch(IssuedVerificationToken issued, User user) {

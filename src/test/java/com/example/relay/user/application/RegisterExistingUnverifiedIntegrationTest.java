@@ -1,17 +1,25 @@
 package com.example.relay.user.application;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.ExistingUnverifiedAccountException;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
+/**
+ * Under Design A, nothing about register() ever determines an account's final password - that is bound to
+ * EmailVerificationTokenService.consumeAndVerify (see AccountPreHijackingRegressionTest for the security property
+ * itself). So the only thing left to prove here is that register() against an existing UNVERIFIED email behaves
+ * consistently and harmlessly, however many times it is called: it always throws ExistingUnverifiedAccountException
+ * (never UserAlreadyExistsException, never a 500), and never corrupts or verifies the existing row.
+ */
 @SpringBootTest
 class RegisterExistingUnverifiedIntegrationTest implements SharedPostgresContainer {
 
@@ -24,31 +32,25 @@ class RegisterExistingUnverifiedIntegrationTest implements SharedPostgresContain
     @Autowired
     private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
     @Test
-    void register_forAnExistingUnverifiedEmail_overwritesThePasswordWithTheNewSubmission() {
-        String email = "reissue-password-check@example.com";
-        authService.register(email, "originalPassword123");
+    void register_forAnExistingUnverifiedEmail_alwaysThrowsExistingUnverifiedAndLeavesTheRowIntact() {
+        String email = "reissue-consistency-check@example.com";
+        RegisteredUser first = authService.register(email, "originalPassword123");
 
-        try {
-            authService.register(email, "attackerChosenPassword456");
-        } catch (com.example.relay.user.exception.ExistingUnverifiedAccountException expected) {
-            // expected - this is the point of the test
+        for (int attempt = 0; attempt < 3; attempt++) {
+            ExistingUnverifiedAccountException thrown = assertThrows(ExistingUnverifiedAccountException.class,
+                    () -> authService.register(email, "anotherPassword456"));
+            assertEquals(email, thrown.getEmail());
         }
 
         User reloaded = userRepository.findByEmail(email).orElseThrow();
-        assertTrue(passwordEncoder.matches("attackerChosenPassword456", reloaded.getPasswordHash()),
-                "a re-registration attempt for a still-unverified account must overwrite the stored password "
-                        + "with the most recently submitted one");
-        assertFalse(passwordEncoder.matches("originalPassword123", reloaded.getPasswordHash()),
-                "the previously stored password must no longer work after the overwrite");
-        assertTrue(!reloaded.isEmailVerified());
+        assertEquals(first.user().getId(), reloaded.getId(), "repeated register() attempts must not replace the row");
+        assertEquals(email, reloaded.getEmail());
+        assertFalse(reloaded.isEmailVerified(), "a failed re-registration must never verify the account");
 
         // The email_verification_tokens FK to users(id) means this user's owned token rows must be
-        // removed before the user row itself can be deleted - this test's two register() calls each
-        // issue one, same cleanup shape as AuthServiceRegisterAtomicityTest.
+        // removed before the user row itself can be deleted - same cleanup shape as
+        // AuthServiceRegisterAtomicityTest.
         emailVerificationTokenRepository.findAll().stream()
                 .filter(token -> token.getUser().getId().equals(reloaded.getId()))
                 .forEach(emailVerificationTokenRepository::delete);

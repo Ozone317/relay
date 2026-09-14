@@ -114,8 +114,9 @@ class EmailVerificationServiceTest {
 
     @Test
     void verify_delegatesToConsumeAndVerify() {
-        underTest.verify("raw-token");
+        underTest.verify("raw-token", "newPassword123");
 
-        verify(emailVerificationTokenService).consumeAndVerify(org.mockito.ArgumentMatchers.eq("raw-token"), any());
+        verify(emailVerificationTokenService).consumeAndVerify(org.mockito.ArgumentMatchers.eq("raw-token"),
+                org.mockito.ArgumentMatchers.eq("newPassword123"), any());
     }
 }
