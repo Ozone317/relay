@@ -87,4 +87,21 @@ class EmailVerificationTokenServiceTest {
         assertEquals("encoded-real-owner-password", user.getPasswordHash());
         verify(userRepository).save(user);
     }
+
+    @Test
+    void consumeAndVerify_throws_whenTheTokensUserIsAlreadyVerified() {
+        User user = new User("already-verified@example.com", "existing-hash");
+        user.markEmailVerified();
+        EmailVerificationToken token =
+                new EmailVerificationToken(user, "hashed-token", Instant.now().plusSeconds(3600), Instant.now());
+        when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
+        when(emailVerificationTokenRepository.consume(eq("hashed-token"), any())).thenReturn(1);
+        when(emailVerificationTokenRepository.findByTokenHash("hashed-token")).thenReturn(Optional.of(token));
+
+        assertThrows(InvalidOrExpiredVerificationTokenException.class,
+                () -> underTest.consumeAndVerify("raw-token", "attackerChosenPassword", Instant.now()));
+
+        assertEquals("existing-hash", user.getPasswordHash());
+        verify(userRepository, org.mockito.Mockito.never()).save(any());
+    }
 }
