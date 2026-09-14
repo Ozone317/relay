@@ -71,10 +71,17 @@ class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
 
     @BeforeEach
     void registerAUser() {
-        ResponseEntity<Map<String, Object>> response = restTemplate.exchange("/api/v1/auth/register", HttpMethod.POST,
+        restTemplate.exchange("/api/v1/auth/register", HttpMethod.POST,
                 jsonBody(Map.of("email", EMAIL, "password", "password123")),
                 new ParameterizedTypeReference<Map<String, Object>>() {});
-        accessToken = (String) response.getBody().get("accessToken");
+        userRepository.findByEmail(EMAIL).ifPresent(user -> {
+            user.markEmailVerified();
+            userRepository.save(user);
+        });
+        ResponseEntity<Map<String, Object>> loggedIn = restTemplate.exchange("/api/v1/auth/login", HttpMethod.POST,
+                jsonBody(Map.of("email", EMAIL, "password", "password123")),
+                new ParameterizedTypeReference<Map<String, Object>>() {});
+        accessToken = (String) loggedIn.getBody().get("accessToken");
     }
 
     /** Registration commits into the JVM-wide shared Postgres instance; children before parents. */
