@@ -63,6 +63,11 @@ public class EmailVerificationTokenService {
      * own email address, and {@link #issue(User, Instant)} invalidates every previous token so exactly one is valid at
      * a time. Consequently no unauthenticated register() call can ever determine an account's final password; only
      * whoever successfully consumes the currently-valid token can.
+     *
+     * <p>
+     * A dangling-but-still-valid token can exist for an already-verified account (a documented, harmless race between
+     * this method and a concurrent {@link #issue(User, Instant)}/resend). Consuming such a token is rejected here -
+     * once a user is verified, no further token consumption may apply a password to that account.
      */
     @Transactional
     public EmailVerificationToken consumeAndVerify(String rawToken, String password, Instant now) {
@@ -77,6 +82,9 @@ public class EmailVerificationTokenService {
                         + "immediately after within the same transaction - should be impossible"));
 
         User user = token.getUser();
+        if (user.isEmailVerified()) {
+            throw new InvalidOrExpiredVerificationTokenException("Account is already verified");
+        }
         user.changePassword(passwordEncoder.encode(password));
         user.markEmailVerified();
         userRepository.save(user);

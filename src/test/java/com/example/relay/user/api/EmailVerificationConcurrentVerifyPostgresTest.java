@@ -2,11 +2,15 @@ package com.example.relay.user.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.relay.common.security.SecureTokenGenerator;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.application.EmailVerificationTokenService;
+import com.example.relay.user.domain.EmailVerificationToken;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.InvalidOrExpiredVerificationTokenException;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
@@ -37,6 +41,9 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private SecureTokenGenerator secureTokenGenerator;
+
     private User user;
 
     @AfterEach
@@ -52,7 +59,9 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
 
     @Test
     void verify_underConcurrentAttemptsWithTheSameToken_succeedsExactlyOnce() throws InterruptedException {
-        user = userRepository.saveAndFlush(new User("concurrent-verify@example.com", "provisional-hash"));
+        String provisionalPassword = "provisionalPassword";
+        user = userRepository.saveAndFlush(
+                new User("concurrent-verify@example.com", passwordEncoder.encode(provisionalPassword)));
         EmailVerificationTokenService.IssuedVerificationToken issued = underTest.issue(user, Instant.now());
 
         int threadCount = 2;
@@ -98,7 +107,35 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
                 : "threadPassword-0";
         assertFalse(passwordEncoder.matches(losingPassword, reloaded.getPasswordHash()),
                 "the losing thread's password must never become live");
-        assertFalse(passwordEncoder.matches("provisional-hash", reloaded.getPasswordHash()),
-                "the provisional pre-verification hash must have been replaced");
+        assertFalse(passwordEncoder.matches(provisionalPassword, reloaded.getPasswordHash()),
+                "the provisional pre-verification password must have been replaced");
+    }
+
+    @Test
+    void verify_rejectsADanglingTokenForAnAlreadyVerifiedUser_andNeverAppliesItsPassword() {
+        String realPassword = "realOwnerPassword";
+        user = userRepository.saveAndFlush(
+                new User("dangling-token@example.com", passwordEncoder.encode("provisionalPassword")));
+        EmailVerificationTokenService.IssuedVerificationToken firstToken = underTest.issue(user, Instant.now());
+
+        underTest.consumeAndVerify(firstToken.rawToken(), realPassword, Instant.now());
+
+        // Simulate the documented race: a second token, still valid, exists for a user who is
+        // already verified (e.g. issued by a concurrent resend just before the first consume
+        // committed). Insert it directly rather than going through issue(), which would
+        // invalidate the first (already-used) token anyway - the point is exercising the guard
+        // against a still-valid dangling token, not reproducing the exact race timing.
+        String danglingRawToken = "dangling-raw-token-" + user.getId();
+        emailVerificationTokenRepository.saveAndFlush(new EmailVerificationToken(user,
+                secureTokenGenerator.hash(danglingRawToken), Instant.now().plusSeconds(3600), Instant.now()));
+
+        assertThrows(InvalidOrExpiredVerificationTokenException.class,
+                () -> underTest.consumeAndVerify(danglingRawToken, "attackerChosenPassword", Instant.now()));
+
+        User reloaded = userRepository.findById(user.getId()).orElseThrow();
+        assertTrue(passwordEncoder.matches(realPassword, reloaded.getPasswordHash()),
+                "the real password from the first, legitimate consume must still be live");
+        assertFalse(passwordEncoder.matches("attackerChosenPassword", reloaded.getPasswordHash()),
+                "the dangling token's attempted password must never become live");
     }
 }
