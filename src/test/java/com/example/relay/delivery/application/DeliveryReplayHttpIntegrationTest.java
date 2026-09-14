@@ -124,7 +124,7 @@ class DeliveryReplayHttpIntegrationTest implements SharedPostgresContainer {
             deadAttempt.setStatus(AttemptStatus.DEAD);
             attemptRepository.save(deadAttempt);
 
-            String token = jwtService.generateToken(user.getEmail(), user.getId());
+            String token = jwtService.generateToken(user.getEmail(), user.getId(), true);
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(token);
 

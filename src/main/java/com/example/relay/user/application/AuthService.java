@@ -82,8 +82,8 @@ public class AuthService {
 
     public IssuedTokens refresh(String rawRefreshToken) {
         User user = refreshTokenService.validateAndSlide(rawRefreshToken, Instant.now());
-        return new IssuedTokens(jwtService.generateToken(user.getEmail(), user.getId()), rawRefreshToken,
-                accessTokenTtlSeconds());
+        return new IssuedTokens(jwtService.generateToken(user.getEmail(), user.getId(), user.isEmailVerified()),
+                rawRefreshToken, accessTokenTtlSeconds());
     }
 
     public void logout(String rawRefreshToken) {
@@ -96,7 +96,7 @@ public class AuthService {
 
     private IssuedTokens issueFor(User user) {
         Instant now = Instant.now();
-        return new IssuedTokens(jwtService.generateToken(user.getEmail(), user.getId()),
+        return new IssuedTokens(jwtService.generateToken(user.getEmail(), user.getId(), user.isEmailVerified()),
                 refreshTokenService.issue(user, now), accessTokenTtlSeconds());
     }
 

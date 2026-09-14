@@ -29,12 +29,12 @@ public class JwtService {
         return Jwts.parser().verifyWith(getSigningKey()).build().parseSignedClaims(token).getPayload();
     }
 
-    public String generateToken(String email, UUID userId) {
+    public String generateToken(String email, UUID userId, boolean emailVerified) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + authProperties.getAccessTokenTtl().toMillis());
 
-        return Jwts.builder().subject(email).claim("userId", userId).issuedAt(now).expiration(expiry)
-                .signWith(getSigningKey()).compact();
+        return Jwts.builder().subject(email).claim("userId", userId).claim("emailVerified", emailVerified)
+                .issuedAt(now).expiration(expiry).signWith(getSigningKey()).compact();
     }
 
     public String extractEmail(String token) {
@@ -44,6 +44,10 @@ public class JwtService {
     public UUID extractUserId(String token) {
         String userIdString = parseClaims(token).get("userId", String.class);
         return UUID.fromString(userIdString);
+    }
+
+    public boolean extractEmailVerified(String token) {
+        return parseClaims(token).get("emailVerified", Boolean.class);
     }
 
     public boolean isValid(String token) {

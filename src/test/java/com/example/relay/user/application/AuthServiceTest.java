@@ -86,7 +86,7 @@ public class AuthServiceTest {
         User user = new User(email, hashedPassword);
         when(userRepository.saveAndFlush(any(User.class))).thenReturn(user);
         String token = "someToken";
-        when(jwtService.generateToken(eq(email), any(UUID.class))).thenReturn(token);
+        when(jwtService.generateToken(eq(email), any(UUID.class), any(Boolean.class))).thenReturn(token);
 
         // Act
         String password = "somePassword";
@@ -107,7 +107,7 @@ public class AuthServiceTest {
         String email = "daksh@example.com";
         when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
         when(passwordEncoder.encode("pw")).thenReturn("hashed");
-        when(jwtService.generateToken(eq(email), any())).thenReturn("access-token");
+        when(jwtService.generateToken(eq(email), any(), any(Boolean.class))).thenReturn("access-token");
         when(refreshTokenService.issue(any(), any())).thenReturn("raw-refresh");
 
         IssuedTokens result = underTest.register(email, "pw");
@@ -149,7 +149,7 @@ public class AuthServiceTest {
         User user = new User(email, "someHashedPassword");
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
         String token = "someToken";
-        when(jwtService.generateToken(eq(email), eq(user.getId()))).thenReturn(token);
+        when(jwtService.generateToken(eq(email), eq(user.getId()), any(Boolean.class))).thenReturn(token);
 
         // Act
         IssuedTokens result = underTest.login(email, rawPassword);
@@ -177,7 +177,7 @@ public class AuthServiceTest {
     void refresh_mintsANewAccessTokenAndEchoesTheSameRefreshToken() {
         User user = new User("daksh@example.com", "hashed");
         when(refreshTokenService.validateAndSlide(eq("raw-refresh"), any())).thenReturn(user);
-        when(jwtService.generateToken(eq(user.getEmail()), eq(user.getId()))).thenReturn("new-access");
+        when(jwtService.generateToken(eq(user.getEmail()), eq(user.getId()), any(Boolean.class))).thenReturn("new-access");
 
         IssuedTokens result = underTest.refresh("raw-refresh");
 
