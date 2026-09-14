@@ -8,7 +8,7 @@ package com.example.relay.email;
  */
 public enum EmailTemplate {
     DEAD_LETTER_NOTIFICATION("dead-letter-notification"), PASSWORD_RESET("password-reset"), PASSWORD_CHANGED(
-            "password-changed");
+            "password-changed"), EMAIL_VERIFICATION("email-verification");
 
     private final String resourceName;
 

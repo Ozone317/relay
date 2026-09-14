@@ -1,0 +1,8 @@
+Thanks for registering with Relay. Please confirm this is your email address.
+
+[[${verificationUrl}]]
+
+This link expires in 24 hours. If you did not create a Relay account, you can safely ignore this email.
+
+--
+This is an automated message from Relay.
