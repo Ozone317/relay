@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:replace="~{email/layout :: layout(~{::#content})}">
+    <div id="content">
+        <p>Thanks for registering with Relay. Please confirm this is your email address.</p>
+        <p><a th:href="${verificationUrl}" th:text="${verificationUrl}">https://app.relay.example/verify-email?token=...</a></p>
+        <p>This link expires in 24 hours. If you did not create a Relay account, you can safely ignore this email.</p>
+    </div>
+</div>
+</body>
+</html>
