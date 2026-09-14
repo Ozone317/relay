@@ -48,6 +48,7 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -75,6 +76,9 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     @Autowired
     private EnvironmentRepository environmentRepository;
@@ -108,6 +112,7 @@ class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         reset(emailService);

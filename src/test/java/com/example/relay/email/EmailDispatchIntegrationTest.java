@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
@@ -45,6 +46,9 @@ class EmailDispatchIntegrationTest implements SharedPostgresContainer {
     @Autowired
     private PasswordResetTokenRepository passwordResetTokenRepository;
 
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+
     @MockitoBean
     private EmailService emailService;
 
@@ -53,6 +57,7 @@ class EmailDispatchIntegrationTest implements SharedPostgresContainer {
     @BeforeEach
     void setUp() {
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         user = userRepository.save(new User("dispatch-test-" + UUID.randomUUID() + "@example.com", "hash"));
     }
@@ -68,6 +73,7 @@ class EmailDispatchIntegrationTest implements SharedPostgresContainer {
     @AfterEach
     void tearDown() {
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 

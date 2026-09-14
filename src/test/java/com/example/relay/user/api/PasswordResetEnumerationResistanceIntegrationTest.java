@@ -12,6 +12,7 @@ import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -42,6 +43,9 @@ class PasswordResetEnumerationResistanceIntegrationTest implements SharedPostgre
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     // Every other table that can hold a row transitively referencing users(id), cleaned up here in
     // FK-safe (children-first) order before userRepository.deleteAll() below - not because this
@@ -84,6 +88,7 @@ class PasswordResetEnumerationResistanceIntegrationTest implements SharedPostgre
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         userRepository.save(new User("exists@example.com", "hash"));
     }
@@ -98,6 +103,7 @@ class PasswordResetEnumerationResistanceIntegrationTest implements SharedPostgre
     @AfterEach
     void tearDown() {
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 

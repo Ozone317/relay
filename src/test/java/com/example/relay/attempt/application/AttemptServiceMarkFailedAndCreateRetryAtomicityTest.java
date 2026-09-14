@@ -32,6 +32,7 @@ import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,6 +53,9 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     @Autowired
     private EnvironmentRepository environmentRepository;
@@ -84,6 +88,7 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         User user = userRepository.save(new User("test" + UUID.randomUUID() + "@mail.com", "hash"));
