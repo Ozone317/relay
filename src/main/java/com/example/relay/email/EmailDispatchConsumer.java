@@ -20,6 +20,13 @@ import org.springframework.transaction.support.TransactionTemplate;
  * Rather than build a generic post-send-callback abstraction for this one case, this consumer accepts one small,
  * explicit coupling to PasswordResetTokenRepository - the same kind of accepted small coupling this project already has
  * elsewhere (see GlobalExceptionHandler's dependency on RefreshCookieFactory).
+ *
+ * <p>
+ * EMAIL_VERIFICATION deliberately gets no equivalent branch here: there is no dispatch-confirmation column on
+ * email_verification_tokens and no recovery sweep reading one (unlike PasswordResetEmailRecoverySweeper above), so
+ * there is nothing for this consumer to claim after a successful send. This is an intentional scope difference
+ * between the two features, not an oversight - see the design spec for why email-verification's resend() path is
+ * considered sufficient recovery on its own.
  */
 @Component
 public class EmailDispatchConsumer {

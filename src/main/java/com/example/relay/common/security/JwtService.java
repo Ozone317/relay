@@ -47,7 +47,10 @@ public class JwtService {
     }
 
     public boolean extractEmailVerified(String token) {
-        return parseClaims(token).get("emailVerified", Boolean.class);
+        // A legacy token issued before this claim existed has no "emailVerified" entry at all;
+        // defaulting to false (rather than unboxing a null Boolean, which NPEs) is the safer choice
+        // for a claim that gates access.
+        return Boolean.TRUE.equals(parseClaims(token).get("emailVerified", Boolean.class));
     }
 
     public boolean isValid(String token) {
