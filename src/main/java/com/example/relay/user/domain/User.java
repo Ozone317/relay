@@ -22,10 +22,14 @@ public class User {
     @Column(name = "password", nullable = false)
     private String passwordHash;
 
+    @Column(name = "email_verified", nullable = false)
+    private boolean emailVerified;
+
     public User(String email, String passwordHash) {
         this.id = UUID.randomUUID();
         this.email = email;
         this.passwordHash = passwordHash;
+        this.emailVerified = false;
     }
 
     public UUID getId() {
@@ -42,5 +46,13 @@ public class User {
 
     public void changePassword(String newPasswordHash) {
         this.passwordHash = newPasswordHash;
+    }
+
+    public boolean isEmailVerified() {
+        return emailVerified;
+    }
+
+    public void markEmailVerified() {
+        this.emailVerified = true;
     }
 }
