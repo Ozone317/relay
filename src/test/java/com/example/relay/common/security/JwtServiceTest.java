@@ -30,10 +30,20 @@ public class JwtServiceTest {
         UUID userId = UUID.fromString("87492bba-28ba-4850-83fe-cee99fad11be");
 
         // Act
-        String token = underTest.generateToken(email, userId);
+        String token = underTest.generateToken(email, userId, true);
 
         // Assert
         assertEquals("dakshkant8@gmail.com", underTest.extractEmail(token));
+    }
+
+    @Test
+    void generateToken_thenExtractEmailVerified_roundTripsCorrectly() {
+        String email = "dakshkant8@gmail.com";
+        UUID userId = UUID.fromString("87492bba-28ba-4850-83fe-cee99fad11be");
+
+        String token = underTest.generateToken(email, userId, true);
+
+        assertTrue(underTest.extractEmailVerified(token));
     }
 
     @Test
@@ -44,7 +54,7 @@ public class JwtServiceTest {
         UUID userId = UUID.fromString("87492bba-28ba-4850-83fe-cee99fad11be");
 
         // Act
-        String token = underTest.generateToken(email, userId);
+        String token = underTest.generateToken(email, userId, true);
 
         // Assert
         assertEquals(userId, underTest.extractUserId(token));
@@ -58,7 +68,7 @@ public class JwtServiceTest {
         UUID userId = UUID.fromString("87492bba-28ba-4850-83fe-cee99fad11be");
 
         // Act
-        String token = underTest.generateToken(email, userId);
+        String token = underTest.generateToken(email, userId, true);
 
         // Assert
         assertTrue(underTest.isValid(token));
@@ -69,7 +79,7 @@ public class JwtServiceTest {
         AuthProperties expiringImmediately = new AuthProperties();
         expiringImmediately.setAccessTokenTtl(Duration.ofMillis(1));
         JwtService shortLived = new JwtService(expiringImmediately, TEST_SECRET);
-        String token = shortLived.generateToken("daksh@example.com", UUID.randomUUID());
+        String token = shortLived.generateToken("daksh@example.com", UUID.randomUUID(), true);
 
         await().atMost(Duration.ofSeconds(2)).until(() -> !shortLived.isValid(token));
     }
@@ -77,7 +87,7 @@ public class JwtServiceTest {
     @Test
     void isValid_returnsFalse_forATokenSignedWithADifferentKey() {
         String token = new JwtService(new AuthProperties(), OTHER_SECRET)
-                .generateToken("daksh@example.com", UUID.randomUUID());
+                .generateToken("daksh@example.com", UUID.randomUUID(), true);
 
         assertFalse(underTest.isValid(token));
     }
@@ -89,7 +99,7 @@ public class JwtServiceTest {
 
     @Test
     void isValid_returnsFalse_forATamperedPayload() {
-        String token = underTest.generateToken("daksh@example.com", UUID.randomUUID());
+        String token = underTest.generateToken("daksh@example.com", UUID.randomUUID(), true);
         String[] parts = token.split("\\.");
         String tampered = parts[0] + "." + parts[1].substring(0, parts[1].length() - 2) + "XX." + parts[2];
 
