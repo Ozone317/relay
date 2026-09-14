@@ -4,9 +4,11 @@ import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.EmailNotVerifiedException;
+import com.example.relay.user.exception.ExistingUnverifiedAccountException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -25,52 +27,49 @@ public class AuthService {
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final AuthProperties authProperties;
+    private final EmailVerificationTokenService emailVerificationTokenService;
 
     public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder,
             AuthenticationManager authenticationManager, JwtService jwtService, RefreshTokenService refreshTokenService,
-            AuthProperties authProperties) {
+            AuthProperties authProperties, EmailVerificationTokenService emailVerificationTokenService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.authenticationManager = authenticationManager;
         this.jwtService = jwtService;
         this.refreshTokenService = refreshTokenService;
         this.authProperties = authProperties;
+        this.emailVerificationTokenService = emailVerificationTokenService;
     }
 
     /**
-     * Registers a user and opens their first session.
-     *
-     * <p>
-     * {@code @Transactional} is load-bearing: {@link RefreshTokenService#issue} is itself transactional with the
-     * default REQUIRED propagation, so it joins this transaction instead of opening a second one. Without it, a failing
-     * session insert would strand an already-committed user row, and the caller's retry would then get a permanent 409
-     * for an account they never successfully created.
-     *
-     * <p>
-     * Password hashing runs inside the transaction. bcrypt at cost 12 holds a pooled connection for the duration of the
-     * hash; accepted deliberately at this scale rather than overlooked.
+     * Registers a user and issues their first verification token, in one transaction - it does NOT issue any Bearer
+     * tokens (see AuthController.register() for why, and for how the existing-unverified branch is handled outside
+     * this method entirely). On an existing row: a verified account still 409s (UserAlreadyExistsException,
+     * unchanged); an unverified one throws ExistingUnverifiedAccountException, uniformly from both this fast-path
+     * check and the race-loss catch block below - see the design spec Section 5.
      */
     @Transactional
-    public IssuedTokens register(String email, String password) {
-        if (userRepository.findByEmail(email).isPresent()) {
-            throw new UserAlreadyExistsException(email);
+    public RegisteredUser register(String email, String password) {
+        Optional<User> existing = userRepository.findByEmail(email);
+        if (existing.isPresent()) {
+            if (existing.get().isEmailVerified()) {
+                throw new UserAlreadyExistsException(email);
+            }
+            throw new ExistingUnverifiedAccountException(email);
         }
 
         User user = new User(email, passwordEncoder.encode(password));
         try {
-            // saveAndFlush, not save: inside a transaction save() may defer the INSERT until
-            // commit, which happens after this method returns - the constraint violation would
-            // then be thrown past this catch block and reach the client as a 500.
             userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException e) {
-            // Lost the check-then-insert race against a concurrent registration for the same
-            // address. The lookup above is only a fast path; users.email UNIQUE is the authority.
-            // Deliberately the same message as the fast path: which caller lost a database race
-            // is not something the loser gets to learn.
-            throw new UserAlreadyExistsException(email);
+            // A race loser against a concurrent brand-new registration is always racing an
+            // unverified row - see this method's own javadoc.
+            throw new ExistingUnverifiedAccountException(email);
         }
 
-        return issueFor(user);
+        EmailVerificationTokenService.IssuedVerificationToken issuedToken =
+                emailVerificationTokenService.issue(user, Instant.now());
+        return new RegisteredUser(user, issuedToken);
     }
 
     public IssuedTokens login(String email, String rawPassword) throws BadCredentialsException {
