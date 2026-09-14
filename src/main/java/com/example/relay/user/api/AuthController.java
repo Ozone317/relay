@@ -1,12 +1,18 @@
 package com.example.relay.user.api;
 
+import com.example.relay.common.ratelimit.ClientIpResolver;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.user.api.dto.AuthResponse;
 import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
+import com.example.relay.user.api.dto.RegisterResponseDto;
 import com.example.relay.user.application.AuthService;
+import com.example.relay.user.application.EmailVerificationService;
 import com.example.relay.user.application.IssuedTokens;
+import com.example.relay.user.application.RegisteredUser;
+import com.example.relay.user.exception.ExistingUnverifiedAccountException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -22,17 +28,39 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/auth")
 public class AuthController {
 
-    private final AuthService authService;
-    private final RefreshCookieFactory refreshCookieFactory;
+    private static final String REGISTRATION_ACCEPTED_MESSAGE =
+            "Registration successful. Check your email to verify your account.";
 
-    public AuthController(AuthService authService, RefreshCookieFactory refreshCookieFactory) {
+    private final AuthService authService;
+    private final EmailVerificationService emailVerificationService;
+    private final RefreshCookieFactory refreshCookieFactory;
+    private final ClientIpResolver clientIpResolver;
+
+    public AuthController(AuthService authService, EmailVerificationService emailVerificationService,
+            RefreshCookieFactory refreshCookieFactory, ClientIpResolver clientIpResolver) {
         this.authService = authService;
+        this.emailVerificationService = emailVerificationService;
         this.refreshCookieFactory = refreshCookieFactory;
+        this.clientIpResolver = clientIpResolver;
     }
 
+    /**
+     * Deliberately the first controller method in this codebase with a business-meaningful branch in it - see the
+     * design spec Section 5 for why. AuthService.register()'s transaction never performs a Redis call or a RabbitMQ
+     * publish for the existing-unverified case; those only happen here, in dispatchInitial/resend, entirely outside
+     * any transaction. Both outcomes return the identical REGISTRATION_ACCEPTED_MESSAGE - never two independent
+     * literals.
+     */
     @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
-        return respondWithTokens(HttpStatus.CREATED, authService.register(request.email(), request.password()));
+    public ResponseEntity<RegisterResponseDto> register(@Valid @RequestBody RegisterRequest request,
+            HttpServletRequest httpRequest) {
+        try {
+            RegisteredUser result = authService.register(request.email(), request.password());
+            emailVerificationService.dispatchInitial(result.user(), result.issuedToken());
+        } catch (ExistingUnverifiedAccountException ex) {
+            emailVerificationService.resend(ex.getEmail(), clientIpResolver.resolve(httpRequest));
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(new RegisterResponseDto(REGISTRATION_ACCEPTED_MESSAGE));
     }
 
     @PostMapping("/login")

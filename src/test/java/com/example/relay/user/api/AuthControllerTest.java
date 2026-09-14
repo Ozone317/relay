@@ -2,6 +2,7 @@ package com.example.relay.user.api;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -11,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.relay.common.ratelimit.ClientIpResolver;
 import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CsrfHeaderFilter;
@@ -21,6 +23,7 @@ import com.example.relay.common.security.SecurityConfig;
 import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
 import com.example.relay.user.application.AuthService;
+import com.example.relay.user.application.EmailVerificationService;
 import com.example.relay.user.application.IssuedTokens;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.InvalidRefreshTokenException;
@@ -58,22 +61,60 @@ public class AuthControllerTest {
 
     // @WebMvcTest
 
+    @MockitoBean
+    private EmailVerificationService emailVerificationService;
+
+    @MockitoBean
+    private ClientIpResolver clientIpResolver;
+
     @Test
-    void register_returns201AndAccessTokenAndSetsRefreshCookie() throws Exception {
+    void register_returns201WithAGenericMessage_andNoTokens_whenEmailIsNew() throws Exception {
         RegisterRequest registerRequest = new RegisterRequest("test@mail.com", "somePassword");
-        when(authService.register(registerRequest.email(), registerRequest.password()))
-                .thenReturn(new IssuedTokens("access-token", "raw-refresh", 900L));
+        User user = new User("test@mail.com", "hashed");
+        com.example.relay.user.domain.EmailVerificationToken token = new com.example.relay.user.domain.EmailVerificationToken(
+                user, "hash", java.time.Instant.now().plusSeconds(3600), java.time.Instant.now());
+        when(authService.register(registerRequest.email(), registerRequest.password())).thenReturn(
+                new com.example.relay.user.application.RegisteredUser(user,
+                        new com.example.relay.user.application.EmailVerificationTokenService.IssuedVerificationToken(
+                                token, "raw-token")));
 
         mockMvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(registerRequest))).andExpect(status().isCreated())
-                .andExpect(jsonPath("$.accessToken").value("access-token"))
-                .andExpect(jsonPath("$.expiresIn").value(900))
-                .andExpect(header().string("Set-Cookie", containsString("relay_refresh=raw-refresh")))
-                .andExpect(header().string("Set-Cookie", containsString("HttpOnly")))
-                .andExpect(header().string("Set-Cookie", containsString("SameSite=Strict")))
-                .andExpect(header().string("Set-Cookie", containsString("Path=/api/v1/auth")));
+                .andExpect(jsonPath("$.message")
+                        .value("Registration successful. Check your email to verify your account."))
+                .andExpect(header().doesNotExist("Set-Cookie"));
 
-        verify(authService).register(registerRequest.email(), registerRequest.password());
+        verify(emailVerificationService).dispatchInitial(eq(user), any());
+    }
+
+    @Test
+    void register_returns201WithTheSameGenericMessage_whenEmailBelongsToAnUnverifiedAccount() throws Exception {
+        RegisterRequest registerRequest = new RegisterRequest("unverified@mail.com", "somePassword");
+        when(clientIpResolver.resolve(any())).thenReturn("127.0.0.1");
+        when(authService.register(registerRequest.email(), registerRequest.password()))
+                .thenThrow(new com.example.relay.user.exception.ExistingUnverifiedAccountException("unverified@mail.com"));
+
+        mockMvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registerRequest))).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message")
+                        .value("Registration successful. Check your email to verify your account."))
+                .andExpect(header().doesNotExist("Set-Cookie"));
+
+        verify(emailVerificationService).resend("unverified@mail.com", "127.0.0.1");
+        verify(emailVerificationService, never()).dispatchInitial(any(), any());
+    }
+
+    @Test
+    void register_returns409_whenEmailBelongsToAVerifiedAccount() throws Exception {
+        RegisterRequest registerRequest = new RegisterRequest("taken@mail.com", "somePassword");
+        when(authService.register(registerRequest.email(), registerRequest.password()))
+                .thenThrow(new com.example.relay.user.exception.UserAlreadyExistsException("taken@mail.com"));
+
+        mockMvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registerRequest))).andExpect(status().isConflict());
+
+        verify(emailVerificationService, never()).resend(any(), any());
+        verify(emailVerificationService, never()).dispatchInitial(any(), any());
     }
 
     @Test
