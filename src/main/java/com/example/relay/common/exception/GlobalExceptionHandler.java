@@ -14,7 +14,9 @@ import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.event.exception.EventNotFoundException;
 import com.example.relay.message.exception.NoActiveSubscribersException;
+import com.example.relay.user.exception.EmailNotVerifiedException;
 import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
+import com.example.relay.user.exception.InvalidOrExpiredVerificationTokenException;
 import com.example.relay.user.exception.InvalidRefreshTokenException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import java.util.HashMap;
@@ -97,6 +99,24 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleInvalidOrExpiredResetToken(InvalidOrExpiredResetTokenException ex) {
         log.warn("Password reset token rejected: {}", ex.getMessage());
         ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), "Invalid or expired password reset token.");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(EmailNotVerifiedException.class)
+    public ResponseEntity<ApiError> handleEmailNotVerified(EmailNotVerifiedException ex) {
+        ApiError error = ApiError.of(HttpStatus.FORBIDDEN.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * One merged outcome for token not-found, already-used, and expired - same reasoning as
+     * handleInvalidOrExpiredResetToken above.
+     */
+    @ExceptionHandler(InvalidOrExpiredVerificationTokenException.class)
+    public ResponseEntity<ApiError> handleInvalidOrExpiredVerificationToken(
+            InvalidOrExpiredVerificationTokenException ex) {
+        log.warn("Email verification token rejected: {}", ex.getMessage());
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), "Invalid or expired verification link.");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
