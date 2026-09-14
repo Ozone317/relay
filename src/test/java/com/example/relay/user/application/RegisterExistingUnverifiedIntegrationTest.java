@@ -1,6 +1,6 @@
 package com.example.relay.user.application;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.relay.support.SharedPostgresContainer;
@@ -10,6 +10,7 @@ import com.example.relay.user.infrastructure.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 @SpringBootTest
 class RegisterExistingUnverifiedIntegrationTest implements SharedPostgresContainer {
@@ -23,11 +24,13 @@ class RegisterExistingUnverifiedIntegrationTest implements SharedPostgresContain
     @Autowired
     private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
     @Test
-    void register_forAnExistingUnverifiedEmail_reissuesRatherThanOverwritingThePassword() {
+    void register_forAnExistingUnverifiedEmail_overwritesThePasswordWithTheNewSubmission() {
         String email = "reissue-password-check@example.com";
-        RegisteredUser first = authService.register(email, "originalPassword123");
-        String originalHash = first.user().getPasswordHash();
+        authService.register(email, "originalPassword123");
 
         try {
             authService.register(email, "attackerChosenPassword456");
@@ -36,8 +39,11 @@ class RegisterExistingUnverifiedIntegrationTest implements SharedPostgresContain
         }
 
         User reloaded = userRepository.findByEmail(email).orElseThrow();
-        assertEquals(originalHash, reloaded.getPasswordHash(),
-                "a re-registration attempt for a still-unverified account must never change the stored password");
+        assertTrue(passwordEncoder.matches("attackerChosenPassword456", reloaded.getPasswordHash()),
+                "a re-registration attempt for a still-unverified account must overwrite the stored password "
+                        + "with the most recently submitted one");
+        assertFalse(passwordEncoder.matches("originalPassword123", reloaded.getPasswordHash()),
+                "the previously stored password must no longer work after the overwrite");
         assertTrue(!reloaded.isEmailVerified());
 
         // The email_verification_tokens FK to users(id) means this user's owned token rows must be

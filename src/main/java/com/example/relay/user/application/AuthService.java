@@ -46,15 +46,27 @@ public class AuthService {
      * tokens (see AuthController.register() for why, and for how the existing-unverified branch is handled outside
      * this method entirely). On an existing row: a verified account still 409s (UserAlreadyExistsException,
      * unchanged); an unverified one throws ExistingUnverifiedAccountException, uniformly from both this fast-path
-     * check and the race-loss catch block below - see the design spec Section 5.
+     * check and the race-loss catch block below - see the design spec Section 5. Nobody has proven control of the
+     * email address on an unverified row, so a re-registration attempt for one always overwrites the stored password
+     * with the most recently submitted one - see this method's own inline comments for why.
      */
-    @Transactional
+    @Transactional(noRollbackFor = ExistingUnverifiedAccountException.class)
     public RegisteredUser register(String email, String password) {
         Optional<User> existing = userRepository.findByEmail(email);
         if (existing.isPresent()) {
-            if (existing.get().isEmailVerified()) {
+            User existingUser = existing.get();
+            if (existingUser.isEmailVerified()) {
                 throw new UserAlreadyExistsException(email);
             }
+            // Nobody has proven control of this email yet, so the most recently submitted password
+            // is the one that should win - whoever eventually verifies "gets" the account. Without
+            // this overwrite, an attacker who registers first with a victim's email keeps their own
+            // password live even after the victim later re-registers and verifies - a real account
+            // pre-hijacking vulnerability. @Transactional's noRollbackFor above is load-bearing:
+            // without it this write would be silently rolled back when the exception below
+            // propagates.
+            existingUser.changePassword(passwordEncoder.encode(password));
+            userRepository.save(existingUser);
             throw new ExistingUnverifiedAccountException(email);
         }
 
@@ -63,7 +75,15 @@ public class AuthService {
             userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException e) {
             // A race loser against a concurrent brand-new registration is always racing an
-            // unverified row - see this method's own javadoc.
+            // unverified row - see this method's own javadoc. Same password-overwrite reasoning as
+            // the fast path above: the row already exists with SOME password (from whichever
+            // request won the race), and it must be overwritten with this request's submitted
+            // password too, for the identical pre-hijacking reason.
+            userRepository.findByEmail(email)
+                    .ifPresent(existingUser -> {
+                        existingUser.changePassword(user.getPasswordHash());
+                        userRepository.save(existingUser);
+                    });
             throw new ExistingUnverifiedAccountException(email);
         }
 
