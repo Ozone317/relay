@@ -45,98 +45,88 @@ public class AuthServiceTest {
     @Mock
     private RefreshTokenService refreshTokenService;
 
+    @Mock
+    private EmailVerificationTokenService emailVerificationTokenService;
+
     private AuthService underTest;
 
     @BeforeEach
     void setUp() {
         underTest = new AuthService(userRepository, passwordEncoder, authenticationManager, jwtService,
-                refreshTokenService, new AuthProperties());
+                refreshTokenService, new AuthProperties(), emailVerificationTokenService);
     }
 
     @Test
-    void register_throwsUserAlreadyExistsException_whenEmailAlreadyExists() {
-        // Arrange
+    void register_throwsUserAlreadyExistsException_whenEmailBelongsToAVerifiedAccount() {
         String email = "dakshkant8@gmail.com";
         String password = "somePassword";
-        User user = new User(email, password);
-        when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
+        User existing = new User(email, "existing-hash");
+        existing.markEmailVerified();
+        when(userRepository.findByEmail(email)).thenReturn(Optional.of(existing));
 
-        // Act + Assert
-        UserAlreadyExistsException thrown = assertThrows(UserAlreadyExistsException.class, () -> {
-            underTest.register(email, password);
-        });
+        UserAlreadyExistsException thrown =
+                assertThrows(UserAlreadyExistsException.class, () -> underTest.register(email, password));
 
-        // The exception's own constructor supplies the prefix, so the caller must pass the bare
-        // address. Passing a full sentence produced "User already exists with email: User with
-        // email x@y.com already exists." in the 409 body for the whole of v10-v11.
         assertEquals("User already exists with email: " + email, thrown.getMessage());
-
-        // Assert
-        verify(userRepository, never()).saveAndFlush(any()); // proves it bailed out BEFORE trying to save a duplicate
+        verify(userRepository, never()).saveAndFlush(any());
     }
 
     @Test
-    void register_savesEncodedUserAndReturnsToken_whenEmailIsNew() {
-
-        // Arrange
+    void register_throwsExistingUnverifiedAccountException_whenEmailBelongsToAnUnverifiedAccount() {
         String email = "dakshkant8@gmail.com";
-        String hashedPassword = "somePassword";
-        when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
-        when(passwordEncoder.encode("somePassword")).thenReturn(hashedPassword);
-        User user = new User(email, hashedPassword);
-        when(userRepository.saveAndFlush(any(User.class))).thenReturn(user);
-        String token = "someToken";
-        when(jwtService.generateToken(eq(email), any(UUID.class), any(Boolean.class))).thenReturn(token);
+        User existing = new User(email, "existing-hash");
+        when(userRepository.findByEmail(email)).thenReturn(Optional.of(existing));
 
-        // Act
-        String password = "somePassword";
-        IssuedTokens result = underTest.register(email, password);
+        com.example.relay.user.exception.ExistingUnverifiedAccountException thrown = assertThrows(
+                com.example.relay.user.exception.ExistingUnverifiedAccountException.class,
+                () -> underTest.register(email, "somePassword"));
 
-        // Assert
-        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
-        verify(userRepository).saveAndFlush(userCaptor.capture());
-        User savedUser = userCaptor.getValue();
-
-        assertEquals(email, savedUser.getEmail());
-        assertEquals(hashedPassword, savedUser.getPasswordHash());
-        assertEquals(token, result.accessToken());
+        assertEquals(email, thrown.getEmail());
+        verify(userRepository, never()).saveAndFlush(any());
+        verify(emailVerificationTokenService, never()).issue(any(), any());
     }
 
     @Test
-    void register_returnsBothCredentialsAndTtlInSeconds() {
-        String email = "daksh@example.com";
-        when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
-        when(passwordEncoder.encode("pw")).thenReturn("hashed");
-        when(jwtService.generateToken(eq(email), any(), any(Boolean.class))).thenReturn("access-token");
-        when(refreshTokenService.issue(any(), any())).thenReturn("raw-refresh");
-
-        IssuedTokens result = underTest.register(email, "pw");
-
-        assertEquals("access-token", result.accessToken());
-        assertEquals("raw-refresh", result.rawRefreshToken());
-        assertEquals(900L, result.expiresIn());
-    }
-
-    @Test
-    void register_throwsUserAlreadyExists_whenItLosesTheUniqueConstraintRace() {
-        // The pre-check passes because the concurrent registration had not committed yet; the
-        // users.email UNIQUE constraint is what actually catches the duplicate. Without the
-        // translation this surfaces as an unmapped DataIntegrityViolationException, i.e. a 500.
+    void register_throwsExistingUnverifiedAccountException_whenItLosesTheUniqueConstraintRace() {
+        // A race loser against a concurrent brand-new registration is, by construction, always
+        // racing an unverified row - a freshly inserted User defaults to unverified (Task 2), and
+        // nothing else could have verified it in that window. Both detection paths must produce
+        // the identical outcome - see the design spec Section 5.
         String email = "daksh@example.com";
         when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
         when(passwordEncoder.encode("pw")).thenReturn("hashed");
         when(userRepository.saveAndFlush(any(User.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
 
-        UserAlreadyExistsException thrown =
-                assertThrows(UserAlreadyExistsException.class, () -> underTest.register(email, "pw"));
+        com.example.relay.user.exception.ExistingUnverifiedAccountException thrown = assertThrows(
+                com.example.relay.user.exception.ExistingUnverifiedAccountException.class,
+                () -> underTest.register(email, "pw"));
 
-        // Byte-identical to the pre-check path's message, and that is a security property rather
-        // than tidiness: any difference would let a caller detect that it lost a concurrent race,
-        // turning the 409 into an oracle for whether a registration is in flight for that address.
-        assertEquals("User already exists with email: " + email, thrown.getMessage());
+        assertEquals(email, thrown.getEmail());
+        verify(emailVerificationTokenService, never()).issue(any(), any());
+    }
 
-        // a registration that did not happen must not open a session
+    @Test
+    void register_savesEncodedUserAndIssuesAFirstVerificationToken_whenEmailIsNew() {
+        String email = "dakshkant8@gmail.com";
+        String hashedPassword = "somePassword";
+        when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
+        when(passwordEncoder.encode("somePassword")).thenReturn(hashedPassword);
+        User user = new User(email, hashedPassword);
+        when(userRepository.saveAndFlush(any(User.class))).thenReturn(user);
+        com.example.relay.user.domain.EmailVerificationToken token = new com.example.relay.user.domain.EmailVerificationToken(
+                user, "hash", java.time.Instant.now().plusSeconds(3600), java.time.Instant.now());
+        when(emailVerificationTokenService.issue(any(), any()))
+                .thenReturn(new EmailVerificationTokenService.IssuedVerificationToken(token, "raw-token"));
+
+        RegisteredUser result = underTest.register(email, "somePassword");
+
+        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).saveAndFlush(userCaptor.capture());
+        assertEquals(email, userCaptor.getValue().getEmail());
+        assertEquals(hashedPassword, userCaptor.getValue().getPasswordHash());
+        assertEquals(email, result.user().getEmail());
+        assertEquals("raw-token", result.issuedToken().rawToken());
         verify(refreshTokenService, never()).issue(any(), any());
     }
 
