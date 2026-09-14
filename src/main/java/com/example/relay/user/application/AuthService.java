@@ -3,6 +3,7 @@ package com.example.relay.user.application;
 import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.EmailNotVerifiedException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
@@ -76,6 +77,10 @@ public class AuthService {
         authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(email, rawPassword));
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new BadCredentialsException("Invalid email or password"));
+
+        if (!user.isEmailVerified()) {
+            throw new EmailNotVerifiedException("Email address is not verified");
+        }
 
         return issueFor(user);
     }
