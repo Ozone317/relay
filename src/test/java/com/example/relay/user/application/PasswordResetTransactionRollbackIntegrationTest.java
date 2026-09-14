@@ -17,6 +17,7 @@ import com.example.relay.subscription.infrastructure.SubscriptionRepository;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -43,6 +44,9 @@ class PasswordResetTransactionRollbackIntegrationTest implements SharedPostgresC
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     @Autowired
     private com.example.relay.common.security.SecureTokenGenerator secureTokenGenerator;
@@ -94,6 +98,7 @@ class PasswordResetTransactionRollbackIntegrationTest implements SharedPostgresC
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         user = userRepository.save(new User("rollback-test@example.com", "original-hash"));
@@ -117,6 +122,7 @@ class PasswordResetTransactionRollbackIntegrationTest implements SharedPostgresC
     void tearDown() {
         refreshTokenRepository.deleteAll();
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 

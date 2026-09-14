@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import com.example.relay.delivery.application.DeliveryQueryService;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.RefreshToken;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.util.List;
@@ -57,6 +58,9 @@ class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
 
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+
     @MockitoSpyBean
     private DeliveryQueryService deliveryQueryService;
 
@@ -80,6 +84,12 @@ class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {
             List<RefreshToken> owned = refreshTokenRepository.findAll().stream()
                     .filter(token -> token.getUser().getId().equals(user.getId())).toList();
             refreshTokenRepository.deleteAll(owned);
+            // email_verification_tokens FKs to users (added in Task 1, after this test was written) - must
+            // be cleared before userRepository.delete() below, same as refreshTokenRepository above.
+            List<com.example.relay.user.domain.EmailVerificationToken> ownedTokens =
+                    emailVerificationTokenRepository.findAll().stream()
+                            .filter(token -> token.getUser().getId().equals(user.getId())).toList();
+            emailVerificationTokenRepository.deleteAll(ownedTokens);
             userRepository.delete(user);
         });
     }

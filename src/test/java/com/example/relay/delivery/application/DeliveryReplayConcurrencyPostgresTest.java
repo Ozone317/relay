@@ -21,6 +21,7 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -74,6 +75,8 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
     @Autowired
     private PasswordResetTokenRepository passwordResetTokenRepository;
     @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+    @Autowired
     private EnvironmentRepository environmentRepository;
     @Autowired
     private AppRepository appRepository;
@@ -102,6 +105,9 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
         // password_reset_tokens FKs to users (added in Task 4, after this test was written) - must be
         // cleared before userRepository.deleteAll() below, same as refreshTokenRepository above.
         passwordResetTokenRepository.deleteAll();
+        // email_verification_tokens FKs to users (added in Task 1, after this test was written) - must
+        // be cleared before userRepository.deleteAll() below, same as passwordResetTokenRepository above.
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         User user = userRepository.save(new User("replay-" + UUID.randomUUID() + "@mail.com", "hash"));

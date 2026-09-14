@@ -17,6 +17,7 @@ import com.example.relay.user.application.PasswordResetTokenService;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -43,6 +44,9 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
 
     @Autowired
     private PasswordResetTokenRepository passwordResetTokenRepository;
+
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     @Autowired
     private SecureTokenGenerator secureTokenGenerator;
@@ -97,6 +101,7 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
 
         user = userRepository.save(new User("concurrent-confirm@example.com", "original-hash"));

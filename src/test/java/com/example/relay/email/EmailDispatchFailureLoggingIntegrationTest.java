@@ -14,6 +14,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
@@ -61,6 +62,9 @@ class EmailDispatchFailureLoggingIntegrationTest implements SharedPostgresContai
     @Autowired
     private PasswordResetTokenRepository passwordResetTokenRepository;
 
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+
     @MockitoBean
     private EmailService emailService;
 
@@ -70,6 +74,7 @@ class EmailDispatchFailureLoggingIntegrationTest implements SharedPostgresContai
     @BeforeEach
     void setUp() {
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         user = userRepository.save(new User("failure-log-test-" + UUID.randomUUID() + "@example.com", "hash"));
 
@@ -82,6 +87,7 @@ class EmailDispatchFailureLoggingIntegrationTest implements SharedPostgresContai
     void tearDown() {
         rootLogger().detachAppender(rootAppender);
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 

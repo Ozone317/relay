@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
@@ -32,11 +33,15 @@ class PasswordResetTokenCleanupTaskTest implements SharedPostgresContainer {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+
     private User user;
 
     @BeforeEach
     void setUp() {
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         user = userRepository.save(new User("cleanup-test@example.com", "hash"));
     }

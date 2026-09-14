@@ -25,6 +25,7 @@ import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -84,6 +85,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+
+    @Autowired
     private EnvironmentRepository environmentRepository;
 
     @Autowired
@@ -128,6 +132,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 

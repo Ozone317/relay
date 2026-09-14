@@ -15,6 +15,7 @@ import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.application.PasswordResetTokenService;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -44,6 +45,9 @@ class PasswordResetConcurrentRequestPostgresTest implements SharedPostgresContai
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
     // Every other table that can hold a row transitively referencing users(id), cleaned up here in
     // FK-safe (children-first) order before userRepository.deleteAll() below - not because this
@@ -88,6 +92,7 @@ class PasswordResetConcurrentRequestPostgresTest implements SharedPostgresContai
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         user = userRepository.save(new User("concurrent-request@example.com", "hash"));
     }
@@ -101,6 +106,7 @@ class PasswordResetConcurrentRequestPostgresTest implements SharedPostgresContai
     @AfterEach
     void tearDown() {
         passwordResetTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 
