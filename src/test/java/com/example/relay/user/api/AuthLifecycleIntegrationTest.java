@@ -41,21 +41,37 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private com.example.relay.user.infrastructure.UserRepository userRepository;
+
     private HttpHeaders csrfHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Relay-Auth", "1");
         return headers;
     }
 
+    /**
+     * Registers, then marks the row verified directly (there is no test-only bypass endpoint - see the design
+     * spec Section 2, verification is deliberately a separate operation from registration), then logs in for a real
+     * access token + refresh cookie, matching what a real user's flow produces after clicking their verification
+     * link.
+     */
+    private ResponseEntity<AuthResponse> registerVerifyAndLogIn(String email, String password) {
+        rest.postForEntity("/api/v1/auth/register", new RegisterRequest(email, password), String.class);
+        userRepository.findByEmail(email).ifPresent(user -> {
+            user.markEmailVerified();
+            userRepository.save(user);
+        });
+        return rest.postForEntity("/api/v1/auth/login", new LoginRequest(email, password), AuthResponse.class);
+    }
+
     @Test
     void loginRefreshLogout_thenTheRefreshTokenIsDeadForever() {
-        // 1. Register - expect an access token and a refresh cookie
-        ResponseEntity<AuthResponse> registered = rest.postForEntity("/api/v1/auth/register",
-                new RegisterRequest("lifecycle@example.com", "somePassword"), AuthResponse.class);
+        ResponseEntity<AuthResponse> loggedIn = registerVerifyAndLogIn("lifecycle@example.com", "somePassword");
 
-        assertEquals(HttpStatus.CREATED, registered.getStatusCode());
-        assertNotNull(registered.getBody().accessToken());
-        String cookie = registered.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        assertEquals(HttpStatus.OK, loggedIn.getStatusCode());
+        assertNotNull(loggedIn.getBody().accessToken());
+        String cookie = loggedIn.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
         assertNotNull(cookie);
         assertTrue(cookie.contains("HttpOnly"));
         assertTrue(cookie.contains("Path=/api/v1/auth"));
@@ -64,7 +80,7 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 
         // 2. The access token opens a protected route
         HttpHeaders bearer = new HttpHeaders();
-        bearer.setBearerAuth(registered.getBody().accessToken());
+        bearer.setBearerAuth(loggedIn.getBody().accessToken());
         assertEquals(HttpStatus.OK, rest
                 .exchange("/api/v1/environments", HttpMethod.GET, new HttpEntity<>(bearer), String.class)
                 .getStatusCode());
@@ -94,9 +110,8 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void logout_isIdempotent() {
-        ResponseEntity<AuthResponse> registered = rest.postForEntity("/api/v1/auth/register",
-                new RegisterRequest("idempotent@example.com", "somePassword"), AuthResponse.class);
-        String cookie = registered.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        ResponseEntity<AuthResponse> loggedIn = registerVerifyAndLogIn("idempotent@example.com", "somePassword");
+        String cookie = loggedIn.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
         String refreshCookie = cookie.substring(0, cookie.indexOf(';'));
 
         for (int i = 0; i < 2; i++) {
@@ -119,8 +134,7 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
     @Test
     void logoutAll_revokesEverySessionForTheUser_includingOnesThisDeviceNeverHeld() {
         // Two independent logins for the same user - the "laptop" and the "phone"
-        rest.postForEntity("/api/v1/auth/register", new RegisterRequest("everywhere@example.com", "somePassword"),
-                AuthResponse.class);
+        registerVerifyAndLogIn("everywhere@example.com", "somePassword");
 
         ResponseEntity<AuthResponse> laptop = rest.postForEntity("/api/v1/auth/login",
                 new LoginRequest("everywhere@example.com", "somePassword"), AuthResponse.class);
@@ -145,9 +159,8 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void refresh_is403_withoutTheCsrfHeader() {
-        ResponseEntity<AuthResponse> registered = rest.postForEntity("/api/v1/auth/register",
-                new RegisterRequest("csrf@example.com", "somePassword"), AuthResponse.class);
-        String cookie = registered.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        ResponseEntity<AuthResponse> loggedIn = registerVerifyAndLogIn("csrf@example.com", "somePassword");
+        String cookie = loggedIn.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
 
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.COOKIE, cookie.substring(0, cookie.indexOf(';')));
@@ -159,9 +172,8 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void refresh_is401_onceTheIdleWindowHasLapsed() {
-        ResponseEntity<AuthResponse> registered = rest.postForEntity("/api/v1/auth/register",
-                new RegisterRequest("idle@example.com", "somePassword"), AuthResponse.class);
-        String cookie = registered.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        ResponseEntity<AuthResponse> loggedIn = registerVerifyAndLogIn("idle@example.com", "somePassword");
+        String cookie = loggedIn.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
         String refreshCookie = cookie.substring(0, cookie.indexOf(';'));
 
         // Age only this test's own refresh token row past its idle window. The Postgres instance is
