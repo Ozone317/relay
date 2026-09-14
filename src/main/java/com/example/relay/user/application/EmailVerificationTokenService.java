@@ -8,6 +8,7 @@ import com.example.relay.user.exception.InvalidOrExpiredVerificationTokenExcepti
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,14 +23,16 @@ public class EmailVerificationTokenService {
     private final UserRepository userRepository;
     private final SecureTokenGenerator secureTokenGenerator;
     private final EmailVerificationProperties emailVerificationProperties;
+    private final PasswordEncoder passwordEncoder;
 
     public EmailVerificationTokenService(EmailVerificationTokenRepository emailVerificationTokenRepository,
             UserRepository userRepository, SecureTokenGenerator secureTokenGenerator,
-            EmailVerificationProperties emailVerificationProperties) {
+            EmailVerificationProperties emailVerificationProperties, PasswordEncoder passwordEncoder) {
         this.emailVerificationTokenRepository = emailVerificationTokenRepository;
         this.userRepository = userRepository;
         this.secureTokenGenerator = secureTokenGenerator;
         this.emailVerificationProperties = emailVerificationProperties;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
@@ -46,12 +49,23 @@ public class EmailVerificationTokenService {
     }
 
     /**
-     * The atomic consume UPDATE's row count is the sole authority on token validity - not any prior SELECT. The consume
-     * and the user's email_verified=true write happen in this one transaction: they can never split across a partial
-     * failure.
+     * Consumes the one currently-valid verification token AND sets the account's real password, atomically.
+     *
+     * <p>
+     * The atomic consume UPDATE's row count is the sole authority on token validity - not any prior SELECT. The
+     * consume, the password write and the user's email_verified=true write all happen in this one transaction: they
+     * can never split across a partial failure.
+     *
+     * <p>
+     * Security property (this is what closes the account pre-hijacking vulnerability): the password submitted HERE -
+     * not whatever was submitted to /register, however many times, by whomever - is the one that becomes live. Setting
+     * it is atomic with proving control of the mailbox, because the raw token is only ever delivered to the account's
+     * own email address, and {@link #issue(User, Instant)} invalidates every previous token so exactly one is valid at
+     * a time. Consequently no unauthenticated register() call can ever determine an account's final password; only
+     * whoever successfully consumes the currently-valid token can.
      */
     @Transactional
-    public EmailVerificationToken consumeAndVerify(String rawToken, Instant now) {
+    public EmailVerificationToken consumeAndVerify(String rawToken, String password, Instant now) {
         String tokenHash = secureTokenGenerator.hash(rawToken);
         if (emailVerificationTokenRepository.consume(tokenHash, now) == 0) {
             throw new InvalidOrExpiredVerificationTokenException(
@@ -63,6 +77,7 @@ public class EmailVerificationTokenService {
                         + "immediately after within the same transaction - should be impossible"));
 
         User user = token.getUser();
+        user.changePassword(passwordEncoder.encode(password));
         user.markEmailVerified();
         userRepository.save(user);
 

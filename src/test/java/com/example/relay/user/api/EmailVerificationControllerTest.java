@@ -46,20 +46,33 @@ class EmailVerificationControllerTest {
     @Test
     void verify_returnsTheGenericMessage_whenTheServiceDoesNotThrow() throws Exception {
         mockMvc.perform(post("/api/v1/auth/email-verification/verify").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"token\":\"raw-token\"}")).andExpect(status().isOk())
+                .content("{\"token\":\"raw-token\",\"password\":\"realOwnerPassword\"}")).andExpect(status().isOk())
                 .andExpect(content().json("{\"message\":\"Email verified successfully.\"}"));
 
-        verify(emailVerificationService).verify("raw-token");
+        verify(emailVerificationService).verify("raw-token", "realOwnerPassword");
     }
 
     @Test
     void verify_returns409_whenTheTokenIsInvalidOrExpired() throws Exception {
         org.mockito.Mockito.doThrow(new com.example.relay.user.exception.InvalidOrExpiredVerificationTokenException("bad"))
-                .when(emailVerificationService).verify(anyString());
+                .when(emailVerificationService).verify(anyString(), anyString());
 
         mockMvc.perform(post("/api/v1/auth/email-verification/verify").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"token\":\"raw-token\"}")).andExpect(status().isConflict())
+                .content("{\"token\":\"raw-token\",\"password\":\"realOwnerPassword\"}"))
+                .andExpect(status().isConflict())
                 .andExpect(content().json("{\"message\":\"Invalid or expired verification link.\"}"));
+    }
+
+    @Test
+    void verify_returns400_forATooShortPassword() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email-verification/verify").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"token\":\"raw-token\",\"password\":\"short\"}")).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void verify_returns400_forABlankPassword() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email-verification/verify").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"token\":\"raw-token\",\"password\":\"\"}")).andExpect(status().isBadRequest());
     }
 
     @Test

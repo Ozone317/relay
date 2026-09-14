@@ -20,12 +20,14 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 class EmailVerificationTokenServiceTest {
 
     private EmailVerificationTokenRepository emailVerificationTokenRepository;
     private UserRepository userRepository;
     private SecureTokenGenerator secureTokenGenerator;
+    private PasswordEncoder passwordEncoder;
     private EmailVerificationTokenService underTest;
 
     @BeforeEach
@@ -33,12 +35,13 @@ class EmailVerificationTokenServiceTest {
         emailVerificationTokenRepository = mock(EmailVerificationTokenRepository.class);
         userRepository = mock(UserRepository.class);
         secureTokenGenerator = mock(SecureTokenGenerator.class);
+        passwordEncoder = mock(PasswordEncoder.class);
         EmailVerificationProperties properties = new EmailVerificationProperties();
         properties.setTokenTtl(Duration.ofHours(24));
         properties.setBaseUrl("https://example.com/verify-email");
 
         underTest = new EmailVerificationTokenService(emailVerificationTokenRepository, userRepository,
-                secureTokenGenerator, properties);
+                secureTokenGenerator, properties, passwordEncoder);
 
         when(secureTokenGenerator.generateRawToken()).thenReturn("raw-token");
         when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
@@ -63,23 +66,25 @@ class EmailVerificationTokenServiceTest {
         when(emailVerificationTokenRepository.consume(eq("bad-hash"), any())).thenReturn(0);
 
         assertThrows(InvalidOrExpiredVerificationTokenException.class,
-                () -> underTest.consumeAndVerify("bad-token", Instant.now()));
+                () -> underTest.consumeAndVerify("bad-token", "newPassword123", Instant.now()));
 
         verify(userRepository, org.mockito.Mockito.never()).save(any());
     }
 
     @Test
-    void consumeAndVerify_marksTheUserVerified_whenConsumeSucceeds() {
-        User user = new User("confirm-test@example.com", "hash");
+    void consumeAndVerify_marksTheUserVerifiedAndSetsTheSubmittedPassword_whenConsumeSucceeds() {
+        User user = new User("confirm-test@example.com", "provisional-hash-from-register");
         EmailVerificationToken token =
                 new EmailVerificationToken(user, "hashed-token", Instant.now().plusSeconds(3600), Instant.now());
         when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
         when(emailVerificationTokenRepository.consume(eq("hashed-token"), any())).thenReturn(1);
         when(emailVerificationTokenRepository.findByTokenHash("hashed-token")).thenReturn(Optional.of(token));
+        when(passwordEncoder.encode("realOwnerPassword")).thenReturn("encoded-real-owner-password");
 
-        EmailVerificationToken result = underTest.consumeAndVerify("raw-token", Instant.now());
+        EmailVerificationToken result = underTest.consumeAndVerify("raw-token", "realOwnerPassword", Instant.now());
 
         assertEquals(true, result.getUser().isEmailVerified());
+        assertEquals("encoded-real-owner-password", user.getPasswordHash());
         verify(userRepository).save(user);
     }
 }
