@@ -147,9 +147,10 @@ public class AuthServiceTest {
         String email = "dakshkant8@gmail.com";
         String rawPassword = "somePassword";
         User user = new User(email, "someHashedPassword");
+        user.markEmailVerified();
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
         String token = "someToken";
-        when(jwtService.generateToken(eq(email), eq(user.getId()), any(Boolean.class))).thenReturn(token);
+        when(jwtService.generateToken(eq(email), eq(user.getId()), eq(true))).thenReturn(token);
 
         // Act
         IssuedTokens result = underTest.login(email, rawPassword);
@@ -157,6 +158,19 @@ public class AuthServiceTest {
         // Assert
         assertEquals(token, result.accessToken());
         verify(authenticationManager).authenticate(any(UsernamePasswordAuthenticationToken.class));
+    }
+
+    @Test
+    void login_throwsEmailNotVerifiedException_whenTheAccountIsUnverified() {
+        String email = "unverified@example.com";
+        String rawPassword = "somePassword";
+        User user = new User(email, "someHashedPassword");
+        when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
+
+        assertThrows(com.example.relay.user.exception.EmailNotVerifiedException.class,
+                () -> underTest.login(email, rawPassword));
+
+        verify(refreshTokenService, never()).issue(any(), any());
     }
 
     @Test
