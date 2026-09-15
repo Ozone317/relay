@@ -11,6 +11,7 @@ import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
 import java.util.Map;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 /**
@@ -32,15 +33,18 @@ public class EmailVerificationService {
     private final EmailVerificationRateLimiter rateLimiter;
     private final EmailDispatchPublisher emailDispatchPublisher;
     private final EmailVerificationProperties emailVerificationProperties;
+    private final PasswordEncoder passwordEncoder;
 
     public EmailVerificationService(UserRepository userRepository,
             EmailVerificationTokenService emailVerificationTokenService, EmailVerificationRateLimiter rateLimiter,
-            EmailDispatchPublisher emailDispatchPublisher, EmailVerificationProperties emailVerificationProperties) {
+            EmailDispatchPublisher emailDispatchPublisher, EmailVerificationProperties emailVerificationProperties,
+            PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.emailVerificationTokenService = emailVerificationTokenService;
         this.rateLimiter = rateLimiter;
         this.emailDispatchPublisher = emailDispatchPublisher;
         this.emailVerificationProperties = emailVerificationProperties;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
@@ -66,10 +70,12 @@ public class EmailVerificationService {
 
     /**
      * Consuming the token is also what sets the account's real password - see
-     * EmailVerificationTokenService.consumeAndVerify for the security property this provides.
+     * EmailVerificationTokenService.consumeAndVerify for the security property this provides. Hashing happens HERE,
+     * before entering the transactional consume, so bcrypt's ~100ms never runs inside a DB transaction or while any
+     * row lock is held - see docs/superpowers/specs/2026-09-15-user-activation-concurrency-design.md point 4.
      */
     public void verify(String rawToken, String password) {
-        emailVerificationTokenService.consumeAndVerify(rawToken, password, Instant.now());
+        emailVerificationTokenService.consumeAndVerify(rawToken, passwordEncoder.encode(password), Instant.now());
     }
 
     private void dispatch(IssuedVerificationToken issued, User user) {

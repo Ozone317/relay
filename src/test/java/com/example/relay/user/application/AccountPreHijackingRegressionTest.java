@@ -86,7 +86,8 @@ class AccountPreHijackingRegressionTest implements SharedPostgresContainer {
         // 2. The REAL mailbox owner clicks the link in the email they received and chooses their own
         // password. In production the raw token only ever reaches this mailbox, never whoever called
         // register() - which is precisely why this step is the security boundary.
-        emailVerificationTokenService.consumeAndVerify(rawToken, REAL_OWNER_PASSWORD, Instant.now());
+        emailVerificationTokenService.consumeAndVerify(rawToken, passwordEncoder.encode(REAL_OWNER_PASSWORD),
+                Instant.now());
 
         // 3. The real owner's password is now the live credential.
         authService.login(EMAIL, REAL_OWNER_PASSWORD);
