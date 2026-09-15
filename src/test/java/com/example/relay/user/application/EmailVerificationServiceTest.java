@@ -21,6 +21,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 class EmailVerificationServiceTest {
 
@@ -28,6 +29,7 @@ class EmailVerificationServiceTest {
     private EmailVerificationTokenService emailVerificationTokenService;
     private EmailVerificationRateLimiter rateLimiter;
     private EmailDispatchPublisher emailDispatchPublisher;
+    private PasswordEncoder passwordEncoder;
     private EmailVerificationService underTest;
 
     @BeforeEach
@@ -36,12 +38,13 @@ class EmailVerificationServiceTest {
         emailVerificationTokenService = mock(EmailVerificationTokenService.class);
         rateLimiter = mock(EmailVerificationRateLimiter.class);
         emailDispatchPublisher = mock(EmailDispatchPublisher.class);
+        passwordEncoder = mock(PasswordEncoder.class);
         EmailVerificationProperties properties = new EmailVerificationProperties();
         properties.setTokenTtl(Duration.ofHours(24));
         properties.setBaseUrl("https://example.com/verify-email");
 
         underTest = new EmailVerificationService(userRepository, emailVerificationTokenService, rateLimiter,
-                emailDispatchPublisher, properties);
+                emailDispatchPublisher, properties, passwordEncoder);
     }
 
     @Test
@@ -113,10 +116,12 @@ class EmailVerificationServiceTest {
     }
 
     @Test
-    void verify_delegatesToConsumeAndVerify() {
+    void verify_hashesThePasswordBeforeDelegatingToConsumeAndVerify() {
+        when(passwordEncoder.encode("newPassword123")).thenReturn("encoded-password");
+
         underTest.verify("raw-token", "newPassword123");
 
         verify(emailVerificationTokenService).consumeAndVerify(org.mockito.ArgumentMatchers.eq("raw-token"),
-                org.mockito.ArgumentMatchers.eq("newPassword123"), any());
+                org.mockito.ArgumentMatchers.eq("encoded-password"), any());
     }
 }

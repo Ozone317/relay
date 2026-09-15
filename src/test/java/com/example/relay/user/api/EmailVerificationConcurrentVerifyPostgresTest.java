@@ -83,7 +83,7 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
                 ready.countDown();
                 try {
                     go.await();
-                    underTest.consumeAndVerify(issued.rawToken(), password, Instant.now());
+                    underTest.consumeAndVerify(issued.rawToken(), passwordEncoder.encode(password), Instant.now());
                     successes.incrementAndGet();
                     winningPassword.set(password);
                 } catch (Exception ignored) {
@@ -120,7 +120,7 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
                 new User("dangling-token@example.com", passwordEncoder.encode("provisionalPassword")));
         EmailVerificationTokenService.IssuedVerificationToken firstToken = underTest.issue(user, Instant.now());
 
-        underTest.consumeAndVerify(firstToken.rawToken(), realPassword, Instant.now());
+        underTest.consumeAndVerify(firstToken.rawToken(), passwordEncoder.encode(realPassword), Instant.now());
 
         // Simulate the documented race: a second token, still valid, exists for a user who is
         // already verified (e.g. issued by a concurrent resend just before the first consume
@@ -131,8 +131,8 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
         emailVerificationTokenRepository.saveAndFlush(new EmailVerificationToken(user,
                 secureTokenGenerator.hash(danglingRawToken), Instant.now().plusSeconds(3600), Instant.now()));
 
-        assertThrows(InvalidOrExpiredVerificationTokenException.class,
-                () -> underTest.consumeAndVerify(danglingRawToken, "attackerChosenPassword", Instant.now()));
+        assertThrows(InvalidOrExpiredVerificationTokenException.class, () -> underTest.consumeAndVerify(
+                danglingRawToken, passwordEncoder.encode("attackerChosenPassword"), Instant.now()));
 
         User reloaded = userRepository.findById(user.getId()).orElseThrow();
         assertTrue(passwordEncoder.matches(realPassword, reloaded.getPasswordHash()),
