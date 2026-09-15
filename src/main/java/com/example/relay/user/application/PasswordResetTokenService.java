@@ -95,8 +95,30 @@ public class PasswordResetTokenService {
      * a real two-connection Postgres probe, reachable via ordinary concurrent requests (e.g. a password-reset
      * request racing a verify-email confirmation for the same user) or the unattended
      * {@code PasswordResetEmailRecoverySweeper}.
+     *
+     * <p>
+     * The {@code entityManager.detach} call below is load-bearing, not tidy-up, and closes a regression this same
+     * lockForUpdate call introduced: both public entry points to this method ({@link #issue(User, Instant)} via
+     * {@code PasswordResetService.requestReset}/{@code issueAndDispatch}, and
+     * {@link #reissueForRecovery(User, Instant, Instant)} via {@code PasswordResetEmailRecoverySweeper}) are handed
+     * a {@code User} loaded via a plain, unlocked {@code findByEmail}/{@code findById} OUTSIDE any transaction.
+     * Under this project's default {@code spring.jpa.open-in-view=true}, that User stays MANAGED in the
+     * request-bound persistence context, so {@code lockForUpdate} above would be a lock-mode UPGRADE on that
+     * already-cached instance rather than a fresh load, and Hibernate re-validates its cached {@code version}
+     * against the row it just locked. If a wholly unrelated concurrent write bumped that row's version in between
+     * (e.g. a concurrent email-verification confirm racing a password-reset request for the same user - exactly
+     * this plan's core scenario), the upgrade throws {@code ObjectOptimisticLockingFailureException}, uncaught,
+     * surfacing as a 500 on this unauthenticated, security-sensitive endpoint. Detaching first removes the stale
+     * cached instance, making lockForUpdate a genuine {@code SELECT ... FOR UPDATE} with nothing to version-check.
+     * This is safe for every caller: {@code User} has no lazy fields (id/email/passwordHash/emailVerified/version
+     * are all plain eager columns), and every caller of issue()/reissueForRecovery only reads plain getters off
+     * {@code user} AFTER the call returns (PasswordResetService's post-issue dispatch() reading user.getEmail()) -
+     * none relies on {@code user} remaining JPA-managed or on any further auto-flushed mutation to it. See
+     * EmailVerificationTokenService.issue's identical note - this is symmetric across both flows, mirroring the
+     * same fix already applied to both consume methods.
      */
     private IssuedResetToken issue(User user, Instant now, Instant firstRequestedAt) {
+        entityManager.detach(user);
         userRepository.lockForUpdate(user.getId());
         passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
         String rawToken = secureTokenGenerator.generateRawToken();
