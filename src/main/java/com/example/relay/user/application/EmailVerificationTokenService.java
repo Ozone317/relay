@@ -8,8 +8,9 @@ import com.example.relay.user.exception.InvalidOrExpiredVerificationTokenExcepti
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
+import jakarta.persistence.EntityManager;
 import java.time.Instant;
-import org.springframework.dao.OptimisticLockingFailureException;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,15 +26,18 @@ public class EmailVerificationTokenService {
     private final UserRepository userRepository;
     private final SecureTokenGenerator secureTokenGenerator;
     private final EmailVerificationProperties emailVerificationProperties;
+    private final EntityManager entityManager;
 
     public EmailVerificationTokenService(EmailVerificationTokenRepository emailVerificationTokenRepository,
             PasswordResetTokenRepository passwordResetTokenRepository, UserRepository userRepository,
-            SecureTokenGenerator secureTokenGenerator, EmailVerificationProperties emailVerificationProperties) {
+            SecureTokenGenerator secureTokenGenerator, EmailVerificationProperties emailVerificationProperties,
+            EntityManager entityManager) {
         this.emailVerificationTokenRepository = emailVerificationTokenRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.userRepository = userRepository;
         this.secureTokenGenerator = secureTokenGenerator;
         this.emailVerificationProperties = emailVerificationProperties;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -68,18 +72,23 @@ public class EmailVerificationTokenService {
      * which is established afterward, under the lock, by consume()'s and activateIfPending's own atomic row counts.
      *
      * <p>
-     * {@code token.getUser()} above eagerly loads the User into this transaction's persistence context WITHOUT any
-     * lock. If a concurrent winner commits and bumps {@code User#version} in the gap before
-     * {@link UserRepository#lockForUpdate} actually acquires the row lock below, Hibernate's lock-mode-upgrade path
-     * notices the version mismatch and throws {@link OptimisticLockingFailureException} - NOT the
-     * {@link InvalidOrExpiredVerificationTokenException} every other losing-race path throws. Left untranslated,
-     * that exception reaches GlobalExceptionHandler's generic handler and produces a 500 instead of the same clean
-     * "invalid or expired token" response every other loser gets, even though it means exactly the same thing here:
-     * someone else won the race first. Caught as the broader {@code OptimisticLockingFailureException} (Spring
-     * Data's common parent for this family), not only its Hibernate-specific
-     * {@code ObjectOptimisticLockingFailureException} subtype, so any other Spring Data lock-failure variant is
-     * translated the same way. See PasswordResetTokenService.consumeAndResetPassword's identical javadoc note - this
-     * is the same bug, symmetric across both flows.
+     * The {@code entityManager.detach} call below is load-bearing, not tidy-up. {@code EmailVerificationToken#user}
+     * is a default-EAGER {@code @ManyToOne}, so {@code findByTokenHash} alone already JOIN-loads a MANAGED,
+     * version-stamped User into this transaction's persistence context, unlocked, before any application code runs.
+     * Left managed, {@link UserRepository#lockForUpdate} below is not a fresh load but a lock-mode UPGRADE on that
+     * already-managed instance, and Hibernate re-validates its cached {@code version} against the row it just
+     * locked - which, because the lock made this transaction queue behind whoever held the row, has essentially
+     * always moved by the time it unblocks, so the upgrade throws ObjectOptimisticLockingFailureException. That
+     * fires indistinguishably for a genuine lost activation race AND for a wholly unrelated concurrent write, so
+     * translating it to "invalid or expired token" wrongly rejected valid tokens. Detaching removes the stale cached
+     * instance, making lockForUpdate a genuine {@code SELECT ... FOR UPDATE} with nothing to version-check; validity
+     * is then decided only by consume()'s and activateIfPending's own atomic row counts, under the lock. See
+     * PasswordResetTokenService.consumeAndResetPassword's identical note - this is symmetric across both flows.
+     *
+     * <p>
+     * The earlier {@code catch (OptimisticLockingFailureException)} around lockForUpdate (commit 2fff4da) is
+     * deliberately GONE, not merely unused - see PasswordResetTokenService.consumeAndResetPassword's javadoc for the
+     * full reasoning and the empirical evidence that it is unreachable after the detach.
      *
      * <p>
      * If this call performs the PENDING -> ACTIVE transition, EVERY live PENDING-era token for this user, of BOTH
@@ -97,26 +106,22 @@ public class EmailVerificationTokenService {
         EmailVerificationToken token = emailVerificationTokenRepository.findByTokenHash(tokenHash)
                 .orElseThrow(() -> new InvalidOrExpiredVerificationTokenException(
                         "Verification token was not found, has already been used, or has expired"));
-        User user = token.getUser();
+        UUID userId = token.getUser().getId();
+        entityManager.detach(token.getUser());
 
-        try {
-            userRepository.lockForUpdate(user.getId());
-        } catch (OptimisticLockingFailureException e) {
-            throw new InvalidOrExpiredVerificationTokenException(
-                    "Verification token was not found, has already been used, or has expired");
-        }
+        userRepository.lockForUpdate(userId);
 
         if (emailVerificationTokenRepository.consume(tokenHash, now) == 0) {
             throw new InvalidOrExpiredVerificationTokenException(
                     "Verification token was not found, has already been used, or has expired");
         }
 
-        if (userRepository.activateIfPending(user.getId(), passwordHash) == 0) {
+        if (userRepository.activateIfPending(userId, passwordHash) == 0) {
             throw new InvalidOrExpiredVerificationTokenException("Account is already verified");
         }
 
-        emailVerificationTokenRepository.invalidateAllForUser(user.getId(), now);
-        passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
+        emailVerificationTokenRepository.invalidateAllForUser(userId, now);
+        passwordResetTokenRepository.invalidateAllForUser(userId, now);
 
         return token;
     }

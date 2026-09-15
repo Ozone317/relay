@@ -140,16 +140,16 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
             } catch (InvalidOrExpiredResetTokenException e) {
                 rejectedCount.incrementAndGet();
             } catch (ObjectOptimisticLockingFailureException e) {
-                // PasswordResetTokenService.consumeAndResetPassword now catches this internally and translates
-                // it to InvalidOrExpiredResetTokenException (see that method's javadoc) - the loser's unlocked
-                // read of the token's eagerly-fetched User can otherwise go stale the instant the winner's
-                // commit bumps @Version, and without translation the raw Hibernate exception would escape all
-                // the way to GlobalExceptionHandler's generic handler as a 500 instead of the same clean
-                // rejection every other loser gets. If this branch is ever hit, the translation regressed - fail
-                // loudly (propagated below via Future#get, since a Runnable's exception would otherwise be
-                // silently swallowed by the executor) rather than silently tolerating it.
-                fail("the raw Hibernate lock-failure exception must be translated to "
-                        + "InvalidOrExpiredResetTokenException before it reaches the caller", e);
+                // This must never happen. consumeAndResetPassword detaches the token's eagerly-fetched User
+                // before lockForUpdate (see that method's javadoc), so the lock is a genuine SELECT ... FOR
+                // UPDATE with no stale managed instance for Hibernate to version-check on lock upgrade - the
+                // loser is rejected by consume()'s own affected-row count instead, as InvalidOrExpiredReset-
+                // TokenException. If this branch is ever hit, the detach regressed and a losing racer is once
+                // again reaching GlobalExceptionHandler's generic handler as a 500. Fail loudly (propagated
+                // below via Future#get, since a Runnable's exception would otherwise be silently swallowed by
+                // the executor) rather than silently tolerating it.
+                fail("the raw Hibernate lock-failure exception must never reach the caller - "
+                        + "the pre-lock detach in consumeAndResetPassword should have prevented it entirely", e);
             }
             return null;
         };
