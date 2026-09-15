@@ -54,6 +54,8 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
         emailVerificationTokenRepository.findAll().stream()
                 .filter(token -> token.getUser().getId().equals(user.getId()))
                 .forEach(emailVerificationTokenRepository::delete);
+        // Reload the user to get the current version before deleting (handles @Version field)
+        user = userRepository.findById(user.getId()).orElse(user);
         userRepository.delete(user);
     }
 

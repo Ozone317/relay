@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.util.UUID;
 import lombok.NoArgsConstructor;
 
@@ -24,6 +25,10 @@ public class User {
 
     @Column(name = "email_verified", nullable = false)
     private boolean emailVerified;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 
     public User(String email, String passwordHash) {
         this.id = UUID.randomUUID();
@@ -54,5 +59,9 @@ public class User {
 
     public void markEmailVerified() {
         this.emailVerified = true;
+    }
+
+    public Long getVersion() {
+        return version;
     }
 }
