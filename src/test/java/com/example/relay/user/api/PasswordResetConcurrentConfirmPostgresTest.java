@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -119,7 +120,8 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
     }
 
     @Test
-    void exactlyOneOfTwoConcurrentConfirms_forTheSameToken_succeeds() throws InterruptedException, ExecutionException {
+    void exactlyOneOfTwoConcurrentConfirms_forTheSameToken_succeeds()
+            throws InterruptedException, ExecutionException, TimeoutException {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch readyLatch = new CountDownLatch(2);
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -160,7 +162,10 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
         executor.shutdown();
         boolean finished = executor.awaitTermination(10, TimeUnit.SECONDS);
         for (Future<Void> future : futures) {
-            future.get();
+            // Bounded, not future.get() unbounded: a regression reintroducing a lock-order deadlock (see
+            // PasswordResetTokenService.issue's javadoc) must fail this test loudly within a reasonable
+            // time, not hang the run indefinitely.
+            future.get(10, TimeUnit.SECONDS);
         }
 
         assertEquals(true, finished, "both attempts must finish within the timeout");

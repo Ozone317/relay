@@ -43,9 +43,23 @@ public class EmailVerificationTokenService {
     /**
      * Invalidates every previously-unused token for this user, then issues a new one - both in one transaction, same
      * "supersede, don't leave orphaned state" shape as PasswordResetTokenService.issue.
+     *
+     * <p>
+     * {@code userRepository.lockForUpdate} is acquired FIRST, before any token row is touched - this is not related
+     * to first-activation-wins semantics (issue() never activates anything), it exists purely to preserve the global
+     * "users row lock before any token row, in both directions" invariant described in
+     * {@link #consumeAndVerify}'s javadoc and the design spec's "Lock ordering" section. Without it, this method's
+     * unlocked invalidate-then-insert on the {@code email_verification_tokens} table (whose FK takes a share lock on
+     * the {@code users} row) can form an AB-BA deadlock cycle against a concurrent
+     * {@code consumeAndVerify}/{@code consumeAndResetPassword} call that already holds the {@code users} lock and is
+     * waiting to invalidate this method's token row on a winning activation - found in final review, reproduced with
+     * a real two-connection Postgres probe, reachable via ordinary concurrent requests (e.g. a password-reset
+     * request racing a verify-email confirmation for the same user) or the unattended
+     * {@code PasswordResetEmailRecoverySweeper}.
      */
     @Transactional
     public IssuedVerificationToken issue(User user, Instant now) {
+        userRepository.lockForUpdate(user.getId());
         emailVerificationTokenRepository.invalidateAllForUser(user.getId(), now);
         String rawToken = secureTokenGenerator.generateRawToken();
         EmailVerificationToken token = emailVerificationTokenRepository.saveAndFlush(new EmailVerificationToken(user,

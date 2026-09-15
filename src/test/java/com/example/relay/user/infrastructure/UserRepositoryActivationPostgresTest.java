@@ -114,10 +114,22 @@ class UserRepositoryActivationPostgresTest implements SharedPostgresContainer {
     /**
      * Case V from the design spec's test matrix: proves @Version is real defense-in-depth, not
      * decorative, against exactly the class of bug this plan removes (a stale full-entity save
-     * racing an atomic update). A managed User is loaded (version N), a concurrent atomic update
-     * bumps the row to version N+1 in a SEPARATE, already-committed transaction, and the ORIGINAL
-     * stale entity is then saved - Hibernate must reject it rather than silently overwrite the
-     * newer state.
+     * racing an atomic update).
+     *
+     * <p>
+     * This whole test method runs inside ONE transaction (the class-level/method-level
+     * {@code @Transactional}), not across two separate, independently-committed transactions - the
+     * atomic update below does not "commit" mid-test in the ordinary sense. What actually makes
+     * {@code staleReference} go stale is {@code activateIfPending}'s
+     * {@code @Modifying(clearAutomatically = true)}: it clears this transaction's whole persistence
+     * context, detaching the already-loaded {@code staleReference}. The subsequent
+     * {@code userRepository.saveAndFlush(staleReference)} then routes through
+     * {@code EntityManager.merge()} - {@code SimpleJpaRepository.save()} treats any entity with a
+     * non-null id as "not new" - and it is merge()'s own version comparison (the detached, still
+     * version-N {@code staleReference} against the row's already version-(N+1) state after the
+     * atomic update) that throws {@code ObjectOptimisticLockingFailureException}. The test's actual
+     * proof - a stale entity's save is rejected after a concurrent version bump - still holds; only
+     * the mechanism above is what produces it, not a separate committed transaction.
      */
     @Test
     @Transactional
@@ -126,12 +138,15 @@ class UserRepositoryActivationPostgresTest implements SharedPostgresContainer {
         User staleReference = userRepository.findById(user.getId()).orElseThrow();
 
         int updated = userRepository.activateIfPending(user.getId(), "winner-hash");
-        assertEquals(1, updated, "the atomic update must have committed and bumped the row's version");
+        assertEquals(1, updated,
+                "the atomic update must have taken effect and bumped the row's version (via clearAutomatically, "
+                        + "detaching staleReference) before the stale save below is attempted");
 
         staleReference.changePassword("stale-write-hash");
         assertThrows(org.springframework.orm.ObjectOptimisticLockingFailureException.class,
                 () -> userRepository.saveAndFlush(staleReference),
-                "saving a stale entity after a concurrent atomic update must fail loudly, not silently overwrite");
+                "saving a stale (now-detached) entity after a concurrent atomic update must fail loudly via "
+                        + "merge()'s version check, not silently overwrite");
 
         // Refresh the class field to the current (correctly-versioned) row before cleanUp() runs -
         // it still holds the pre-activation, now-stale version and would otherwise itself risk an

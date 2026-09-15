@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -66,7 +67,7 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
 
     @Test
     void verify_underConcurrentAttemptsWithTheSameToken_succeedsExactlyOnce()
-            throws InterruptedException, ExecutionException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         String provisionalPassword = "provisionalPassword";
         user = userRepository.saveAndFlush(
                 new User("concurrent-verify@example.com", passwordEncoder.encode(provisionalPassword)));
@@ -111,7 +112,10 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
         for (Future<Void> future : futures) {
-            future.get();
+            // Bounded, not future.get() unbounded: a regression reintroducing a lock-order deadlock (see
+            // EmailVerificationTokenService.issue's javadoc) must fail this test loudly within a reasonable
+            // time, not hang the run indefinitely.
+            future.get(10, TimeUnit.SECONDS);
         }
 
         assertEquals(1, successes.get(), "exactly one concurrent verify attempt must succeed");
