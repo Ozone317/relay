@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -22,6 +23,7 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 class EmailVerificationTokenServiceTest {
 
@@ -105,6 +107,16 @@ class EmailVerificationTokenServiceTest {
                 underTest.consumeAndVerify("raw-token", "encoded-real-owner-password", Instant.now());
 
         assertEquals(token, result);
+        // The detach MUST happen, and MUST precede lockForUpdate. EmailVerificationToken#user is a default-EAGER
+        // @ManyToOne, so findByTokenHash alone leaves a managed, version-stamped User in the persistence context;
+        // without detaching it first, lockForUpdate degrades from a fresh SELECT ... FOR UPDATE into a lock-mode
+        // UPGRADE that re-checks that stale version and throws ObjectOptimisticLockingFailureException whenever an
+        // unrelated concurrent write bumped the row while this transaction queued behind the lock. Ordering is the
+        // whole point - a detach placed after the lock would be useless - so this is asserted with InOrder rather
+        // than a bare verify(). See consumeAndVerify's javadoc.
+        InOrder inOrder = inOrder(entityManager, userRepository);
+        inOrder.verify(entityManager).detach(user);
+        inOrder.verify(userRepository).lockForUpdate(user.getId());
         verify(userRepository).activateIfPending(user.getId(), "encoded-real-owner-password");
         verify(emailVerificationTokenRepository).invalidateAllForUser(eq(user.getId()), any());
         verify(passwordResetTokenRepository).invalidateAllForUser(eq(user.getId()), any());
