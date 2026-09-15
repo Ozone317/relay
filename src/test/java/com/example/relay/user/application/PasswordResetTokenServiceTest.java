@@ -14,6 +14,7 @@ import com.example.relay.user.PasswordResetProperties;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
@@ -21,30 +22,29 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 class PasswordResetTokenServiceTest {
 
     private PasswordResetTokenRepository passwordResetTokenRepository;
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
     private UserRepository userRepository;
     private SecureTokenGenerator secureTokenGenerator;
     private RefreshTokenService refreshTokenService;
-    private PasswordEncoder passwordEncoder;
     private PasswordResetTokenService underTest;
 
     @BeforeEach
     void setUp() {
         passwordResetTokenRepository = mock(PasswordResetTokenRepository.class);
+        emailVerificationTokenRepository = mock(EmailVerificationTokenRepository.class);
         userRepository = mock(UserRepository.class);
         secureTokenGenerator = mock(SecureTokenGenerator.class);
         refreshTokenService = mock(RefreshTokenService.class);
-        passwordEncoder = mock(PasswordEncoder.class);
         PasswordResetProperties properties = new PasswordResetProperties();
         properties.setTokenTtl(Duration.ofMinutes(30));
         properties.setBaseUrl("https://example.com/reset-password");
 
-        underTest = new PasswordResetTokenService(passwordResetTokenRepository, userRepository, secureTokenGenerator,
-                refreshTokenService, passwordEncoder, properties);
+        underTest = new PasswordResetTokenService(passwordResetTokenRepository, emailVerificationTokenRepository,
+                userRepository, secureTokenGenerator, refreshTokenService, properties);
 
         when(secureTokenGenerator.generateRawToken()).thenReturn("raw-token");
         when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
@@ -95,31 +95,71 @@ class PasswordResetTokenServiceTest {
     }
 
     @Test
-    void consumeAndResetPassword_throws_whenConsumeUpdatesZeroRows() {
+    void consumeAndResetPassword_throws_whenTheTokenDoesNotExist() {
         when(secureTokenGenerator.hash("bad-token")).thenReturn("bad-hash");
-        when(passwordResetTokenRepository.consume(eq("bad-hash"), any())).thenReturn(0);
+        when(passwordResetTokenRepository.findByTokenHash("bad-hash")).thenReturn(Optional.empty());
 
         assertThrows(InvalidOrExpiredResetTokenException.class,
-                () -> underTest.consumeAndResetPassword("bad-token", "newPassword123", Instant.now()));
+                () -> underTest.consumeAndResetPassword("bad-token", "encoded-password", Instant.now()));
 
-        verify(userRepository, never()).save(any());
+        verify(userRepository, never()).activateIfPending(any(), any());
         verify(refreshTokenService, never()).revokeAll(any(), any());
     }
 
     @Test
-    void consumeAndResetPassword_updatesPasswordAndRevokesSessions_whenConsumeSucceeds() {
+    void consumeAndResetPassword_throws_whenConsumeUpdatesZeroRows() {
+        User user = new User("stale-token@example.com", "hash");
+        PasswordResetToken token =
+                new PasswordResetToken(user, "hashed-token", Instant.now().plusSeconds(1800), Instant.now());
+        when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
+        when(passwordResetTokenRepository.findByTokenHash("hashed-token")).thenReturn(Optional.of(token));
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.consume(eq("hashed-token"), any())).thenReturn(0);
+
+        assertThrows(InvalidOrExpiredResetTokenException.class,
+                () -> underTest.consumeAndResetPassword("raw-token", "encoded-password", Instant.now()));
+
+        verify(userRepository, never()).activateIfPending(any(), any());
+        verify(refreshTokenService, never()).revokeAll(any(), any());
+    }
+
+    @Test
+    void consumeAndResetPassword_activatesAndInvalidatesVerificationTokens_whenAccountWasPending() {
         User user = new User("confirm-test@example.com", "old-hash");
         PasswordResetToken token =
                 new PasswordResetToken(user, "hashed-token", Instant.now().plusSeconds(1800), Instant.now());
         when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
-        when(passwordResetTokenRepository.consume(eq("hashed-token"), any())).thenReturn(1);
         when(passwordResetTokenRepository.findByTokenHash("hashed-token")).thenReturn(Optional.of(token));
-        when(passwordEncoder.encode("newPassword123")).thenReturn("new-hash");
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.consume(eq("hashed-token"), any())).thenReturn(1);
+        when(userRepository.activateIfPending(user.getId(), "new-hash")).thenReturn(1);
 
-        PasswordResetToken result = underTest.consumeAndResetPassword("raw-token", "newPassword123", Instant.now());
+        PasswordResetToken result = underTest.consumeAndResetPassword("raw-token", "new-hash", Instant.now());
 
-        assertEquals("new-hash", result.getUser().getPasswordHash());
-        verify(userRepository).save(user);
+        assertEquals(token, result);
+        verify(userRepository).activateIfPending(user.getId(), "new-hash");
+        verify(userRepository, never()).setPasswordOnly(any(), any());
+        verify(emailVerificationTokenRepository).invalidateAllForUser(eq(user.getId()), any());
+        verify(passwordResetTokenRepository).invalidateAllForUser(eq(user.getId()), any());
+        verify(refreshTokenService).revokeAll(eq(user.getId()), any());
+    }
+
+    @Test
+    void consumeAndResetPassword_setsPasswordOnly_whenAccountWasAlreadyActive() {
+        User user = new User("active-confirm-test@example.com", "old-hash");
+        PasswordResetToken token =
+                new PasswordResetToken(user, "hashed-token", Instant.now().plusSeconds(1800), Instant.now());
+        when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");
+        when(passwordResetTokenRepository.findByTokenHash("hashed-token")).thenReturn(Optional.of(token));
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.consume(eq("hashed-token"), any())).thenReturn(1);
+        when(userRepository.activateIfPending(user.getId(), "new-hash")).thenReturn(0);
+
+        underTest.consumeAndResetPassword("raw-token", "new-hash", Instant.now());
+
+        verify(userRepository).setPasswordOnly(user.getId(), "new-hash");
+        verify(emailVerificationTokenRepository, never()).invalidateAllForUser(any(), any());
+        verify(passwordResetTokenRepository, never()).invalidateAllForUser(any(), any());
         verify(refreshTokenService).revokeAll(eq(user.getId()), any());
     }
 }
