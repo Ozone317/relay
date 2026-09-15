@@ -3,6 +3,7 @@ package com.example.relay.user.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
@@ -23,9 +24,13 @@ import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -114,20 +119,20 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
     }
 
     @Test
-    void exactlyOneOfTwoConcurrentConfirms_forTheSameToken_succeeds() throws InterruptedException {
+    void exactlyOneOfTwoConcurrentConfirms_forTheSameToken_succeeds() throws InterruptedException, ExecutionException {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch readyLatch = new CountDownLatch(2);
         CountDownLatch startLatch = new CountDownLatch(1);
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger rejectedCount = new AtomicInteger(0);
 
-        Runnable attempt = () -> {
+        Callable<Void> attempt = () -> {
             readyLatch.countDown();
             try {
                 startLatch.await();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                return null;
             }
             try {
                 underTest.consumeAndResetPassword(rawToken, passwordEncoder.encode("newPassword123"), Instant.now());
@@ -135,22 +140,28 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
             } catch (InvalidOrExpiredResetTokenException e) {
                 rejectedCount.incrementAndGet();
             } catch (ObjectOptimisticLockingFailureException e) {
-                // The loser can also lose here instead of at the token consume(): its unlocked read of the
-                // token's eagerly-fetched User (before lockForUpdate) becomes stale the instant the winner's
-                // commit bumps @Version, so Hibernate's lock-mode upgrade in lockForUpdate detects the
-                // mismatch and throws before the loser ever reaches consume(). Either exception proves the
-                // same thing - the loser never got to apply its password - so both count as a rejection. See
-                // EmailVerificationConcurrentVerifyPostgresTest, which tolerates the same race the same way.
-                rejectedCount.incrementAndGet();
+                // PasswordResetTokenService.consumeAndResetPassword now catches this internally and translates
+                // it to InvalidOrExpiredResetTokenException (see that method's javadoc) - the loser's unlocked
+                // read of the token's eagerly-fetched User can otherwise go stale the instant the winner's
+                // commit bumps @Version, and without translation the raw Hibernate exception would escape all
+                // the way to GlobalExceptionHandler's generic handler as a 500 instead of the same clean
+                // rejection every other loser gets. If this branch is ever hit, the translation regressed - fail
+                // loudly (propagated below via Future#get, since a Runnable's exception would otherwise be
+                // silently swallowed by the executor) rather than silently tolerating it.
+                fail("the raw Hibernate lock-failure exception must be translated to "
+                        + "InvalidOrExpiredResetTokenException before it reaches the caller", e);
             }
+            return null;
         };
 
-        executor.submit(attempt);
-        executor.submit(attempt);
+        List<Future<Void>> futures = List.of(executor.submit(attempt), executor.submit(attempt));
         readyLatch.await();
         startLatch.countDown();
         executor.shutdown();
         boolean finished = executor.awaitTermination(10, TimeUnit.SECONDS);
+        for (Future<Void> future : futures) {
+            future.get();
+        }
 
         assertEquals(true, finished, "both attempts must finish within the timeout");
         assertEquals(1, successCount.get());

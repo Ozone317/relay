@@ -14,9 +14,14 @@ import com.example.relay.user.exception.InvalidOrExpiredVerificationTokenExcepti
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -60,7 +65,8 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
     }
 
     @Test
-    void verify_underConcurrentAttemptsWithTheSameToken_succeedsExactlyOnce() throws InterruptedException {
+    void verify_underConcurrentAttemptsWithTheSameToken_succeedsExactlyOnce()
+            throws InterruptedException, ExecutionException {
         String provisionalPassword = "provisionalPassword";
         user = userRepository.saveAndFlush(
                 new User("concurrent-verify@example.com", passwordEncoder.encode(provisionalPassword)));
@@ -77,26 +83,35 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
         // concurrency, not just token-consumption exclusivity.
         AtomicReference<String> winningPassword = new AtomicReference<>();
 
+        List<Future<Void>> futures = new ArrayList<>();
         for (int i = 0; i < threadCount; i++) {
             String password = "threadPassword-" + i;
-            executor.submit(() -> {
+            Callable<Void> attempt = () -> {
                 ready.countDown();
                 try {
                     go.await();
                     underTest.consumeAndVerify(issued.rawToken(), passwordEncoder.encode(password), Instant.now());
                     successes.incrementAndGet();
                     winningPassword.set(password);
-                } catch (Exception ignored) {
-                    // expected for the losing thread
-                } finally {
-                    // nothing else to release
+                } catch (InvalidOrExpiredVerificationTokenException expected) {
+                    // expected for the losing thread: EmailVerificationTokenService.consumeAndVerify
+                    // translates its lockForUpdate's raw Hibernate OptimisticLockingFailureException into
+                    // this same exception (see that method's javadoc), so this is the ONLY exception type a
+                    // losing thread should ever see here now - anything else (e.g. the untranslated Hibernate
+                    // exception escaping again) must fail the test loudly via Future#get below, not vanish
+                    // into a broad catch the way it used to.
                 }
-            });
+                return null;
+            };
+            futures.add(executor.submit(attempt));
         }
         ready.await(5, TimeUnit.SECONDS);
         go.countDown();
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.SECONDS);
+        for (Future<Void> future : futures) {
+            future.get();
+        }
 
         assertEquals(1, successes.get(), "exactly one concurrent verify attempt must succeed");
 
