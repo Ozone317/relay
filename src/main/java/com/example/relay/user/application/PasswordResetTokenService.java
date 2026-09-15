@@ -129,6 +129,18 @@ public class PasswordResetTokenService {
      * before this line, the right outcome is the raw exception surfacing, not a silent false rejection.
      *
      * <p>
+     * Caveat on the injected EntityManager's scope: {@code spring.jpa.open-in-view} is never overridden in this
+     * project (so it defaults to true - see DeliveryReplayService's own note on the same setting), which means the
+     * persistence context detached from here is bound to the whole HTTP REQUEST, not just this transaction. Today
+     * that is harmless and the detach is still exactly right: both entry points are unauthenticated and load no
+     * User before reaching this method, so the only managed User in the context is the one this method's own
+     * eager fetch just put there. If a future change ever loads a User earlier in the same request (an
+     * authenticated variant of this flow, say, or a filter that resolves the current principal as an entity),
+     * this detach would evict THAT instance too, and anything downstream still holding it would silently see a
+     * detached entity. A transaction-scoped context, or switching this to a targeted detach guarded by
+     * {@code contains()}, would be the fix at that point.
+     *
+     * <p>
      * If {@link UserRepository#activateIfPending} succeeds, this reset just performed the PENDING -> ACTIVE
      * transition (reset-as-activation): EVERY live PENDING-era token for this user, of BOTH types, is invalidated in
      * the same transaction - not just the other type. invalidateAllForUser is called on both

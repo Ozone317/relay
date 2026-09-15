@@ -88,7 +88,9 @@ public class EmailVerificationTokenService {
      * <p>
      * The earlier {@code catch (OptimisticLockingFailureException)} around lockForUpdate (commit 2fff4da) is
      * deliberately GONE, not merely unused - see PasswordResetTokenService.consumeAndResetPassword's javadoc for the
-     * full reasoning and the empirical evidence that it is unreachable after the detach.
+     * full reasoning and the empirical evidence that it is unreachable after the detach, plus the caveat about the
+     * injected EntityManager being request-scoped rather than transaction-scoped under this project's default
+     * {@code spring.jpa.open-in-view}.
      *
      * <p>
      * If this call performs the PENDING -> ACTIVE transition, EVERY live PENDING-era token for this user, of BOTH

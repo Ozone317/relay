@@ -22,6 +22,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -237,6 +238,10 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch go = new CountDownLatch(1);
         AtomicInteger successes = new AtomicInteger();
+        // Captured rather than discarded: neither thread is expected to throw (the tokens are distinct and the
+        // account is already ACTIVE), so if one does, that exception IS the diagnosis - a bare "expected 2 but was
+        // 1" would say nothing about which mechanism rejected a valid token. Surfaced in the assertion message below.
+        AtomicReference<Throwable> unexpectedFailure = new AtomicReference<>();
 
         executor.submit(() -> {
             ready.countDown();
@@ -246,8 +251,8 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
                 successes.incrementAndGet();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-            } catch (RuntimeException ignored) {
-                // not expected here - tokens are distinct - but tolerated defensively
+            } catch (RuntimeException e) {
+                unexpectedFailure.compareAndSet(null, e);
             }
         });
         executor.submit(() -> {
@@ -258,8 +263,8 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
                 successes.incrementAndGet();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-            } catch (RuntimeException ignored) {
-                // not expected here - tokens are distinct - but tolerated defensively
+            } catch (RuntimeException e) {
+                unexpectedFailure.compareAndSet(null, e);
             }
         });
 
@@ -268,7 +273,9 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
         executor.shutdown();
         assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "both attempts must finish within the timeout");
 
-        assertEquals(2, successes.get(), "both distinct-token resets must succeed independently");
+        assertEquals(2, successes.get(), () -> "both distinct-token resets must succeed independently; "
+                + (unexpectedFailure.get() == null ? "no exception was thrown by either thread"
+                        : "one thread threw " + unexpectedFailure.get()));
         User reloaded = userRepository.findById(user.getId()).orElseThrow();
         assertTrue(reloaded.isEmailVerified(), "email_verified must never be observed false after either commit");
         assertTrue(passwordEncoder.matches("passwordA", reloaded.getPasswordHash())

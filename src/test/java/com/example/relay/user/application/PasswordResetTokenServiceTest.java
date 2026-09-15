@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -23,6 +24,7 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 class PasswordResetTokenServiceTest {
 
@@ -140,6 +142,14 @@ class PasswordResetTokenServiceTest {
         PasswordResetToken result = underTest.consumeAndResetPassword("raw-token", "new-hash", Instant.now());
 
         assertEquals(token, result);
+        // The detach MUST happen, and MUST precede lockForUpdate - see consumeAndResetPassword's javadoc.
+        // PasswordResetToken#user is a default-EAGER @ManyToOne, so findByTokenHash alone leaves a managed,
+        // version-stamped User in the persistence context; without detaching it first, lockForUpdate degrades from
+        // a fresh SELECT ... FOR UPDATE into a lock-mode UPGRADE that re-checks that stale version. Ordering is the
+        // whole point - a detach placed after the lock would be useless - hence InOrder, not a bare verify().
+        InOrder inOrder = inOrder(entityManager, userRepository);
+        inOrder.verify(entityManager).detach(user);
+        inOrder.verify(userRepository).lockForUpdate(user.getId());
         verify(userRepository).activateIfPending(user.getId(), "new-hash");
         verify(userRepository, never()).setPasswordOnly(any(), any());
         verify(emailVerificationTokenRepository).invalidateAllForUser(eq(user.getId()), any());
@@ -160,6 +170,12 @@ class PasswordResetTokenServiceTest {
 
         underTest.consumeAndResetPassword("raw-token", "new-hash", Instant.now());
 
+        // Asserted on this branch too, not just the activation branch above: this IS Case E's code path (an
+        // already-ACTIVE account taking an ordinary password change via setPasswordOnly), the exact scenario where
+        // a missing detach caused a second, wholly-valid reset token to be spuriously rejected.
+        InOrder inOrder = inOrder(entityManager, userRepository);
+        inOrder.verify(entityManager).detach(user);
+        inOrder.verify(userRepository).lockForUpdate(user.getId());
         verify(userRepository).setPasswordOnly(user.getId(), "new-hash");
         verify(emailVerificationTokenRepository, never()).invalidateAllForUser(any(), any());
         verify(passwordResetTokenRepository, never()).invalidateAllForUser(any(), any());
