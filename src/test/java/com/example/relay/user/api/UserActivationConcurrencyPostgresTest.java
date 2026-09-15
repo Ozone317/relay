@@ -164,6 +164,12 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
         CountDownLatch go = new CountDownLatch(1);
         AtomicInteger successes = new AtomicInteger();
         AtomicInteger rejections = new AtomicInteger();
+        // Captured rather than discarded: neither thread is expected to throw anything other than the one
+        // specific "loser" exception its own token type would raise, so if something else escapes (e.g. a raw
+        // Hibernate exception from a regressed lock/detach, or a NullPointerException), that exception IS the
+        // diagnosis - a bare "expected 1 but was 0" would say nothing about which mechanism failed. Surfaced in
+        // the assertion messages below, mirroring Case E's diagnostic below.
+        AtomicReference<Throwable> unexpectedFailure = new AtomicReference<>();
 
         executor.submit(() -> {
             ready.countDown();
@@ -176,6 +182,8 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
                 rejections.incrementAndGet();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (RuntimeException e) {
+                unexpectedFailure.compareAndSet(null, e);
             }
         });
         executor.submit(() -> {
@@ -189,6 +197,8 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
                 rejections.incrementAndGet();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (RuntimeException e) {
+                unexpectedFailure.compareAndSet(null, e);
             }
         });
 
@@ -198,8 +208,12 @@ class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
         assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS),
                 "both attempts must finish within the timeout - a hang here means the lock ordering deadlocks");
 
-        assertEquals(1, successes.get(), "exactly one of verify/reset must win the activation race");
-        assertEquals(1, rejections.get(), "the loser's token must be rejected, never silently ignored");
+        assertEquals(1, successes.get(), () -> "exactly one of verify/reset must win the activation race; "
+                + (unexpectedFailure.get() == null ? "no unexpected exception was thrown by either thread"
+                        : "an unexpected exception escaped: " + unexpectedFailure.get()));
+        assertEquals(1, rejections.get(), () -> "the loser's token must be rejected, never silently ignored; "
+                + (unexpectedFailure.get() == null ? "no unexpected exception was thrown by either thread"
+                        : "an unexpected exception escaped: " + unexpectedFailure.get()));
         User reloaded = userRepository.findById(user.getId()).orElseThrow();
         assertTrue(reloaded.isEmailVerified(), "the account must end ACTIVE regardless of which side won");
         assertTrue(passwordEncoder.matches("viaVerify", reloaded.getPasswordHash())
