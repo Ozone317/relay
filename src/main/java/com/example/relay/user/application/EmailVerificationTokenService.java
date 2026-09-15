@@ -9,6 +9,7 @@ import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,6 +68,20 @@ public class EmailVerificationTokenService {
      * which is established afterward, under the lock, by consume()'s and activateIfPending's own atomic row counts.
      *
      * <p>
+     * {@code token.getUser()} above eagerly loads the User into this transaction's persistence context WITHOUT any
+     * lock. If a concurrent winner commits and bumps {@code User#version} in the gap before
+     * {@link UserRepository#lockForUpdate} actually acquires the row lock below, Hibernate's lock-mode-upgrade path
+     * notices the version mismatch and throws {@link OptimisticLockingFailureException} - NOT the
+     * {@link InvalidOrExpiredVerificationTokenException} every other losing-race path throws. Left untranslated,
+     * that exception reaches GlobalExceptionHandler's generic handler and produces a 500 instead of the same clean
+     * "invalid or expired token" response every other loser gets, even though it means exactly the same thing here:
+     * someone else won the race first. Caught as the broader {@code OptimisticLockingFailureException} (Spring
+     * Data's common parent for this family), not only its Hibernate-specific
+     * {@code ObjectOptimisticLockingFailureException} subtype, so any other Spring Data lock-failure variant is
+     * translated the same way. See PasswordResetTokenService.consumeAndResetPassword's identical javadoc note - this
+     * is the same bug, symmetric across both flows.
+     *
+     * <p>
      * If this call performs the PENDING -> ACTIVE transition, EVERY live PENDING-era token for this user, of BOTH
      * types, is invalidated in the same transaction - not just the other type. invalidateAllForUser is called on
      * both EmailVerificationTokenRepository (covering a duplicate live verification token left over from issue()'s
@@ -84,7 +99,12 @@ public class EmailVerificationTokenService {
                         "Verification token was not found, has already been used, or has expired"));
         User user = token.getUser();
 
-        userRepository.lockForUpdate(user.getId());
+        try {
+            userRepository.lockForUpdate(user.getId());
+        } catch (OptimisticLockingFailureException e) {
+            throw new InvalidOrExpiredVerificationTokenException(
+                    "Verification token was not found, has already been used, or has expired");
+        }
 
         if (emailVerificationTokenRepository.consume(tokenHash, now) == 0) {
             throw new InvalidOrExpiredVerificationTokenException(

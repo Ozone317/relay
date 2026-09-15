@@ -10,6 +10,7 @@ import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -99,6 +100,19 @@ public class PasswordResetTokenService {
      * before consuming this token, not after - see that method's javadoc for the deadlock this prevents.
      *
      * <p>
+     * {@code token.getUser()} above eagerly loads the User into this transaction's persistence context WITHOUT any
+     * lock (it is only a plain read used to learn which row to lock next). If a concurrent winner commits and bumps
+     * {@code User#version} in the gap between that read and {@link UserRepository#lockForUpdate} actually acquiring
+     * the row lock below, Hibernate's lock-mode-upgrade path notices the version mismatch and throws
+     * {@link OptimisticLockingFailureException} - NOT the {@link InvalidOrExpiredResetTokenException} every other
+     * losing-race path throws. Left untranslated, that exception reaches GlobalExceptionHandler's generic handler
+     * and produces a 500 instead of the same clean "invalid or expired token" response every other loser gets, even
+     * though it means exactly the same thing here: someone else won the race first. Caught as the broader
+     * {@code OptimisticLockingFailureException} (Spring Data's common parent for this family), not only its
+     * Hibernate-specific {@code ObjectOptimisticLockingFailureException} subtype, so any other Spring Data lock-
+     * failure variant is translated the same way.
+     *
+     * <p>
      * If {@link UserRepository#activateIfPending} succeeds, this reset just performed the PENDING -> ACTIVE
      * transition (reset-as-activation): EVERY live PENDING-era token for this user, of BOTH types, is invalidated in
      * the same transaction - not just the other type. invalidateAllForUser is called on both
@@ -119,7 +133,12 @@ public class PasswordResetTokenService {
                         "Reset token was not found, has already been used, or has expired"));
         User user = token.getUser();
 
-        userRepository.lockForUpdate(user.getId());
+        try {
+            userRepository.lockForUpdate(user.getId());
+        } catch (OptimisticLockingFailureException e) {
+            throw new InvalidOrExpiredResetTokenException(
+                    "Reset token was not found, has already been used, or has expired");
+        }
 
         if (passwordResetTokenRepository.consume(tokenHash, now) == 0) {
             throw new InvalidOrExpiredResetTokenException(
