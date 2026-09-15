@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 class PasswordResetServiceTest {
 
@@ -28,6 +29,7 @@ class PasswordResetServiceTest {
     private PasswordResetTokenService passwordResetTokenService;
     private PasswordResetRateLimiter rateLimiter;
     private EmailDispatchPublisher emailDispatchPublisher;
+    private PasswordEncoder passwordEncoder;
     private PasswordResetService underTest;
 
     @BeforeEach
@@ -36,12 +38,14 @@ class PasswordResetServiceTest {
         passwordResetTokenService = mock(PasswordResetTokenService.class);
         rateLimiter = mock(PasswordResetRateLimiter.class);
         emailDispatchPublisher = mock(EmailDispatchPublisher.class);
+        passwordEncoder = mock(PasswordEncoder.class);
         PasswordResetProperties properties = new PasswordResetProperties();
         properties.setTokenTtl(Duration.ofMinutes(30));
         properties.setBaseUrl("https://example.com/reset-password");
 
         underTest = new PasswordResetService(userRepository, passwordResetTokenService, rateLimiter,
-                emailDispatchPublisher, properties);
+                emailDispatchPublisher, properties, passwordEncoder);
+        when(passwordEncoder.encode(any())).thenReturn("encoded-password");
     }
 
     @Test

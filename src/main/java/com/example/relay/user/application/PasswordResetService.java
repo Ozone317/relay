@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,15 +29,17 @@ public class PasswordResetService {
     private final PasswordResetRateLimiter rateLimiter;
     private final EmailDispatchPublisher emailDispatchPublisher;
     private final PasswordResetProperties passwordResetProperties;
+    private final PasswordEncoder passwordEncoder;
 
     public PasswordResetService(UserRepository userRepository, PasswordResetTokenService passwordResetTokenService,
             PasswordResetRateLimiter rateLimiter, EmailDispatchPublisher emailDispatchPublisher,
-            PasswordResetProperties passwordResetProperties) {
+            PasswordResetProperties passwordResetProperties, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.passwordResetTokenService = passwordResetTokenService;
         this.rateLimiter = rateLimiter;
         this.emailDispatchPublisher = emailDispatchPublisher;
         this.passwordResetProperties = passwordResetProperties;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
@@ -78,9 +81,14 @@ public class PasswordResetService {
                 Map.of("resetUrl", resetUrl), user.getEmail(), token.getId().toString()));
     }
 
+    /**
+     * Consuming a valid reset token also activates a still-PENDING account - see
+     * docs/superpowers/specs/2026-09-15-user-activation-concurrency-design.md. Hashing happens HERE, before entering
+     * the transactional consume, so bcrypt's ~100ms never runs inside a DB transaction or while any row lock is held.
+     */
     public void confirmReset(String rawToken, String newPassword) {
-        PasswordResetToken token =
-                passwordResetTokenService.consumeAndResetPassword(rawToken, newPassword, Instant.now());
+        PasswordResetToken token = passwordResetTokenService.consumeAndResetPassword(rawToken,
+                passwordEncoder.encode(newPassword), Instant.now());
 
         emailDispatchPublisher.publish(new EmailDispatchMessage(EmailTemplate.PASSWORD_CHANGED, Map.of(),
                 token.getUser().getEmail(), passwordChangedIdempotencyKey(token)));

@@ -2,6 +2,7 @@ package com.example.relay.user.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
@@ -31,6 +32,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 @SpringBootTest
@@ -128,9 +130,17 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
                 return;
             }
             try {
-                underTest.consumeAndResetPassword(rawToken, "newPassword123", Instant.now());
+                underTest.consumeAndResetPassword(rawToken, passwordEncoder.encode("newPassword123"), Instant.now());
                 successCount.incrementAndGet();
             } catch (InvalidOrExpiredResetTokenException e) {
+                rejectedCount.incrementAndGet();
+            } catch (ObjectOptimisticLockingFailureException e) {
+                // The loser can also lose here instead of at the token consume(): its unlocked read of the
+                // token's eagerly-fetched User (before lockForUpdate) becomes stale the instant the winner's
+                // commit bumps @Version, so Hibernate's lock-mode upgrade in lockForUpdate detects the
+                // mismatch and throws before the loser ever reaches consume(). Either exception proves the
+                // same thing - the loser never got to apply its password - so both count as a rejection. See
+                // EmailVerificationConcurrentVerifyPostgresTest, which tolerates the same race the same way.
                 rejectedCount.incrementAndGet();
             }
         };
@@ -149,5 +159,9 @@ class PasswordResetConcurrentConfirmPostgresTest implements SharedPostgresContai
         PasswordResetToken reloaded =
                 passwordResetTokenRepository.findByTokenHash(secureTokenGenerator.hash(rawToken)).orElseThrow();
         assertNotNull(reloaded.getUsedAt());
+
+        User reloadedUser = userRepository.findById(user.getId()).orElseThrow();
+        assertTrue(passwordEncoder.matches("newPassword123", reloadedUser.getPasswordHash()),
+                "the winning attempt's password must actually be persisted, not just the token's used_at flag");
     }
 }

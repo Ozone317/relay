@@ -5,11 +5,11 @@ import com.example.relay.user.PasswordResetProperties;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
+import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
 import java.util.UUID;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,21 +23,21 @@ import org.springframework.transaction.annotation.Transactional;
 public class PasswordResetTokenService {
 
     private final PasswordResetTokenRepository passwordResetTokenRepository;
+    private final EmailVerificationTokenRepository emailVerificationTokenRepository;
     private final UserRepository userRepository;
     private final SecureTokenGenerator secureTokenGenerator;
     private final RefreshTokenService refreshTokenService;
-    private final PasswordEncoder passwordEncoder;
     private final PasswordResetProperties passwordResetProperties;
 
     public PasswordResetTokenService(PasswordResetTokenRepository passwordResetTokenRepository,
-            UserRepository userRepository, SecureTokenGenerator secureTokenGenerator,
-            RefreshTokenService refreshTokenService, PasswordEncoder passwordEncoder,
+            EmailVerificationTokenRepository emailVerificationTokenRepository, UserRepository userRepository,
+            SecureTokenGenerator secureTokenGenerator, RefreshTokenService refreshTokenService,
             PasswordResetProperties passwordResetProperties) {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
+        this.emailVerificationTokenRepository = emailVerificationTokenRepository;
         this.userRepository = userRepository;
         this.secureTokenGenerator = secureTokenGenerator;
         this.refreshTokenService = refreshTokenService;
-        this.passwordEncoder = passwordEncoder;
         this.passwordResetProperties = passwordResetProperties;
     }
 
@@ -67,7 +67,7 @@ public class PasswordResetTokenService {
 
     /**
      * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper's give-up path - a thin
-     * 
+     *
      * @Transactional wrapper, the same shape as deliveryengine's AttemptService#claimDeadLetterNotification, since
      *                PasswordResetTokenRepository#giveUpOn is a custom @Modifying @Query method and Spring Data JPA
      *                does not wrap such methods in a transaction on its own (unlike SimpleJpaRepository's built-in CRUD
@@ -89,26 +89,50 @@ public class PasswordResetTokenService {
     }
 
     /**
-     * The atomic consume UPDATE's row count is the sole authority on token validity - not any prior SELECT. A
-     * successful consume, the password update, and revoking every refresh-token session all happen in this one
-     * transaction: if any later step throws, the consume itself rolls back too, so a failed password update never
-     * silently burns the token.
+     * Consumes the token and atomically applies its password, under first-activation-wins semantics - see
+     * docs/superpowers/specs/2026-09-15-user-activation-concurrency-design.md. {@code passwordHash} arrives here
+     * ALREADY hashed - see {@link PasswordResetService#confirmReset(String, String)}, which hashes before calling
+     * this method so bcrypt never runs inside this transaction or while any row lock is held.
+     *
+     * <p>
+     * Lock order is load-bearing and MUST match EmailVerificationTokenService.consumeAndVerify's: lock the user row
+     * before consuming this token, not after - see that method's javadoc for the deadlock this prevents.
+     *
+     * <p>
+     * If {@link UserRepository#activateIfPending} succeeds, this reset just performed the PENDING -> ACTIVE
+     * transition (reset-as-activation): EVERY live PENDING-era token for this user, of BOTH types, is invalidated in
+     * the same transaction - not just the other type. invalidateAllForUser is called on both
+     * EmailVerificationTokenRepository (covering a competing verification token) AND PasswordResetTokenRepository
+     * (covering a duplicate live reset token left over from issue()'s own pre-existing, separately-accepted
+     * non-atomicity). Each call is a blanket WHERE used_at IS NULL update, so it is a no-op against the token this
+     * method just consumed. If the account was already ACTIVE, this is an ordinary password change:
+     * {@link UserRepository#setPasswordOnly} is used instead, which never touches email_verified and never
+     * invalidates any other token - see
+     * docs/superpowers/specs/2026-09-15-user-activation-concurrency-design.md's "PENDING-race vs. ACTIVE-reset
+     * semantics" section for why these two branches deliberately behave differently.
      */
     @Transactional
-    public PasswordResetToken consumeAndResetPassword(String rawToken, String newPassword, Instant now) {
+    public PasswordResetToken consumeAndResetPassword(String rawToken, String passwordHash, Instant now) {
         String tokenHash = secureTokenGenerator.hash(rawToken);
+        PasswordResetToken token = passwordResetTokenRepository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new InvalidOrExpiredResetTokenException(
+                        "Reset token was not found, has already been used, or has expired"));
+        User user = token.getUser();
+
+        userRepository.lockForUpdate(user.getId());
+
         if (passwordResetTokenRepository.consume(tokenHash, now) == 0) {
             throw new InvalidOrExpiredResetTokenException(
                     "Reset token was not found, has already been used, or has expired");
         }
 
-        PasswordResetToken token = passwordResetTokenRepository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> new IllegalStateException("Token hash " + tokenHash + " was consumed but not found "
-                        + "immediately after within the same transaction - should be impossible"));
+        if (userRepository.activateIfPending(user.getId(), passwordHash) == 1) {
+            emailVerificationTokenRepository.invalidateAllForUser(user.getId(), now);
+            passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
+        } else {
+            userRepository.setPasswordOnly(user.getId(), passwordHash);
+        }
 
-        User user = token.getUser();
-        user.changePassword(passwordEncoder.encode(newPassword));
-        userRepository.save(user);
         refreshTokenService.revokeAll(user.getId(), now);
 
         return token;

@@ -3,8 +3,8 @@ package com.example.relay.user.application;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
@@ -27,7 +27,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @SpringBootTest
@@ -81,7 +80,7 @@ class PasswordResetTransactionRollbackIntegrationTest implements SharedPostgresC
     private EnvironmentRepository environmentRepository;
 
     @MockitoSpyBean
-    private PasswordEncoder passwordEncoder;
+    private RefreshTokenService refreshTokenServiceSpy;
 
     private User user;
     private String rawToken;
@@ -128,15 +127,20 @@ class PasswordResetTransactionRollbackIntegrationTest implements SharedPostgresC
 
     @Test
     void aFailureAfterConsumeButBeforeCommit_rollsBackThePasswordAndTheTokenConsumption() {
-        // Force a failure strictly after the consume UPDATE has run but before the transaction
-        // commits, by making the password encoder throw.
-        when(passwordEncoder.encode(anyString())).thenThrow(new RuntimeException("simulated encoder failure"));
+        // Hashing now happens in PasswordResetService, BEFORE this transactional method is ever
+        // entered (see PasswordResetTokenService#consumeAndResetPassword's javadoc), so the encoder
+        // can no longer be used to force a mid-transaction failure here. Force a failure strictly
+        // after the consume UPDATE and the password write have run but before the transaction
+        // commits, by making the last step - revoking refresh-token sessions - throw instead.
+        doThrow(new RuntimeException("simulated revocation failure")).when(refreshTokenServiceSpy)
+                .revokeAll(any(), any());
 
         assertThrows(RuntimeException.class,
-                () -> underTest.consumeAndResetPassword(rawToken, "newPassword123", Instant.now()));
+                () -> underTest.consumeAndResetPassword(rawToken, "new-hash", Instant.now()));
 
         User reloadedUser = userRepository.findById(user.getId()).orElseThrow();
-        assertEquals("original-hash", reloadedUser.getPasswordHash());
+        assertEquals("original-hash", reloadedUser.getPasswordHash(),
+                "the password write must have rolled back along with everything else");
 
         PasswordResetToken reloadedToken =
                 passwordResetTokenRepository.findByTokenHash(secureTokenGenerator.hash(rawToken)).orElseThrow();
