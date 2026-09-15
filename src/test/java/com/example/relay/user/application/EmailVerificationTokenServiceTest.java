@@ -16,6 +16,7 @@ import com.example.relay.user.exception.InvalidOrExpiredVerificationTokenExcepti
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
+import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -28,6 +29,7 @@ class EmailVerificationTokenServiceTest {
     private PasswordResetTokenRepository passwordResetTokenRepository;
     private UserRepository userRepository;
     private SecureTokenGenerator secureTokenGenerator;
+    private EntityManager entityManager;
     private EmailVerificationTokenService underTest;
 
     @BeforeEach
@@ -36,12 +38,13 @@ class EmailVerificationTokenServiceTest {
         passwordResetTokenRepository = mock(PasswordResetTokenRepository.class);
         userRepository = mock(UserRepository.class);
         secureTokenGenerator = mock(SecureTokenGenerator.class);
+        entityManager = mock(EntityManager.class);
         EmailVerificationProperties properties = new EmailVerificationProperties();
         properties.setTokenTtl(Duration.ofHours(24));
         properties.setBaseUrl("https://example.com/verify-email");
 
         underTest = new EmailVerificationTokenService(emailVerificationTokenRepository, passwordResetTokenRepository,
-                userRepository, secureTokenGenerator, properties);
+                userRepository, secureTokenGenerator, properties, entityManager);
 
         when(secureTokenGenerator.generateRawToken()).thenReturn("raw-token");
         when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");

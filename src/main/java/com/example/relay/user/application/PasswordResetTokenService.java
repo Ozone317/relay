@@ -8,9 +8,9 @@ import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
+import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.util.UUID;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,17 +29,19 @@ public class PasswordResetTokenService {
     private final SecureTokenGenerator secureTokenGenerator;
     private final RefreshTokenService refreshTokenService;
     private final PasswordResetProperties passwordResetProperties;
+    private final EntityManager entityManager;
 
     public PasswordResetTokenService(PasswordResetTokenRepository passwordResetTokenRepository,
             EmailVerificationTokenRepository emailVerificationTokenRepository, UserRepository userRepository,
             SecureTokenGenerator secureTokenGenerator, RefreshTokenService refreshTokenService,
-            PasswordResetProperties passwordResetProperties) {
+            PasswordResetProperties passwordResetProperties, EntityManager entityManager) {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.emailVerificationTokenRepository = emailVerificationTokenRepository;
         this.userRepository = userRepository;
         this.secureTokenGenerator = secureTokenGenerator;
         this.refreshTokenService = refreshTokenService;
         this.passwordResetProperties = passwordResetProperties;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -100,17 +102,31 @@ public class PasswordResetTokenService {
      * before consuming this token, not after - see that method's javadoc for the deadlock this prevents.
      *
      * <p>
-     * {@code token.getUser()} above eagerly loads the User into this transaction's persistence context WITHOUT any
-     * lock (it is only a plain read used to learn which row to lock next). If a concurrent winner commits and bumps
-     * {@code User#version} in the gap between that read and {@link UserRepository#lockForUpdate} actually acquiring
-     * the row lock below, Hibernate's lock-mode-upgrade path notices the version mismatch and throws
-     * {@link OptimisticLockingFailureException} - NOT the {@link InvalidOrExpiredResetTokenException} every other
-     * losing-race path throws. Left untranslated, that exception reaches GlobalExceptionHandler's generic handler
-     * and produces a 500 instead of the same clean "invalid or expired token" response every other loser gets, even
-     * though it means exactly the same thing here: someone else won the race first. Caught as the broader
-     * {@code OptimisticLockingFailureException} (Spring Data's common parent for this family), not only its
-     * Hibernate-specific {@code ObjectOptimisticLockingFailureException} subtype, so any other Spring Data lock-
-     * failure variant is translated the same way.
+     * The {@code entityManager.detach} call below is load-bearing, not tidy-up. {@code PasswordResetToken#user} is a
+     * default-EAGER {@code @ManyToOne}, so {@code findByTokenHash} alone already JOIN-loads a MANAGED, version-stamped
+     * User into this transaction's persistence context, unlocked, before any application code runs. Left managed, the
+     * subsequent {@link UserRepository#lockForUpdate} is not a fresh load but a lock-mode UPGRADE on that already-
+     * managed instance, and Hibernate re-validates its cached {@code version} against the row it just locked. Because
+     * the lock made this transaction QUEUE behind whoever held the row, by the time it unblocks the version has
+     * essentially always moved - so the upgrade throws ObjectOptimisticLockingFailureException. That fires for BOTH a
+     * genuine lost activation race AND a wholly unrelated concurrent password change (two distinct valid reset tokens
+     * on an already-ACTIVE account, Case E of the design spec's matrix), and nothing at that call site can tell the
+     * two apart - so translating it to "invalid or expired token" wrongly rejected a perfectly valid token. Detaching
+     * first removes the stale cached instance entirely, making lockForUpdate a genuine {@code SELECT ... FOR UPDATE}
+     * with nothing to version-check. Validity is then decided ONLY where it always should have been: by consume()'s
+     * and activateIfPending's own atomic affected-row counts, under the lock. A loser of a real activation race still
+     * rejects cleanly, because the winner's invalidateAllForUser already set its {@code used_at} and consume() returns
+     * 0. Only the id is read before detaching; the entity's other fields are deliberately never used.
+     *
+     * <p>
+     * The earlier {@code catch (OptimisticLockingFailureException)} around lockForUpdate (commit 2fff4da) is
+     * deliberately GONE, not merely unused: detaching removes the only construct in this method that could raise it,
+     * verified by instrumenting the call site and observing zero occurrences across repeated runs of every
+     * verify/reset concurrency suite. Keeping it as "defense in depth" would be actively harmful, not free - it can
+     * only ever misclassify: the exception cannot distinguish a lost race from an unrelated concurrent write, so
+     * reinstating it would re-open exactly the Case E bug it is being removed for, while masking any genuine future
+     * optimistic-lock bug as a routine 400 instead of failing loudly. If a future edit reintroduces a managed User
+     * before this line, the right outcome is the raw exception surfacing, not a silent false rejection.
      *
      * <p>
      * If {@link UserRepository#activateIfPending} succeeds, this reset just performed the PENDING -> ACTIVE
@@ -131,28 +147,24 @@ public class PasswordResetTokenService {
         PasswordResetToken token = passwordResetTokenRepository.findByTokenHash(tokenHash)
                 .orElseThrow(() -> new InvalidOrExpiredResetTokenException(
                         "Reset token was not found, has already been used, or has expired"));
-        User user = token.getUser();
+        UUID userId = token.getUser().getId();
+        entityManager.detach(token.getUser());
 
-        try {
-            userRepository.lockForUpdate(user.getId());
-        } catch (OptimisticLockingFailureException e) {
-            throw new InvalidOrExpiredResetTokenException(
-                    "Reset token was not found, has already been used, or has expired");
-        }
+        userRepository.lockForUpdate(userId);
 
         if (passwordResetTokenRepository.consume(tokenHash, now) == 0) {
             throw new InvalidOrExpiredResetTokenException(
                     "Reset token was not found, has already been used, or has expired");
         }
 
-        if (userRepository.activateIfPending(user.getId(), passwordHash) == 1) {
-            emailVerificationTokenRepository.invalidateAllForUser(user.getId(), now);
-            passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
+        if (userRepository.activateIfPending(userId, passwordHash) == 1) {
+            emailVerificationTokenRepository.invalidateAllForUser(userId, now);
+            passwordResetTokenRepository.invalidateAllForUser(userId, now);
         } else {
-            userRepository.setPasswordOnly(user.getId(), passwordHash);
+            userRepository.setPasswordOnly(userId, passwordHash);
         }
 
-        refreshTokenService.revokeAll(user.getId(), now);
+        refreshTokenService.revokeAll(userId, now);
 
         return token;
     }

@@ -17,6 +17,7 @@ import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
+import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -30,6 +31,7 @@ class PasswordResetTokenServiceTest {
     private UserRepository userRepository;
     private SecureTokenGenerator secureTokenGenerator;
     private RefreshTokenService refreshTokenService;
+    private EntityManager entityManager;
     private PasswordResetTokenService underTest;
 
     @BeforeEach
@@ -39,12 +41,13 @@ class PasswordResetTokenServiceTest {
         userRepository = mock(UserRepository.class);
         secureTokenGenerator = mock(SecureTokenGenerator.class);
         refreshTokenService = mock(RefreshTokenService.class);
+        entityManager = mock(EntityManager.class);
         PasswordResetProperties properties = new PasswordResetProperties();
         properties.setTokenTtl(Duration.ofMinutes(30));
         properties.setBaseUrl("https://example.com/reset-password");
 
         underTest = new PasswordResetTokenService(passwordResetTokenRepository, emailVerificationTokenRepository,
-                userRepository, secureTokenGenerator, refreshTokenService, properties);
+                userRepository, secureTokenGenerator, refreshTokenService, properties, entityManager);
 
         when(secureTokenGenerator.generateRawToken()).thenReturn("raw-token");
         when(secureTokenGenerator.hash("raw-token")).thenReturn("hashed-token");

@@ -94,12 +94,13 @@ class EmailVerificationConcurrentVerifyPostgresTest implements SharedPostgresCon
                     successes.incrementAndGet();
                     winningPassword.set(password);
                 } catch (InvalidOrExpiredVerificationTokenException expected) {
-                    // expected for the losing thread: EmailVerificationTokenService.consumeAndVerify
-                    // translates its lockForUpdate's raw Hibernate OptimisticLockingFailureException into
-                    // this same exception (see that method's javadoc), so this is the ONLY exception type a
-                    // losing thread should ever see here now - anything else (e.g. the untranslated Hibernate
-                    // exception escaping again) must fail the test loudly via Future#get below, not vanish
-                    // into a broad catch the way it used to.
+                    // expected for the losing thread, and the ONLY exception type it should ever see:
+                    // EmailVerificationTokenService.consumeAndVerify detaches the token's eagerly-fetched User
+                    // before lockForUpdate (see that method's javadoc), so the lock never version-checks a
+                    // stale managed instance and never raises a raw Hibernate lock-failure - the loser is
+                    // rejected purely by consume()'s own affected-row count. Anything else (e.g. a Hibernate
+                    // ObjectOptimisticLockingFailureException escaping again) must fail the test loudly via
+                    // Future#get below, not vanish into a broad catch the way it used to.
                 }
                 return null;
             };
