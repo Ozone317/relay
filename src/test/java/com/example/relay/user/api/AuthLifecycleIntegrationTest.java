@@ -44,6 +44,9 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
     @Autowired
     private com.example.relay.user.infrastructure.UserRepository userRepository;
 
+    @Autowired
+    private com.example.relay.common.security.JwtService jwtService;
+
     private HttpHeaders csrfHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Relay-Auth", "1");
@@ -106,6 +109,31 @@ public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
         assertEquals(HttpStatus.UNAUTHORIZED, rest
                 .exchange("/api/v1/auth/refresh", HttpMethod.POST, new HttpEntity<>(deadHeaders), String.class)
                 .getStatusCode());
+    }
+
+    @Test
+    void loginAndRefresh_issueAccessTokensWithEmailVerifiedTrue() {
+        ResponseEntity<AuthResponse> loggedIn =
+                registerVerifyAndLogIn("jwt-claim-lifecycle@example.com", "somePassword");
+
+        assertEquals(HttpStatus.OK, loggedIn.getStatusCode());
+        assertNotNull(loggedIn.getBody());
+        assertTrue(jwtService.extractEmailVerified(loggedIn.getBody().accessToken()),
+                "the real login-issued access token must carry emailVerified=true");
+
+        String setCookie = loggedIn.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        assertNotNull(setCookie);
+        String refreshCookie = setCookie.substring(0, setCookie.indexOf(';'));
+
+        HttpHeaders refreshHeaders = csrfHeaders();
+        refreshHeaders.add(HttpHeaders.COOKIE, refreshCookie);
+        ResponseEntity<AuthResponse> refreshed = rest.exchange("/api/v1/auth/refresh", HttpMethod.POST,
+                new HttpEntity<>(refreshHeaders), AuthResponse.class);
+
+        assertEquals(HttpStatus.OK, refreshed.getStatusCode());
+        assertNotNull(refreshed.getBody());
+        assertTrue(jwtService.extractEmailVerified(refreshed.getBody().accessToken()),
+                "the real refresh-issued access token must carry emailVerified=true");
     }
 
     @Test
