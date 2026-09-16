@@ -11,6 +11,7 @@ import com.example.relay.user.application.AuthService;
 import com.example.relay.user.application.EmailVerificationService;
 import com.example.relay.user.application.IssuedTokens;
 import com.example.relay.user.application.RegisteredUser;
+import com.example.relay.user.exception.ConcurrentRegistrationRaceLostException;
 import com.example.relay.user.exception.ExistingUnverifiedAccountException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -59,6 +60,9 @@ public class AuthController {
             emailVerificationService.dispatchInitial(result.user(), result.issuedToken());
         } catch (ExistingUnverifiedAccountException ex) {
             emailVerificationService.resend(ex.getEmail(), clientIpResolver.resolve(httpRequest));
+        } catch (ConcurrentRegistrationRaceLostException ignored) {
+            // The concurrent winner already created and will dispatch the only initial token.
+            // Returning the shared response preserves non-enumerating external behavior.
         }
         return ResponseEntity.status(HttpStatus.CREATED).body(new RegisterResponseDto(REGISTRATION_ACCEPTED_MESSAGE));
     }

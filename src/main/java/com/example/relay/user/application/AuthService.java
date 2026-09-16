@@ -3,6 +3,7 @@ package com.example.relay.user.application;
 import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.ConcurrentRegistrationRaceLostException;
 import com.example.relay.user.exception.EmailNotVerifiedException;
 import com.example.relay.user.exception.ExistingUnverifiedAccountException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
@@ -45,8 +46,9 @@ public class AuthService {
      * Registers a user and issues their first verification token, in one transaction - it does NOT issue any Bearer
      * tokens (see AuthController.register() for why, and for how the existing-unverified branch is handled outside
      * this method entirely). On an existing row: a verified account still 409s (UserAlreadyExistsException,
-     * unchanged); an unverified one throws ExistingUnverifiedAccountException, uniformly from both this fast-path
-     * check and the race-loss catch block below - see the design spec Section 5.
+     * unchanged); an unverified one throws ExistingUnverifiedAccountException so the controller can resend. A
+     * concurrent insert race loser instead throws ConcurrentRegistrationRaceLostException so it cannot invalidate
+     * the winner's initial verification token.
      *
      * <p>
      * This method deliberately performs NO password handling beyond seeding a brand-new row: whatever password is
@@ -71,9 +73,10 @@ public class AuthService {
         try {
             userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException e) {
-            // A race loser against a concurrent brand-new registration is always racing an
-            // unverified row - see this method's own javadoc.
-            throw new ExistingUnverifiedAccountException(email);
+            // The concurrent winner owns the first verification token. Reissuing here would
+            // invalidate that token and send a second email, so signal the controller to return
+            // the shared success response without any follow-up action.
+            throw new ConcurrentRegistrationRaceLostException(email);
         }
 
         EmailVerificationTokenService.IssuedVerificationToken issuedToken =

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -26,6 +27,7 @@ import com.example.relay.user.application.AuthService;
 import com.example.relay.user.application.EmailVerificationService;
 import com.example.relay.user.application.IssuedTokens;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.ConcurrentRegistrationRaceLostException;
 import com.example.relay.user.exception.InvalidRefreshTokenException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -102,6 +104,23 @@ public class AuthControllerTest {
 
         verify(emailVerificationService).resend("unverified@mail.com", "127.0.0.1");
         verify(emailVerificationService, never()).dispatchInitial(any(), any());
+    }
+
+    @Test
+    void register_returns201WithoutResending_whenThisRequestLostTheConcurrentInsertRace() throws Exception {
+        RegisterRequest registerRequest = new RegisterRequest("race-loser@mail.com", "somePassword");
+        when(authService.register(registerRequest.email(), registerRequest.password()))
+                .thenThrow(new ConcurrentRegistrationRaceLostException(registerRequest.email()));
+
+        mockMvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registerRequest)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message")
+                        .value("Registration successful. Check your email to verify your account."))
+                .andExpect(header().doesNotExist("Set-Cookie"));
+
+        verifyNoInteractions(emailVerificationService);
+        verifyNoInteractions(clientIpResolver);
     }
 
     @Test
