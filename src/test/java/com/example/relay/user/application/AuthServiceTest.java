@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.example.relay.common.security.AuthProperties;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.user.domain.User;
+import com.example.relay.user.exception.ConcurrentRegistrationRaceLostException;
 import com.example.relay.user.exception.UserAlreadyExistsException;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.util.Optional;
@@ -87,19 +88,15 @@ public class AuthServiceTest {
     }
 
     @Test
-    void register_throwsExistingUnverifiedAccountException_whenItLosesTheUniqueConstraintRace() {
-        // A race loser against a concurrent brand-new registration is, by construction, always
-        // racing an unverified row - a freshly inserted User defaults to unverified (Task 2), and
-        // nothing else could have verified it in that window. Both detection paths must produce
-        // the identical outcome - see the design spec Section 5.
+    void register_throwsConcurrentRegistrationRaceLostException_whenItLosesTheUniqueConstraintRace() {
         String email = "daksh@example.com";
         when(userRepository.findByEmail(email)).thenReturn(Optional.empty());
         when(passwordEncoder.encode("pw")).thenReturn("hashed");
         when(userRepository.saveAndFlush(any(User.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
 
-        com.example.relay.user.exception.ExistingUnverifiedAccountException thrown = assertThrows(
-                com.example.relay.user.exception.ExistingUnverifiedAccountException.class,
+        ConcurrentRegistrationRaceLostException thrown = assertThrows(
+                ConcurrentRegistrationRaceLostException.class,
                 () -> underTest.register(email, "pw"));
 
         assertEquals(email, thrown.getEmail());
