@@ -87,8 +87,8 @@ class EmailVerificationResendResponseEqualityIntegrationTest implements SharedPo
         MvcResult alreadyVerified = resend(VERIFIED_EMAIL);
 
         assertEquals(200, rateLimited.getResponse().getStatus());
-        assertEquals(200, noAccount.getResponse().getStatus());
-        assertEquals(200, alreadyVerified.getResponse().getStatus());
+        assertEquals(rateLimited.getResponse().getStatus(), noAccount.getResponse().getStatus());
+        assertEquals(rateLimited.getResponse().getStatus(), alreadyVerified.getResponse().getStatus());
         assertArrayEquals(rateLimited.getResponse().getContentAsByteArray(),
                 noAccount.getResponse().getContentAsByteArray());
         assertArrayEquals(rateLimited.getResponse().getContentAsByteArray(),
