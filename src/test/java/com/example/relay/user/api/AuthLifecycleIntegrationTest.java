@@ -10,6 +10,7 @@ import com.example.relay.user.api.dto.LoginRequest;
 import com.example.relay.user.api.dto.RegisterRequest;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import java.time.Instant;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,6 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+@Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class AuthLifecycleIntegrationTest implements SharedPostgresContainer {
 

@@ -11,6 +11,7 @@ import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,6 +34,7 @@ import org.testcontainers.utility.DockerImageName;
  * the same still-unverified email, to prove the SECOND reissue attempt inside the cooldown window is the one that
  * gets blocked.
  */
+@Tag("integration")
 @SpringBootTest
 @Testcontainers
 class RegisterReissueRateLimitIntegrationTest implements SharedPostgresContainer {

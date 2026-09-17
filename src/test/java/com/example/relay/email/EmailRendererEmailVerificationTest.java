@@ -3,11 +3,13 @@ package com.example.relay.email;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import com.example.relay.support.SharedPostgresContainer;
 
+@Tag("integration")
 @SpringBootTest
 class EmailRendererEmailVerificationTest implements SharedPostgresContainer {
 

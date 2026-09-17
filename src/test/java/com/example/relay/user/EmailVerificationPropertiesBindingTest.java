@@ -3,11 +3,13 @@ package com.example.relay.user;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.time.Duration;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.example.relay.support.SharedPostgresContainer;
 
+@Tag("integration")
 @SpringBootTest
 class EmailVerificationPropertiesBindingTest implements SharedPostgresContainer {
 

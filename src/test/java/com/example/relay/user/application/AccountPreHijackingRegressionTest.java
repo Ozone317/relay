@@ -11,6 +11,7 @@ import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Instant;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,6 +29,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
  * verification token. Since the raw token is only ever delivered to the account's own mailbox, and issue() keeps
  * exactly one token valid at a time, only whoever genuinely controls the mailbox can ever set the live password.
  */
+@Tag("integration")
 @SpringBootTest
 class AccountPreHijackingRegressionTest implements SharedPostgresContainer {
 

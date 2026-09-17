@@ -21,10 +21,11 @@ public interface SharedPostgresContainer {
         // ApplicationContext (and therefore its own HikariCP pool) against this one shared
         // container. With ~30 test classes and several genuinely distinct configurations, enough
         // pools can be open at once to exceed Postgres's default max_connections (observed: "sorry,
-        // too many clients already"). Raised well above what even a large number of concurrently
-        // cached contexts could need; this only affects the test container, not application config.
+        // too many clients already"). Raised to 500 so the full tagged integration selection can
+        // retain each context's default Hikari pool with headroom; this only affects the test
+        // container, not application config.
         PostgreSQLContainer<?> container = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"))
-                .withCommand("postgres", "-c", "max_connections=300");
+                .withCommand("postgres", "-c", "max_connections=500");
         container.start();
         return container;
     }

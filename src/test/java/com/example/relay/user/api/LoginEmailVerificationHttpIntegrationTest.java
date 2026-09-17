@@ -13,6 +13,7 @@ import com.example.relay.user.infrastructure.UserRepository;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,6 +32,7 @@ import org.springframework.http.ResponseEntity;
  * This runs over a real embedded HTTP server (not MockMvc) so the assertion about the absence of a Set-Cookie header
  * exercises the actual response Spring produces, mirroring AuthLifecycleIntegrationTest's style.
  */
+@Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class LoginEmailVerificationHttpIntegrationTest implements SharedPostgresContainer {
 

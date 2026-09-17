@@ -36,6 +36,7 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,6 +54,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * replayed twice is still replay(delivery.getId(), ...) both times - the same Delivery carried forward, never a new
  * one.
  */
+@Tag("integration")
 @SpringBootTest
 @Testcontainers
 public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresContainer {

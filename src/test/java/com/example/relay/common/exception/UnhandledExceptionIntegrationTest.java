@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -43,6 +44,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
  * This runs on a real servlet container deliberately: MockMvc does not perform the {@code /error} dispatch, so a
  * {@code @WebMvcTest} cannot reproduce the masking and would pass either way.
  */
+@Tag("integration")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class UnhandledExceptionIntegrationTest implements SharedPostgresContainer {

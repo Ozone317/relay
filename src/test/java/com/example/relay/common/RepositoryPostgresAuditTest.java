@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.UUID;
 import com.example.relay.support.SharedPostgresContainer;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -52,6 +53,7 @@ import org.springframework.data.domain.Limit;
  * Hibernate for the active dialect and are far less exposed, but the natives in particular bypass dialect translation
  * entirely.
  */
+@Tag("integration")
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 class RepositoryPostgresAuditTest implements SharedPostgresContainer {

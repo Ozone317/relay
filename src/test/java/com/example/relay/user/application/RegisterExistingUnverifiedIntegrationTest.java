@@ -9,6 +9,7 @@ import com.example.relay.user.domain.User;
 import com.example.relay.user.exception.ExistingUnverifiedAccountException;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * consistently and harmlessly, however many times it is called: it always throws ExistingUnverifiedAccountException
  * (never UserAlreadyExistsException, never a 500), and never corrupts or verifies the existing row.
  */
+@Tag("integration")
 @SpringBootTest
 class RegisterExistingUnverifiedIntegrationTest implements SharedPostgresContainer {
 

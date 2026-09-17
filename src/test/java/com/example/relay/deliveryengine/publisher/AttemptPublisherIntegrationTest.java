@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.support.SharedPostgresContainer;
 import java.util.UUID;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -20,6 +21,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 // DeliveryWorker's @RabbitListener on TASKS_QUEUE would otherwise race this test's own
 // rabbitTemplate.receive(TASKS_QUEUE, ...) for the same message - this test is about publishing,
 // not consumption, so the real listener is disabled for this context.
+@Tag("integration")
 @SpringBootTest
 @TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 @Testcontainers

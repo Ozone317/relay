@@ -1,5 +1,7 @@
 package com.example.relay.deliveryengine.worker;
 
+import org.junit.jupiter.api.Tag;
+
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -8,6 +10,7 @@ import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+@Tag("integration")
 @SpringBootTest
 @Testcontainers
 class DeliveryWorkerAggregateCapacityOneByFortyTest extends AbstractDeliveryWorkerAggregateCapacityTest {

@@ -11,6 +11,7 @@ import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -22,6 +23,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
  * same property AuthServiceRegisterAtomicityTest always proved, retargeted from RefreshTokenService (register() no
  * longer touches sessions at all) to EmailVerificationTokenService.
  */
+@Tag("integration")
 @SpringBootTest
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AuthServiceRegisterAtomicityTest implements SharedPostgresContainer {

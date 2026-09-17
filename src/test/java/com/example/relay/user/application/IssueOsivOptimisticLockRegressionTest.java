@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -49,6 +50,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * nested transaction on the same thread, which would just join the OSIV session and never actually commit
  * independently.
  */
+@Tag("integration")
 @SpringBootTest
 class IssueOsivOptimisticLockRegressionTest implements SharedPostgresContainer {
 

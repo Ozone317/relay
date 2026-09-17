@@ -21,11 +21,13 @@ import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 
+@Tag("integration")
 @SpringBootTest
 @Transactional
 public class MessageServiceIntegrationTest implements SharedPostgresContainer {

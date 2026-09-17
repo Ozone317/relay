@@ -8,12 +8,14 @@ import com.example.relay.user.domain.EmailVerificationToken;
 import com.example.relay.user.domain.User;
 import java.time.Instant;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase.Replace;
 
+@Tag("integration")
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = Replace.NONE)
 class EmailVerificationTokenRepositoryTest implements SharedPostgresContainer {

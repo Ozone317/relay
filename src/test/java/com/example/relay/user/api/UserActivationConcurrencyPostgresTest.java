@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +39,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
  * PasswordResetConcurrentConfirmPostgresTest respectively (the latter two updated in Tasks 3/4 for this plan's
  * signature change).
  */
+@Tag("integration")
 @SpringBootTest
 class UserActivationConcurrencyPostgresTest implements SharedPostgresContainer {
 

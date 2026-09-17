@@ -21,6 +21,7 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.relay.support.SharedPostgresContainer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -31,6 +32,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
+@Tag("integration")
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 public class AttemptRepositoryTest implements SharedPostgresContainer {

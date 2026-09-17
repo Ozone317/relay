@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -44,6 +45,7 @@ import org.testcontainers.utility.DockerImageName;
  * EmailDispatchConsumer's class javadoc) - resend() is this feature's only recovery path, so this is the test that
  * proves that path actually works after a failure, not just in isolation.
  */
+@Tag("integration")
 @SpringBootTest
 @Testcontainers
 class EmailVerificationDispatchFailureIntegrationTest implements SharedPostgresContainer {

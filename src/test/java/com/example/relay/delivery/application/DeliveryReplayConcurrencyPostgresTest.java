@@ -36,6 +36,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -59,6 +60,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * (replay(UUID deliveryId, ...): DeliveryStatus instead of replay(UUID attemptId, ...): Attempt) after
  * AttemptReplayService was deleted as dead code.
  */
+@Tag("integration")
 @SpringBootTest
 class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
 

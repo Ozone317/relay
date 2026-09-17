@@ -8,10 +8,12 @@ import java.io.InputStream;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.ClassPathResource;
 
+@Tag("integration")
 @SpringBootTest
 class DeliveryListenerPropertiesConfigurationKeysTest implements SharedPostgresContainer {
 
