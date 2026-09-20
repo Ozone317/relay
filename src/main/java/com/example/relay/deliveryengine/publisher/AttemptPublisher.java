@@ -2,15 +2,16 @@ package com.example.relay.deliveryengine.publisher;
 
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.retry.RetryProperties;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -20,6 +21,11 @@ public class AttemptPublisher implements ReadyTaskPublisher {
     private final RabbitTemplate rabbitTemplate;
     private final RetryProperties retryProperties;
 
+    public AttemptPublisher(RabbitTemplate rabbitTemplate) {
+        this(rabbitTemplate, new RetryProperties());
+    }
+
+    @Autowired
     public AttemptPublisher(RabbitTemplate rabbitTemplate, RetryProperties retryProperties) {
         this.rabbitTemplate = rabbitTemplate;
         this.retryProperties = retryProperties;
@@ -36,7 +42,7 @@ public class AttemptPublisher implements ReadyTaskPublisher {
 
     @Override
     public CompletableFuture<ReadyPublishOutcome> publishReady(UUID attemptId) {
-        CorrelationData correlationData = new CorrelationData(attemptId.toString());
+        CorrelationData correlationData = new CorrelationData();
 
         try {
             rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.TASKS_ROUTING_KEY,
@@ -55,7 +61,12 @@ public class AttemptPublisher implements ReadyTaskPublisher {
                     if (error != null) {
                         return ReadyPublishOutcome.AMBIGUOUS;
                     }
-                    if (!confirm.isAck() || correlationData.getReturned() != null) {
+                    if (!confirm.isAck()) {
+                        return confirm.getReason() == null
+                                ? ReadyPublishOutcome.DEFINITE_FAILURE
+                                : ReadyPublishOutcome.AMBIGUOUS;
+                    }
+                    if (correlationData.getReturned() != null) {
                         return ReadyPublishOutcome.DEFINITE_FAILURE;
                     }
                     return ReadyPublishOutcome.CONFIRMED;
@@ -63,7 +74,7 @@ public class AttemptPublisher implements ReadyTaskPublisher {
     }
 
     public void publishToRoutingKey(UUID attemptId, String routingKey) {
-        CorrelationData correlationData = new CorrelationData(attemptId.toString());
+        CorrelationData correlationData = new CorrelationData();
 
         try {
             // convertAndSend's return value does not denote that the message was accepted by rabbitmq, or

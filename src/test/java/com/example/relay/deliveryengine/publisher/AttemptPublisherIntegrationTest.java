@@ -6,8 +6,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.support.SharedPostgresContainer;
+import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Binding.DestinationType;
@@ -121,6 +126,39 @@ class AttemptPublisherIntegrationTest implements SharedPostgresContainer {
 
     @Test
     @Order(5)
+    void overlappingMissingRoutePublishes_neitherConfirms() throws Exception {
+        Binding tasksBinding = new Binding(
+                RabbitMqConfig.TASKS_QUEUE,
+                DestinationType.QUEUE,
+                RabbitMqConfig.DELIVERY_EXCHANGE,
+                RabbitMqConfig.TASKS_ROUTING_KEY,
+                null);
+        rabbitAdmin.removeBinding(tasksBinding);
+
+        ExecutorService publishers = Executors.newFixedThreadPool(2);
+        try {
+            CyclicBarrier start = new CyclicBarrier(2);
+            UUID attemptId = UUID.randomUUID();
+            Future<ReadyPublishOutcome> first = publishers.submit(() -> {
+                start.await();
+                return underTest.publishReady(attemptId).get(10, TimeUnit.SECONDS);
+            });
+            Future<ReadyPublishOutcome> second = publishers.submit(() -> {
+                start.await();
+                return underTest.publishReady(attemptId).get(10, TimeUnit.SECONDS);
+            });
+
+            assertThat(List.of(first.get(), second.get()))
+                    .containsOnly(ReadyPublishOutcome.DEFINITE_FAILURE)
+                    .doesNotContain(ReadyPublishOutcome.CONFIRMED);
+        } finally {
+            publishers.shutdownNow();
+            rabbitAdmin.declareBinding(tasksBinding);
+        }
+    }
+
+    @Test
+    @Order(6)
     void taskQueue_isPresentAndDurable() {
         Properties queueProperties = rabbitAdmin.getQueueProperties(RabbitMqConfig.TASKS_QUEUE);
 
@@ -129,7 +167,7 @@ class AttemptPublisherIntegrationTest implements SharedPostgresContainer {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     void confirmedQueuedTask_survivesBrokerRestart() throws Exception {
         UUID attemptId = UUID.randomUUID();
         assertEquals(ReadyPublishOutcome.CONFIRMED,
