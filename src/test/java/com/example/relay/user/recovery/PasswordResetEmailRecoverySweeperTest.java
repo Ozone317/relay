@@ -22,6 +22,8 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Limit;
 
@@ -31,6 +33,7 @@ import org.springframework.data.domain.Limit;
  * update lost its race" (a concurrent dispatch confirmation or user consumption won first) requires controlling
  * PasswordResetTokenService#giveUpOnRecovery's return value directly, which only a mocked dependency makes practical.
  */
+@Execution(ExecutionMode.SAME_THREAD)
 class PasswordResetEmailRecoverySweeperTest {
 
     private PasswordResetTokenRepository passwordResetTokenRepository;
