@@ -23,10 +23,24 @@ public final class RetryDelayCalculator {
             throw new IllegalArgumentException("baseDelay must be >= 0");
         }
 
-        long maximumJitterNanos = BigDecimal.valueOf(baseDelay.toNanos())
-                .multiply(BigDecimal.valueOf(properties.getJitterFactor()))
-                .setScale(0, RoundingMode.FLOOR)
-                .longValueExact();
+        long baseDelayNanos;
+        try {
+            baseDelayNanos = baseDelay.toNanos();
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException(
+                    "base-delay is too large to represent in nanoseconds", exception);
+        }
+
+        long maximumJitterNanos;
+        try {
+            maximumJitterNanos = BigDecimal.valueOf(baseDelayNanos)
+                    .multiply(BigDecimal.valueOf(properties.getJitterFactor()))
+                    .setScale(0, RoundingMode.FLOOR)
+                    .longValueExact();
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException(
+                    "jitter-bound is too large to represent in nanoseconds", exception);
+        }
         Duration jitter = jitterSource.next(Duration.ofNanos(maximumJitterNanos));
         if (jitter.isNegative() || jitter.compareTo(Duration.ofNanos(maximumJitterNanos)) > 0) {
             throw new IllegalStateException("Retry jitter source returned a value outside its inclusive bound");

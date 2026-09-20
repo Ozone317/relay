@@ -7,8 +7,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class RetryDelayCalculatorTest {
 
@@ -26,6 +31,36 @@ class RetryDelayCalculatorTest {
                 .isEqualTo(Instant.parse("2026-09-20T12:02:00Z"));
         assertThat(calculatorWith(Duration.ofSeconds(30)).nextRetryAt(Duration.ofMinutes(2)))
                 .isEqualTo(Instant.parse("2026-09-20T12:02:30Z"));
+    }
+
+    @Test
+    void rejectsBaseDelayWhoseNanosecondsCannotBeRepresented() {
+        assertThatThrownBy(() -> calculatorWith(Duration.ZERO).nextRetryAt(Duration.ofSeconds(Long.MAX_VALUE)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("base-delay");
+    }
+
+    @Test
+    void rejectsFiniteJitterFactorWhoseBoundCannotBeRepresented() {
+        RetryProperties properties = validProperties();
+        properties.setJitterFactor(Double.MAX_VALUE);
+        RetryDelayCalculator calculator = new RetryDelayCalculator(
+                Clock.fixed(Instant.parse("2026-09-20T12:00:00Z"), ZoneOffset.UTC),
+                properties,
+                maximumInclusive -> Duration.ZERO);
+
+        assertThatThrownBy(() -> calculator.nextRetryAt(Duration.ofNanos(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("jitter-bound");
+    }
+
+    @Test
+    void samplesTheMaximumNanosecondBoundWithoutOverflow() {
+        Duration maximumInclusive = Duration.ofNanos(Long.MAX_VALUE);
+
+        Duration jitter = new ThreadLocalRetryJitterSource().next(maximumInclusive);
+
+        assertThat(jitter).isBetween(Duration.ZERO, maximumInclusive);
     }
 
     @Test
@@ -59,38 +94,42 @@ class RetryDelayCalculatorTest {
                 .hasMessageContaining("unconfirmed-ready-grace");
     }
 
-    @Test
-    void rejectsNonPositiveSchedulingValues() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nonPositiveProperties")
+    void rejectsZeroAndNegativeValuesForEveryPositiveProperty(
+            String propertyName,
+            Consumer<RetryProperties> setZero,
+            Consumer<RetryProperties> setNegative) {
+        assertInvalidProperty(propertyName, setZero);
+        assertInvalidProperty(propertyName, setNegative);
+    }
+
+    private void assertInvalidProperty(String propertyName, Consumer<RetryProperties> setter) {
         RetryProperties properties = validProperties();
-        properties.setSchedulerInterval(Duration.ZERO);
+        setter.accept(properties);
 
         assertThatThrownBy(properties::validate)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("scheduler-interval");
+                .hasMessageContaining(propertyName);
+    }
 
-        properties = validProperties();
-        properties.setSchedulerBatchSize(0);
-        assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("scheduler-batch-size");
-
-        properties = validProperties();
-        properties.setDispatcherInterval(Duration.ZERO);
-        assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("dispatcher-interval");
-
-        properties = validProperties();
-        properties.setDispatcherBatchSize(0);
-        assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("dispatcher-batch-size");
-
-        properties = validProperties();
-        properties.setPublishConfirmTimeout(Duration.ZERO);
-        assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("publish-confirm-timeout");
+    private static Stream<Arguments> nonPositiveProperties() {
+        return Stream.of(
+                Arguments.of("scheduler-interval",
+                        (Consumer<RetryProperties>) properties -> properties.setSchedulerInterval(Duration.ZERO),
+                        (Consumer<RetryProperties>) properties -> properties.setSchedulerInterval(Duration.ofSeconds(-1))),
+                Arguments.of("scheduler-batch-size",
+                        (Consumer<RetryProperties>) properties -> properties.setSchedulerBatchSize(0),
+                        (Consumer<RetryProperties>) properties -> properties.setSchedulerBatchSize(-1)),
+                Arguments.of("dispatcher-interval",
+                        (Consumer<RetryProperties>) properties -> properties.setDispatcherInterval(Duration.ZERO),
+                        (Consumer<RetryProperties>) properties -> properties.setDispatcherInterval(Duration.ofSeconds(-1))),
+                Arguments.of("dispatcher-batch-size",
+                        (Consumer<RetryProperties>) properties -> properties.setDispatcherBatchSize(0),
+                        (Consumer<RetryProperties>) properties -> properties.setDispatcherBatchSize(-1)),
+                Arguments.of("publish-confirm-timeout",
+                        (Consumer<RetryProperties>) properties -> properties.setPublishConfirmTimeout(Duration.ZERO),
+                        (Consumer<RetryProperties>) properties -> properties.setPublishConfirmTimeout(Duration.ofSeconds(-1))));
     }
 
     private RetryDelayCalculator calculatorAt(String instant, Duration jitter) {

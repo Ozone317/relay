@@ -81,3 +81,38 @@ The tests cover negative jitter/grace, non-positive scheduling and timeout value
 `DeliveryWorker` still publishes retries to the legacy RabbitMQ wait routing keys through an explicit compatibility switch. This is intentionally preserved for the transitional state requested by the plan; Task 4 owns replacing that publication with `RetryDelayCalculator` plus durable dispatcher handoff and removing the wait topology. The Task 2 `RetryScheduler` itself has no publisher dependency and makes no broker call.
 
 The existing `ReconciliationSweeper` promotion bridge remains untouched and safe until Task 4 removes it.
+
+## Review follow-up
+
+### Finding 1 — overflow-safe jitter bounds
+
+Fixed in `RetryDelayCalculator` and `ThreadLocalRetryJitterSource`.
+
+- `RetryDelayCalculator` now converts `baseDelay` to nanoseconds inside an overflow guard and rejects an unrepresentable base delay with a clear `base-delay` exception.
+- Finite jitter factors whose calculated nanosecond bound cannot fit in a `long` are rejected with a clear `jitter-bound` exception.
+- `ThreadLocalRetryJitterSource` rejects durations that cannot be represented in nanoseconds with a clear `maximum-inclusive` exception.
+- The exact `Long.MAX_VALUE` nanosecond bound uses a non-negative random long mask, giving the complete inclusive range `[0, Long.MAX_VALUE]` without evaluating `max + 1`.
+
+New tests cover an unrepresentable base delay, an unrepresentable finite jitter factor, and sampling with `Duration.ofNanos(Long.MAX_VALUE)`.
+
+### Finding 2 — negative validation coverage
+
+Added parameterized zero-and-negative cases for scheduler interval, scheduler batch size, dispatcher interval, dispatcher batch size, and publish-confirm timeout. Existing strict confirm-timeout/grace and negative jitter/grace tests remain in place.
+
+### Review TDD evidence
+
+RED command:
+
+```text
+./mvnw test -Dtest=RetryDelayCalculatorTest,RetrySchedulerPostgresTest,RetryTierTest
+```
+
+Evidence: exit code `1`; the new tests exposed the prior `ArithmeticException` from `Duration.toNanos`, the prior `ArithmeticException` from `BigDecimal.longValueExact`, and the prior `IllegalArgumentException: bound must be positive` from the `Long.MAX_VALUE + 1` overflow.
+
+GREEN command:
+
+```text
+./mvnw test -Dtest=RetryDelayCalculatorTest,RetrySchedulerPostgresTest,RetryTierTest
+```
+
+Evidence: exit code `0`; `RetryDelayCalculatorTest` ran 13 tests, `RetrySchedulerPostgresTest` ran 2 tests, and `RetryTierTest` ran 3 tests. Maven reported `Tests run: 18, Failures: 0, Errors: 0` and `BUILD SUCCESS`.
