@@ -21,7 +21,6 @@ import com.example.relay.common.security.CustomUserDetailsService;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.common.security.SecurityConfig;
-import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -66,9 +65,6 @@ public class MessageControllerTest {
     private MessageMapper messageMapper;
 
     @MockitoBean
-    private AttemptPublisher attemptPublisher;
-
-    @MockitoBean
     private JwtService jwtService;
 
     @MockitoBean
@@ -83,7 +79,7 @@ public class MessageControllerTest {
     }
 
     @Test
-    void create_createsMessageAndPublishesEveryAttempt_returnsCreated() throws Exception {
+    void create_createsMessage_returnsCreated() throws Exception {
         // Arrange
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
@@ -114,9 +110,8 @@ public class MessageControllerTest {
                 .andExpect(jsonPath("$.eventId").value(response.eventId().toString()))
                 .andExpect(jsonPath("$.eventName").value(response.eventName()));
 
-        // Verify
-        verify(attemptPublisher).publish(attempts.get(0).getId());
-        verify(attemptPublisher).publish(attempts.get(1).getId());
+        // Publication is owned by ReadyWorkDispatcher after the controller returns.
+        // The WebMvc test verifies the controller's 201 response and service interaction only.
     }
 
     @Test
@@ -135,7 +130,6 @@ public class MessageControllerTest {
 
         // Verify
         verify(messageService, never()).create(any(), any(), any(), any());
-        verify(attemptPublisher, never()).publish(any());
     }
 
     @Test
@@ -156,7 +150,6 @@ public class MessageControllerTest {
 
         // Verify
         verify(messageService, never()).create(any(), any(), any(), any());
-        verify(attemptPublisher, never()).publish(any());
     }
 
     @Test
@@ -177,8 +170,6 @@ public class MessageControllerTest {
                 .content(objectMapper.writeValueAsString(request))).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("App not found with id: " + appId));
 
-        // Verify
-        verify(attemptPublisher, never()).publish(any());
     }
 
     @Test
@@ -200,8 +191,6 @@ public class MessageControllerTest {
                 .content(objectMapper.writeValueAsString(request))).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("Event not found with id: " + eventId));
 
-        // Verify
-        verify(attemptPublisher, never()).publish(any());
     }
 
     @Test
@@ -223,7 +212,5 @@ public class MessageControllerTest {
                 .with(authentication(authFor(user))).contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request))).andExpect(status().isUnprocessableEntity());
 
-        // Verify
-        verify(attemptPublisher, never()).publish(any());
     }
 }
