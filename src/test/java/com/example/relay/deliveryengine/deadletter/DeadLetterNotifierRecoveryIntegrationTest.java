@@ -18,6 +18,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
@@ -54,13 +55,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
-@TestPropertySource(properties = {"relay.reconciliation.interval=2s", "relay.reconciliation.created-grace=2s",
-        "relay.reconciliation.dead-letter-grace=2s"})
+@TestPropertySource(properties = {"relay.reconciliation.interval=2s", "relay.reconciliation.dead-letter-grace=2s"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class DeadLetterNotifierRecoveryIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
-    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4-management");
+    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
     @Autowired
     private AttemptRepository attemptRepository;

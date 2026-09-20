@@ -49,9 +49,11 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,11 +61,16 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@TestPropertySource(properties = {
+        "relay.retry.scheduling-enabled=false",
+        "relay.reconciliation.scheduling-enabled=false"
+})
 public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
-    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4-management");
+    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
     @Autowired
     private AttemptPublisher attemptPublisher;
@@ -76,6 +83,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private RabbitTemplate rabbitTemplate;
+
+    @Autowired
+    private RabbitAdmin rabbitAdmin;
 
     @Autowired
     private org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
@@ -117,8 +127,10 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     private void drainQueues() {
-        while (rabbitTemplate.receive(RabbitMqConfig.WAIT_30S_QUEUE, 100) != null) {
-            // discard leftover messages from a prior test
+        if (rabbitAdmin.getQueueProperties("delivery.wait.30s") != null) {
+            while (rabbitTemplate.receive("delivery.wait.30s", 100) != null) {
+                // discard leftover messages from a prior test
+            }
         }
         while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 100) != null) {
             // discard leftover messages from a prior test
@@ -173,7 +185,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     @Test
-    void non2xxResponse_beforeFinalAttempt_marksAttemptFailedAndCreatesRetry() {
+    void non2xxResponse_beforeFinalAttempt_createsScheduledRetryWithoutPublishingTask() {
         mockWebServer.enqueue(
                 new MockResponse()
                         .setResponseCode(500)
@@ -240,10 +252,10 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             retryHolder.set(retry);
         });
 
-        org.springframework.amqp.core.Message queued =
-                rabbitTemplate.receive(RabbitMqConfig.WAIT_30S_QUEUE, 5000);
-        assertNotNull(queued, "expected the retry attempt to be published to " + RabbitMqConfig.WAIT_30S_QUEUE);
-        assertEquals(retryHolder.get().getId().toString(), new String(queued.getBody()));
+        assertNull(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 1000),
+                "scheduled retry must not be published to the worker queue");
+        assertNull(rabbitAdmin.getQueueProperties("delivery.wait.30s"),
+                "scheduled retry must not use a legacy wait queue");
     }
 
     @Test

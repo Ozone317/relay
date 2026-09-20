@@ -26,6 +26,7 @@ import org.testcontainers.utility.DockerImageName;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class EmailVerificationConcurrentResendPostgresTest implements SharedPostgresContainer {
 
     @Container

@@ -34,6 +34,13 @@ public class ReadyWorkDispatcher {
     }
 
     @Scheduled(fixedDelayString = "${relay.retry.dispatcher-interval}", scheduler = "retryTaskScheduler")
+    public void scheduledDispatch() {
+        if (!retryProperties.isSchedulingEnabled()) {
+            return;
+        }
+        dispatchOnce();
+    }
+
     public void dispatchOnce() {
         UUID claimId = UUID.randomUUID();
         List<UUID> attemptIds;

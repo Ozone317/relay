@@ -14,6 +14,7 @@ import lombok.Data;
 public class RetryProperties {
 
     private double jitterFactor = 0.25d;
+    private boolean schedulingEnabled = true;
     private Duration schedulerInterval = Duration.ofSeconds(1);
     private int schedulerBatchSize = 100;
     private Duration dispatcherInterval = Duration.ofSeconds(1);

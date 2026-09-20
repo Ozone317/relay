@@ -15,31 +15,22 @@ public class ReconciliationProperties {
 
     private Duration interval = Duration.ofSeconds(30);
 
-    private Duration createdGrace = Duration.ofSeconds(60);
+    private boolean schedulingEnabled = true;
 
     private Duration inFlightGrace = Duration.ofSeconds(90);
 
     private int batchSize = 100;
 
-    private Duration scheduledSlack = Duration.ofMinutes(5);
-
     private Duration deadLetterGrace = Duration.ofMinutes(5);
 
     @PostConstruct
     void validate() {
-        if (createdGrace.compareTo(interval) < 0) {
-            throw new IllegalStateException(
-                    "relay.reconciliation.created-grace (" + createdGrace + ") must be >= "
-                            + "relay.reconciliation.interval (" + interval + "); otherwise a genuinely "
-                            + "stuck CREATED attempt is republished on every single sweep tick instead "
-                            + "of once per grace period");
-        }
         if (deadLetterGrace.compareTo(interval) < 0) {
             throw new IllegalStateException(
                     "relay.reconciliation.dead-letter-grace (" + deadLetterGrace + ") must be >= "
                             + "relay.reconciliation.interval (" + interval + "); otherwise an unnotified "
                             + "DEAD attempt is republished to delivery.deadletter on every single sweep "
-                            + "tick instead of once per grace period - the same reasoning as created-grace, "
+                            + "tick instead of once per grace period, "
                             + "since touchDeadLetterCandidate's guard only re-checks updated_at, not the "
                             + "sweep's own tick rate");
         }

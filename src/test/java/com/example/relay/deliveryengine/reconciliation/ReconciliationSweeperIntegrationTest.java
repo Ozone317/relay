@@ -3,7 +3,6 @@ package com.example.relay.deliveryengine.reconciliation;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.time.Duration;
@@ -18,6 +17,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.RabbitMQContainer;
@@ -34,6 +34,7 @@ import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -54,23 +55,32 @@ import jakarta.persistence.PersistenceContext;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @TestPropertySource(properties = {
         // The real @Scheduled loop and the real DeliveryWorker listener would otherwise race
         // this test's own calls to sweep() and its own queue reads - same reasoning as
         // AttemptPublisherIntegrationTest disabling the listener for its own queue reads.
         "spring.task.scheduling.enabled=false",
         "spring.rabbitmq.listener.simple.auto-startup=false",
+        "relay.retry.scheduling-enabled=false",
+        "relay.reconciliation.scheduling-enabled=false",
         "relay.reconciliation.batch-size=2",
-        "relay.reconciliation.scheduled-slack=5m"
+        "relay.reconciliation.interval=1h",
+        "relay.reconciliation.dead-letter-grace=1h",
+        "relay.retry.scheduler-interval=1h",
+        "relay.retry.dispatcher-interval=1h"
 })
 public class ReconciliationSweeperIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
-    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4-management");
+    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
     @Autowired
     private ReconciliationSweeper sweeper;
+
+    @Autowired
+    private ReadyWorkDispatcher readyWorkDispatcher;
 
     @Autowired
     private AttemptRepository attemptRepository;
@@ -174,14 +184,6 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         return attempt;
     }
 
-    private Attempt persistScheduledAttempt(Instant nextRetryAt) {
-        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
-        Attempt attempt = new Attempt(endpoint.getApp(), message, endpoint, delivery, 2);
-        attempt.setStatus(AttemptStatus.SCHEDULED);
-        attempt.setNextRetryAt(nextRetryAt);
-        return attemptRepository.save(attempt);
-    }
-
     private void backdateUpdatedAt(UUID id, Instant timestamp) {
         transactionTemplate.executeWithoutResult(status -> {
             entityManager.createQuery("""
@@ -196,7 +198,7 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     }
 
     @Test
-    void staleInFlightAttempt_isResetAndRepublished() {
+    void staleInFlightAttempt_isResetWithoutDirectPublication() {
         Attempt attempt = persistAttemptWithUpdatedAt(
                 AttemptStatus.IN_FLIGHT, Instant.now().minusSeconds(3600));
 
@@ -205,78 +207,17 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
             assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
+            assertNull(reloaded.getReadyPublishedAt());
+            assertNull(reloaded.getReadyDispatchClaimId());
+            assertNull(reloaded.getReadyDispatchClaimedAt());
         });
 
+        // A dispatcher may already have published the reset CREATED row by this point. The
+        // focused scheduling test proves that the sweeper never calls AttemptPublisher directly;
+        // this integration test proves the dispatcher-owned task publication against RabbitMQ.
+        readyWorkDispatcher.dispatchOnce();
         Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
-        assertNotNull(queued, "expected the reset attempt to be republished");
-        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
-    }
-
-    @Test
-    void futureScheduledAttempt_isNotPromotedOrPublished() {
-        Attempt attempt = persistScheduledAttempt(Instant.now().plusSeconds(3600));
-
-        sweeper.sweep();
-
-        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-        assertEquals(AttemptStatus.SCHEDULED, reloaded.getStatus());
-        assertNull(reloaded.getReadyPublishedAt());
-        assertNull(reloaded.getReadyDispatchClaimId());
-        assertNull(reloaded.getReadyDispatchClaimedAt());
-        assertNull(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000),
-                "a future retry must remain in SCHEDULED and unpublished");
-    }
-
-    @Test
-    void dueScheduledAttempt_isPromotedAndClaimedForPublication() {
-        Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(60));
-
-        sweeper.sweep();
-
-        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-        assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
-        assertNull(reloaded.getReadyPublishedAt());
-        assertNotNull(reloaded.getReadyDispatchClaimId(), "bridge should claim after promotion commits");
-        assertNotNull(reloaded.getReadyDispatchClaimedAt());
-
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
-        assertNotNull(queued, "due retry should be handed to the existing tasks publisher");
-        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
-    }
-
-    @Test
-    void freshCreatedAttempt_isClaimedAndPublishedWithoutCreatedGraceWait() {
-        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
-
-        sweeper.sweep();
-
-        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-        assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
-        assertNotNull(reloaded.getReadyDispatchClaimId());
-        assertNull(reloaded.getReadyPublishedAt());
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
-        assertNotNull(queued, "fresh durable ready work must not wait for the legacy grace window");
-        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
-    }
-
-    @Test
-    void staleUnconfirmedCreatedAttempt_isReclaimedAndPublishedWithoutAnotherSweepWindow() {
-        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
-        UUID oldClaim = UUID.randomUUID();
-        attempt.setReadyDispatchClaimId(oldClaim);
-        attempt.setReadyDispatchClaimedAt(Instant.now().minusSeconds(3600));
-        attemptRepository.saveAndFlush(attempt);
-
-        sweeper.sweep();
-
-        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-        assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
-        assertNotNull(reloaded.getReadyDispatchClaimId());
-        assertNotEquals(oldClaim, reloaded.getReadyDispatchClaimId(),
-                "an expired unconfirmed claim must be fenced by a new batch token");
-        assertNull(reloaded.getReadyPublishedAt());
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
-        assertNotNull(queued, "stale unconfirmed ready work must be retried in this sweep");
+        assertNotNull(queued, "dispatcher must publish reset CREATED work");
         assertEquals(attempt.getId().toString(), new String(queued.getBody()));
     }
 

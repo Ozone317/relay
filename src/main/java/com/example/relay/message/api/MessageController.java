@@ -1,8 +1,6 @@
 package com.example.relay.message.api;
 
-import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.common.security.AuthenticatedUser;
-import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.message.api.dto.MessageCreateDto;
 import com.example.relay.message.api.dto.MessageCreateResult;
 import com.example.relay.message.api.dto.MessageResponseDto;
@@ -24,13 +22,10 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/environments/{environmentId}/apps/{appId}")
 public class MessageController {
 
-    private final AttemptPublisher attemptPublisher;
     private final MessageMapper messageMapper;
     private final MessageService messageService;
 
-    public MessageController(AttemptPublisher attemptPublisher, MessageMapper messageMapper,
-            MessageService messageService) {
-        this.attemptPublisher = attemptPublisher;
+    public MessageController(MessageMapper messageMapper, MessageService messageService) {
         this.messageMapper = messageMapper;
         this.messageService = messageService;
     }
@@ -39,10 +34,6 @@ public class MessageController {
     public ResponseEntity<MessageResponseDto> create(@PathVariable UUID environmentId, @PathVariable UUID appId,
             @AuthenticationPrincipal AuthenticatedUser user, @RequestBody @Valid MessageCreateDto request) {
         MessageCreateResult result = messageService.create(request, appId, environmentId, user.getId());
-
-        for (Attempt attempt : result.attempts()) {
-            attemptPublisher.publish(attempt.getId());
-        }
 
         Message message = result.message();
         MessageResponseDto response = messageMapper.toResponseDto(message);

@@ -24,6 +24,13 @@ public class RetryScheduler {
     }
 
     @Scheduled(fixedDelayString = "${relay.retry.scheduler-interval}", scheduler = "retryTaskScheduler")
+    public void scheduledReleaseDueRetries() {
+        if (!retryProperties.isSchedulingEnabled()) {
+            return;
+        }
+        releaseDueRetries();
+    }
+
     public void releaseDueRetries() {
         List<UUID> promoted = readyWorkRepository.promoteDueScheduled(retryProperties.getSchedulerBatchSize());
         if (!promoted.isEmpty()) {

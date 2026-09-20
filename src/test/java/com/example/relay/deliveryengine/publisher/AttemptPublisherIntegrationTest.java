@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
@@ -28,6 +29,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -41,6 +43,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 @Testcontainers
 @TestMethodOrder(OrderAnnotation.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AttemptPublisherIntegrationTest implements SharedPostgresContainer {
 
     @Container
@@ -55,6 +58,16 @@ class AttemptPublisherIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private RabbitAdmin rabbitAdmin;
+
+    @BeforeEach
+    void drainQueues() {
+        while (rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 100) != null) {
+            // discard messages left by a scheduled dispatcher from an earlier context
+        }
+        while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 100) != null) {
+            // discard messages left by an earlier ordered publisher assertion
+        }
+    }
 
     @Test
     @Order(1)
@@ -77,16 +90,16 @@ class AttemptPublisherIntegrationTest implements SharedPostgresContainer {
 
     @Test
     @Order(2)
-    void publishToRoutingKey_deliversAttemptIdToTheGivenQueue() {
+    void publishToRoutingKey_deliversAttemptIdToDeadletterQueue() {
         // Arrange
         UUID attemptId = UUID.randomUUID();
 
         // Act
-        underTest.publishToRoutingKey(attemptId, RabbitMqConfig.WAIT_30S_ROUTING_KEY);
+        underTest.publishToRoutingKey(attemptId, RabbitMqConfig.DEADLETTER_ROUTING_KEY);
 
         // Assert
-        Message received = rabbitTemplate.receive(RabbitMqConfig.WAIT_30S_QUEUE, 5000);
-        assertNotNull(received, "expected a message on " + RabbitMqConfig.WAIT_30S_QUEUE);
+        Message received = rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 5000);
+        assertNotNull(received, "expected a message on " + RabbitMqConfig.DEADLETTER_QUEUE);
         assertEquals(attemptId.toString(), new String(received.getBody()));
     }
 

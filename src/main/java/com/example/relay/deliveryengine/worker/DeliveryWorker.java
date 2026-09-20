@@ -6,9 +6,13 @@ import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.retry.RetryDelayCalculator;
+import com.example.relay.deliveryengine.retry.RetryJitterSource;
+import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.signing.HmacSigner;
 import com.example.relay.endpoint.domain.Endpoint;
 import java.time.Instant;
+import java.time.Clock;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -33,16 +37,18 @@ public class DeliveryWorker {
     private final HmacSigner hmacSigner;
     private final RestClient deliveryRestClient;
     private final ExecutorService virtualThreadExecutor;
+    private final RetryDelayCalculator retryDelayCalculator;
 
     public DeliveryWorker(AttemptRepository attemptRepository, AttemptService attemptService, HmacSigner hmacSigner,
             @Qualifier("deliveryRestClient") RestClient deliveryRestClient, AttemptPublisher attemptPublisher,
-            ExecutorService virtualThreadExecutor) {
+            ExecutorService virtualThreadExecutor, RetryProperties retryProperties, RetryJitterSource retryJitterSource) {
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;
         this.deliveryRestClient = deliveryRestClient;
         this.attemptPublisher = attemptPublisher;
         this.virtualThreadExecutor = virtualThreadExecutor;
+        this.retryDelayCalculator = new RetryDelayCalculator(Clock.systemUTC(), retryProperties, retryJitterSource);
     }
 
     @RabbitListener(id = "deliveryWorker", queues = RabbitMqConfig.TASKS_QUEUE,
@@ -101,22 +107,10 @@ public class DeliveryWorker {
         } else {
             int nextAttemptNo = attempt.getAttemptNo() + 1;
             RetryTier tier = RetryTier.forAttemptNo(nextAttemptNo);
-            Instant dueAt = Instant.now().plus(tier.getDelay());
+            Instant dueAt = retryDelayCalculator.nextRetryAt(tier.getDelay());
 
-            Attempt retry = attemptService.markFailedAndCreateRetry(attempt, dueAt, responseCode, responseBody,
+            attemptService.markFailedAndCreateRetry(attempt, dueAt, responseCode, responseBody,
                     lastError, latencyMs);
-            attemptPublisher.publishToRoutingKey(retry.getId(), legacyRetryRoutingKey(nextAttemptNo));
         }
-    }
-
-    private String legacyRetryRoutingKey(int attemptNo) {
-        return switch (attemptNo) {
-        case 2 -> RabbitMqConfig.WAIT_30S_ROUTING_KEY;
-        case 3 -> RabbitMqConfig.WAIT_2M_ROUTING_KEY;
-        case 4 -> RabbitMqConfig.WAIT_10M_ROUTING_KEY;
-        case 5 -> RabbitMqConfig.WAIT_1H_ROUTING_KEY;
-        case 6 -> RabbitMqConfig.WAIT_6H_ROUTING_KEY;
-        default -> throw new IllegalArgumentException("No legacy retry routing key for attemptNo " + attemptNo);
-        };
     }
 }
