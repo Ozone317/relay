@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.support.SharedPostgresContainer;
@@ -16,6 +18,7 @@ import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.retry.RetryJitterSource;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -34,6 +37,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import java.io.IOException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -54,6 +58,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -67,6 +72,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "relay.reconciliation.scheduling-enabled=false"
 })
 public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
+
+    private static final Instant FIXED_RETRY_NOW = Instant.parse("2026-09-20T12:00:00Z");
+    private static final List<String> LEGACY_WAIT_QUEUES = List.of(
+            "delivery.wait.30s", "delivery.wait.2m", "delivery.wait.10m", "delivery.wait.1h", "delivery.wait.6h");
 
     @Container
     @ServiceConnection
@@ -114,10 +123,18 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @Autowired
     private MessageRepository messageRepository;
 
+    @MockitoBean
+    private Clock clock;
+
+    @MockitoBean
+    private RetryJitterSource retryJitterSource;
+
     private MockWebServer mockWebServer;
 
     @BeforeEach
     void setUp() throws IOException {
+        when(clock.instant()).thenReturn(FIXED_RETRY_NOW);
+        when(retryJitterSource.next(any(Duration.class))).thenReturn(Duration.ZERO);
         clearDatabase();
         drainQueues();
         rabbitListenerEndpointRegistry.getListenerContainer("deadLetterNotifier").stop();
@@ -127,9 +144,11 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     private void drainQueues() {
-        if (rabbitAdmin.getQueueProperties("delivery.wait.30s") != null) {
-            while (rabbitTemplate.receive("delivery.wait.30s", 100) != null) {
-                // discard leftover messages from a prior test
+        for (String queue : LEGACY_WAIT_QUEUES) {
+            if (rabbitAdmin.getQueueProperties(queue) != null) {
+                while (rabbitTemplate.receive(queue, 100) != null) {
+                    // discard leftover messages from a prior test
+                }
             }
         }
         while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 100) != null) {
@@ -195,8 +214,6 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 mockWebServer.url("/webhook").toString(),
                 1);
 
-        Instant before = Instant.now();
-
         attemptPublisher.publish(attempt.getId());
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
@@ -217,11 +234,10 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             RetryTier tier = RetryTier.forAttemptNo(
                     attempt.getAttemptNo() + 1);
 
-            Instant expected = before.plus(tier.getDelay());
+            Instant expected = FIXED_RETRY_NOW.plus(tier.getDelay());
 
-            assertTrue(
-                    !original.getNextRetryAt().isBefore(expected.minusSeconds(1)),
-                    "nextAttemptAt should respect the retry delay");
+            assertEquals(expected, original.getNextRetryAt(),
+                    "nextAttemptAt should use the application Clock and retry delay");
         });
 
         AtomicReference<Attempt> retryHolder = new AtomicReference<>();
@@ -254,8 +270,10 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
         assertNull(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 1000),
                 "scheduled retry must not be published to the worker queue");
-        assertNull(rabbitAdmin.getQueueProperties("delivery.wait.30s"),
-                "scheduled retry must not use a legacy wait queue");
+        for (String queue : LEGACY_WAIT_QUEUES) {
+            assertNull(rabbitAdmin.getQueueProperties(queue),
+                    "scheduled retry must not use a legacy wait queue: " + queue);
+        }
     }
 
     @Test

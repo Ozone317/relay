@@ -3,9 +3,14 @@ package com.example.relay.deliveryengine.worker;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
+import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
@@ -29,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
@@ -41,6 +47,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -54,6 +61,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "relay.reconciliation.scheduling-enabled=false"
 })
 class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresContainer {
+
+    private static final List<String> LEGACY_WAIT_QUEUES = List.of(
+            "delivery.wait.30s", "delivery.wait.2m", "delivery.wait.10m", "delivery.wait.1h", "delivery.wait.6h");
 
     @Container
     @ServiceConnection
@@ -83,6 +93,9 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
     private EndpointRepository endpointRepository;
     @Autowired
     private MessageRepository messageRepository;
+
+    @MockitoSpyBean
+    private AttemptService attemptService;
 
     private MockWebServer mockWebServer;
 
@@ -114,13 +127,16 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
         rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.TASKS_ROUTING_KEY,
                 attempt.getId().toString());
 
+        verify(attemptService, timeout(5000)).claim(eq(attempt.getId()), any(Instant.class));
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             assertEquals(AttemptStatus.SCHEDULED,
                     attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
             assertEquals(0, mockWebServer.getRequestCount());
         });
-        assertNull(rabbitAdmin.getQueueProperties("delivery.wait.30s"),
-                "future scheduled work must not depend on a legacy wait queue");
+        for (String queue : LEGACY_WAIT_QUEUES) {
+            assertNull(rabbitAdmin.getQueueProperties(queue),
+                    "future scheduled work must not depend on a legacy wait queue: " + queue);
+        }
     }
 
     private Attempt persistScheduledAttempt() {

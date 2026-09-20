@@ -41,14 +41,15 @@ public class DeliveryWorker {
 
     public DeliveryWorker(AttemptRepository attemptRepository, AttemptService attemptService, HmacSigner hmacSigner,
             @Qualifier("deliveryRestClient") RestClient deliveryRestClient, AttemptPublisher attemptPublisher,
-            ExecutorService virtualThreadExecutor, RetryProperties retryProperties, RetryJitterSource retryJitterSource) {
+            ExecutorService virtualThreadExecutor, Clock clock, RetryProperties retryProperties,
+            RetryJitterSource retryJitterSource) {
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;
         this.deliveryRestClient = deliveryRestClient;
         this.attemptPublisher = attemptPublisher;
         this.virtualThreadExecutor = virtualThreadExecutor;
-        this.retryDelayCalculator = new RetryDelayCalculator(Clock.systemUTC(), retryProperties, retryJitterSource);
+        this.retryDelayCalculator = new RetryDelayCalculator(clock, retryProperties, retryJitterSource);
     }
 
     @RabbitListener(id = "deliveryWorker", queues = RabbitMqConfig.TASKS_QUEUE,

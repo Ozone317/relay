@@ -1,5 +1,6 @@
 package com.example.relay.deliveryengine.config;
 
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Logger;
@@ -14,10 +15,13 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -34,6 +38,9 @@ class RabbitMqConfigIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private RabbitTemplate rabbitTemplate;
+
+    @Autowired
+    private RabbitAdmin rabbitAdmin;
 
     private Logger rabbitMqConfigLogger;
 
@@ -66,6 +73,19 @@ class RabbitMqConfigIntegrationTest implements SharedPostgresContainer {
         } finally {
             rabbitMqConfigLogger.detachAppender(appender);
         }
+    }
+
+    @ParameterizedTest(name = "legacy queue {0} is absent")
+    @ValueSource(strings = {
+            "delivery.wait.30s",
+            "delivery.wait.2m",
+            "delivery.wait.10m",
+            "delivery.wait.1h",
+            "delivery.wait.6h"
+    })
+    void allLegacyWaitQueuesAreAbsent(String queueName) {
+        assertNull(rabbitAdmin.getQueueProperties(queueName),
+                "retired queue must not be declared: " + queueName);
     }
 
     /**
