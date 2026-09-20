@@ -44,33 +44,6 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
     List<Attempt> findByStatusAndNextRetryAtBefore(AttemptStatus status, Instant threshold, Limit limit);
 
-    /**
-     * Transitional reconciliation operation retained until Task 4 moves scheduled recovery to
-     * RetryScheduler.
-     */
-    @Modifying(clearAutomatically = true)
-    @Query(value = """
-                UPDATE attempts
-                SET status = 'CREATED', updated_at = :now
-                WHERE id = :attemptId
-                AND status = 'SCHEDULED'
-                AND next_retry_at < :threshold
-            """, nativeQuery = true)
-    int resetScheduled(UUID attemptId, Instant threshold, Instant now);
-
-    /**
-     * Transitional reconciliation operation retained until Task 4 moves ready publication to the
-     * durable ready-work dispatcher.
-     */
-    @Modifying(clearAutomatically = true)
-    @Query(value = """
-                UPDATE attempts
-                SET updated_at = :now
-                WHERE id = :attemptId
-                AND status = 'CREATED'
-            """, nativeQuery = true)
-    int touchCreated(UUID attemptId, Instant now);
-
     List<Attempt> findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(AttemptStatus status, Instant threshold,
             Limit limit);
 

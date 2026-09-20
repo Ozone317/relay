@@ -112,18 +112,6 @@ public class AttemptService {
         return attemptRepository.resetStuck(attemptId, threshold, now);
     }
 
-    /** Transitional wrapper retained until Task 4 moves scheduled recovery to RetryScheduler. */
-    @Transactional
-    public int resetScheduled(UUID attemptId, Instant threshold, Instant now) {
-        return attemptRepository.resetScheduled(attemptId, threshold, now);
-    }
-
-    /** Transitional wrapper retained until Task 4 moves ready publication to the dispatcher. */
-    @Transactional
-    public int touchCreated(UUID attemptId, Instant now) {
-        return attemptRepository.touchCreated(attemptId, now);
-    }
-
     @Transactional
     public int touchDeadLetterCandidate(UUID attemptId, Instant threshold, Instant now) {
         return attemptRepository.touchDeadLetterCandidate(attemptId, threshold, now);

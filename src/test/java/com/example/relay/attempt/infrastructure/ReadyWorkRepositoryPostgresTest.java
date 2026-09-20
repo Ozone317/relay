@@ -33,7 +33,10 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.transaction.TestTransaction;
 
 @Tag("integration")
@@ -53,6 +56,12 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
 
     private App app;
     private Message message;
@@ -192,41 +201,64 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
     }
 
     @Test
-    void concurrentClaimersLeaseDisjointTenRowBatches() throws Exception {
+    void claimSkipsRowsLockedByIndependentTransaction() throws Exception {
         List<Attempt> attempts = createdAttempts(20);
         testEntityManager.flush();
         TestTransaction.flagForCommit();
         TestTransaction.end();
 
-        CountDownLatch ready = new CountDownLatch(2);
-        CountDownLatch start = new CountDownLatch(1);
+        List<UUID> lockedIds = jdbcTemplate.query(
+                "SELECT id FROM attempts WHERE status = 'CREATED' AND ready_published_at IS NULL "
+                        + "ORDER BY ready_dispatch_claimed_at NULLS FIRST, id LIMIT 10",
+                (resultSet, rowNumber) -> resultSet.getObject("id", UUID.class));
+        CountDownLatch locksHeld = new CountDownLatch(1);
+        CountDownLatch releaseLocks = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            Future<List<UUID>> first = executor.submit(() -> claimAfter(start, ready, UUID.randomUUID()));
-            Future<List<UUID>> second = executor.submit(() -> claimAfter(start, ready, UUID.randomUUID()));
+            Future<?> lockHolder = executor.submit(() -> holdRowsLocked(lockedIds, locksHeld, releaseLocks));
+            assertThat(locksHeld.await(10, TimeUnit.SECONDS)).isTrue();
 
-            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
-            start.countDown();
-            List<UUID> firstBatch = first.get(10, TimeUnit.SECONDS);
-            List<UUID> secondBatch = second.get(10, TimeUnit.SECONDS);
+            Future<List<UUID>> unlockedClaim = executor.submit(
+                    () -> readyWorkRepository.claimUnpublishedReady(UUID.randomUUID(), Duration.ofSeconds(5), 10));
+            List<UUID> unlockedBatch;
+            try {
+                unlockedBatch = unlockedClaim.get(2, TimeUnit.SECONDS);
+            } finally {
+                releaseLocks.countDown();
+            }
+            lockHolder.get(10, TimeUnit.SECONDS);
 
-            assertThat(firstBatch).hasSize(10);
-            assertThat(secondBatch).hasSize(10);
-            assertThat(new HashSet<>(firstBatch)).doesNotContainAnyElementsOf(new HashSet<>(secondBatch));
-            assertThat(new HashSet<>(firstBatch)).hasSize(10);
-            assertThat(new HashSet<>(secondBatch)).hasSize(10);
-            Set<UUID> claimed = new HashSet<>(firstBatch);
-            claimed.addAll(secondBatch);
+            assertThat(unlockedBatch).hasSize(10);
+            assertThat(unlockedBatch).doesNotContainAnyElementsOf(lockedIds);
+            List<UUID> lockedBatch = readyWorkRepository.claimUnpublishedReady(
+                    UUID.randomUUID(), Duration.ofSeconds(5), 10);
+            assertThat(lockedBatch).hasSize(10);
+            assertThat(lockedBatch).doesNotContainAnyElementsOf(unlockedBatch);
+            Set<UUID> claimed = new HashSet<>(unlockedBatch);
+            claimed.addAll(lockedBatch);
             assertThat(claimed).containsExactlyInAnyOrderElementsOf(attempts.stream().map(Attempt::getId).toList());
         } finally {
+            releaseLocks.countDown();
             executor.shutdownNow();
         }
     }
 
-    private List<UUID> claimAfter(CountDownLatch start, CountDownLatch ready, UUID claimId) throws Exception {
-        ready.countDown();
-        assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
-        return readyWorkRepository.claimUnpublishedReady(claimId, Duration.ofSeconds(5), 10);
+    private void holdRowsLocked(List<UUID> lockedIds, CountDownLatch locksHeld, CountDownLatch releaseLocks) {
+        transactionTemplate.executeWithoutResult(status -> {
+            namedParameterJdbcTemplate.query(
+                    "SELECT id FROM attempts WHERE id IN (:ids) FOR UPDATE",
+                    new MapSqlParameterSource("ids", lockedIds),
+                    (resultSet, rowNumber) -> resultSet.getObject("id", UUID.class));
+            locksHeld.countDown();
+            try {
+                if (!releaseLocks.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("timed out waiting to release test row locks");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while holding test row locks", e);
+            }
+        });
     }
 
     private Attempt createdAttempt() {

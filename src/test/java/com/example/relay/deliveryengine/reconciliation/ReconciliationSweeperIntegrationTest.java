@@ -163,14 +163,6 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         return attempt;
     }
 
-    private Attempt persistScheduledAttempt(Instant nextRetryAt) {
-        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
-        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 2));
-        attempt.setStatus(AttemptStatus.SCHEDULED);
-        attempt.setNextRetryAt(nextRetryAt);
-        return attemptRepository.save(attempt);
-    }
-
     private Attempt persistDeadAttempt(Instant updatedAt, Instant deadLetterNotifiedAt) {
         Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
         Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 6));
@@ -192,28 +184,6 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
             .setParameter("id", id)
             .executeUpdate();
         });
-    }
-
-    @Test
-    void staleCreatedAttempt_getsRepublished() {
-        Attempt attempt = persistAttemptWithUpdatedAt(
-                AttemptStatus.CREATED, Instant.now().minusSeconds(3600));
-
-        sweeper.sweep();
-
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
-        assertNotNull(queued, "expected the stale CREATED attempt to be republished");
-        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
-    }
-
-    @Test
-    void freshCreatedAttempt_isLeftAlone() {
-        persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
-
-        sweeper.sweep();
-
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
-        assertNull(queued, "a freshly created attempt should not be swept yet");
     }
 
     @Test
@@ -264,95 +234,6 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
 
         Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
         assertNull(queued, "a concurrently-completed attempt must not be republished");
-    }
-
-    @Test
-    void batchSize_limitsHowManyStaleAttemptsAreSweptPerCycle() {
-        // Each iteration gets its own endpoint: idx_attempts_one_active_per_message_endpoint allows
-        // only one active (CREATED/IN_FLIGHT/SCHEDULED) row per (message_id, endpoint_id) pair, and
-        // endpoint identity is irrelevant to what batching behavior this test checks.
-        for (int i = 0; i < 3; i++) {
-            Endpoint iterationEndpoint = endpointRepository
-                    .save(new Endpoint("batch-" + i, "https://example.com/batch-" + i, "whsec_batch_" + i,
-                            endpoint.getApp()));
-            Delivery iterationDelivery = deliveryRepository
-                    .save(new Delivery(iterationEndpoint.getApp(), message, iterationEndpoint));
-            Attempt attempt = attemptRepository.save(new Attempt(iterationEndpoint.getApp(), message,
-                    iterationEndpoint, iterationDelivery, 1));
-            backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
-        }
-
-        sweeper.sweep();
-
-        int republished = 0;
-        while (rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 500) != null) {
-            republished++;
-        }
-        // Relies on relay.reconciliation.batch-size being overridden below the default 100 for
-        // this assertion to mean anything - see the @TestPropertySource addition below.
-        assertEquals(2, republished);
-    }
-
-    @Test
-    void staleCreatedAttempt_isNotRepublishedOnEveryConsecutiveSweep() {
-        // Honest now, and not before Step 3's fix: with created-grace >= interval enforced at
-        // startup, a row touched by recoverCreated() cannot go stale again before at least one
-        // full interval has elapsed. So calling sweep() three times with ~0ms between calls is a
-        // valid lower bound on real @Scheduled(fixedDelay) spacing - if the row doesn't re-match
-        // after zero elapsed time, it provably won't re-match after a real interval's worth of
-        // time either. Before the validation existed, this same test would have proven nothing.
-        persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now().minusSeconds(3600));
-
-        sweeper.sweep();
-        sweeper.sweep();
-        sweeper.sweep();
-
-        int republished = 0;
-        while (rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 500) != null) {
-            republished++;
-        }
-        assertEquals(1, republished,
-                "three back-to-back sweeps of one stuck row should republish it once, not three times");
-    }
-
-    @Test
-    void overdueScheduledAttempt_isResetAndRepublished() {
-        Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(3600));
-
-        sweeper.sweep();
-
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
-        });
-
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
-        assertNotNull(queued, "expected the overdue SCHEDULED attempt to be recovered to delivery.tasks");
-        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
-    }
-
-    @Test
-    void notYetDueScheduledAttempt_isLeftAlone() {
-        Attempt attempt = persistScheduledAttempt(Instant.now().plusSeconds(3600));
-
-        sweeper.sweep();
-
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
-        assertNull(queued, "a SCHEDULED attempt not yet due must not be recovered early");
-        assertEquals(AttemptStatus.SCHEDULED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
-    }
-
-    @Test
-    void scheduledAttempt_dueButWithinSlack_isLeftAlone() {
-        // D3's core scenario: a retry whose grace-by-updated_at would look stale, but whose actual
-        // backoff (next_retry_at) has not elapsed past the configured slack yet.
-        Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(30));
-
-        sweeper.sweep();
-
-        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000);
-        assertNull(queued, "a SCHEDULED attempt within its slack window must not be recovered early");
-        assertEquals(AttemptStatus.SCHEDULED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
     }
 
     @Test
@@ -409,7 +290,7 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
 
     @Test
     void staleUnnotifiedDeadAttempt_isNotRepublishedOnEveryConsecutiveSweep() {
-        // Same D2-shaped guard as recoverCreated()/touchCreated - proven the same way, since
+        // The same D2-shaped guard is proven here for dead-letter recovery, since
         // relay.reconciliation.dead-letter-grace >= interval is enforced at startup (Step 9).
         persistDeadAttempt(Instant.now().minusSeconds(3600), null);
 
