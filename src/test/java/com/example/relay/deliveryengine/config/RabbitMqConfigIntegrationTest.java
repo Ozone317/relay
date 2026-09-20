@@ -29,7 +29,7 @@ class RabbitMqConfigIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
-    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4-management");
+    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
     @Autowired
     private RabbitTemplate rabbitTemplate;
