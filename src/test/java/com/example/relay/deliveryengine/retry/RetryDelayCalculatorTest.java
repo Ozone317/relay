@@ -75,6 +75,27 @@ class RetryDelayCalculatorTest {
     }
 
     @Test
+    void rejectsConfirmTimeoutAndGraceThatCannotBeRepresentedAsWholeMilliseconds() {
+        RetryProperties properties = validProperties();
+        properties.setPublishConfirmTimeout(Duration.ofNanos(250_000));
+        properties.setUnconfirmedReadyGrace(Duration.ofNanos(500_000));
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("unconfirmed-ready-grace");
+    }
+
+    @Test
+    void rejectsConfirmTimeoutThatOverflowsMillisecondConversion() {
+        RetryProperties properties = validProperties();
+        properties.setPublishConfirmTimeout(Duration.ofSeconds(Long.MAX_VALUE));
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("publish-confirm-timeout");
+    }
+
+    @Test
     void rejectsNegativeJitterFactor() {
         RetryProperties properties = validProperties();
         properties.setJitterFactor(-0.01d);

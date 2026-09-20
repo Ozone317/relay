@@ -31,8 +31,8 @@ public class RetryProperties {
         requirePositive("scheduler-batch-size", schedulerBatchSize);
         requirePositive("dispatcher-interval", dispatcherInterval);
         requirePositive("dispatcher-batch-size", dispatcherBatchSize);
-        requireNonNegative("unconfirmed-ready-grace", unconfirmedReadyGrace);
-        requirePositive("publish-confirm-timeout", publishConfirmTimeout);
+        requirePositiveWholeMillis("unconfirmed-ready-grace", unconfirmedReadyGrace);
+        requirePositiveWholeMillis("publish-confirm-timeout", publishConfirmTimeout);
         if (publishConfirmTimeout.compareTo(unconfirmedReadyGrace) >= 0) {
             throw new IllegalStateException(
                     "relay.retry.publish-confirm-timeout (" + publishConfirmTimeout + ") must be < "
@@ -52,9 +52,19 @@ public class RetryProperties {
         }
     }
 
-    private void requireNonNegative(String name, Duration value) {
-        if (value == null || value.isNegative()) {
-            throw new IllegalStateException("relay.retry." + name + " must be >= 0");
+    private void requirePositiveWholeMillis(String name, Duration value) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            throw new IllegalStateException("relay.retry." + name + " must be > 0 milliseconds");
+        }
+        try {
+            long millis = value.toMillis();
+            if (millis <= 0 || !value.equals(Duration.ofMillis(millis))) {
+                throw new IllegalStateException("relay.retry." + name
+                        + " must be a positive whole number of milliseconds");
+            }
+        } catch (ArithmeticException exception) {
+            throw new IllegalStateException("relay.retry." + name
+                    + " must fit in a positive whole number of milliseconds", exception);
         }
     }
 }
