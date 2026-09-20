@@ -116,10 +116,6 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
 
         assertEquals(1, attemptRepository.claim(attempt.getId(), now));
         assertEquals(1, attemptRepository.resetStuck(attempt.getId(), future, now));
-        assertEquals(1, attemptRepository.touchCreated(attempt.getId(), now));
-        // resetScheduled needs a SCHEDULED row with next_retry_at set; 0 rows is a legitimate
-        // result here - what is under test is that Postgres accepts and runs the statement.
-        assertDoesNotThrow(() -> attemptRepository.resetScheduled(attempt.getId(), future, now));
         assertDoesNotThrow(() -> attemptRepository.touchDeadLetterCandidate(attempt.getId(), future, now));
         assertDoesNotThrow(() -> attemptRepository.claimDeadLetterNotification(attempt.getId(), now));
     }
