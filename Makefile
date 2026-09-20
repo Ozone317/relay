@@ -28,13 +28,15 @@ test-unit-docker: ## Run untagged unit tests in Docker with class-level JUnit pa
 		-Djunit.jupiter.execution.parallel.mode.classes.default=concurrent
 
 test-integration-docker: ## Run only real-infrastructure integration tests in Docker
-	$(COMPOSE) run --rm --no-deps -e SPRING_PROFILES_ACTIVE= app ./mvnw test -Dgroups=integration
+	$(COMPOSE) run --rm --no-deps -e SPRING_PROFILES_ACTIVE= app ./mvnw test -Dgroups=integration \
+		-Drelay.retry.scheduling-enabled=false
 
 test-full-docker: ## Run the complete Docker-backed test suite
 	# --no-deps is intentional: the test JVM starts its own Testcontainers infrastructure via the
 	# mounted Docker socket; clearing SPRING_PROFILES_ACTIVE keeps the dev "docker" profile from
 	# pointing tests at the long-lived compose database/Redis services.
-	$(COMPOSE) run --rm --no-deps -e SPRING_PROFILES_ACTIVE= app ./mvnw test
+	$(COMPOSE) run --rm --no-deps -e SPRING_PROFILES_ACTIVE= app ./mvnw test \
+		-Drelay.retry.scheduling-enabled=false
 
 test-local: ## Run the test suite on the host (requires a local JDK 21)
 	JAVA_HOME=$(JAVA_HOME_LOCAL) ./mvnw test
