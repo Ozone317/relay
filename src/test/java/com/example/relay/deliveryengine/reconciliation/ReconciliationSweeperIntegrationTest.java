@@ -3,6 +3,7 @@ package com.example.relay.deliveryengine.reconciliation;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.time.Duration;
@@ -173,6 +174,14 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         return attempt;
     }
 
+    private Attempt persistScheduledAttempt(Instant nextRetryAt) {
+        Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
+        Attempt attempt = new Attempt(endpoint.getApp(), message, endpoint, delivery, 2);
+        attempt.setStatus(AttemptStatus.SCHEDULED);
+        attempt.setNextRetryAt(nextRetryAt);
+        return attemptRepository.save(attempt);
+    }
+
     private void backdateUpdatedAt(UUID id, Instant timestamp) {
         transactionTemplate.executeWithoutResult(status -> {
             entityManager.createQuery("""
@@ -200,6 +209,74 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
 
         Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
         assertNotNull(queued, "expected the reset attempt to be republished");
+        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
+    }
+
+    @Test
+    void futureScheduledAttempt_isNotPromotedOrPublished() {
+        Attempt attempt = persistScheduledAttempt(Instant.now().plusSeconds(3600));
+
+        sweeper.sweep();
+
+        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        assertEquals(AttemptStatus.SCHEDULED, reloaded.getStatus());
+        assertNull(reloaded.getReadyPublishedAt());
+        assertNull(reloaded.getReadyDispatchClaimId());
+        assertNull(reloaded.getReadyDispatchClaimedAt());
+        assertNull(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000),
+                "a future retry must remain in SCHEDULED and unpublished");
+    }
+
+    @Test
+    void dueScheduledAttempt_isPromotedAndClaimedForPublication() {
+        Attempt attempt = persistScheduledAttempt(Instant.now().minusSeconds(60));
+
+        sweeper.sweep();
+
+        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
+        assertNull(reloaded.getReadyPublishedAt());
+        assertNotNull(reloaded.getReadyDispatchClaimId(), "bridge should claim after promotion commits");
+        assertNotNull(reloaded.getReadyDispatchClaimedAt());
+
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
+        assertNotNull(queued, "due retry should be handed to the existing tasks publisher");
+        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
+    }
+
+    @Test
+    void freshCreatedAttempt_isClaimedAndPublishedWithoutCreatedGraceWait() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+
+        sweeper.sweep();
+
+        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
+        assertNotNull(reloaded.getReadyDispatchClaimId());
+        assertNull(reloaded.getReadyPublishedAt());
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
+        assertNotNull(queued, "fresh durable ready work must not wait for the legacy grace window");
+        assertEquals(attempt.getId().toString(), new String(queued.getBody()));
+    }
+
+    @Test
+    void staleUnconfirmedCreatedAttempt_isReclaimedAndPublishedWithoutAnotherSweepWindow() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        UUID oldClaim = UUID.randomUUID();
+        attempt.setReadyDispatchClaimId(oldClaim);
+        attempt.setReadyDispatchClaimedAt(Instant.now().minusSeconds(3600));
+        attemptRepository.saveAndFlush(attempt);
+
+        sweeper.sweep();
+
+        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        assertEquals(AttemptStatus.CREATED, reloaded.getStatus());
+        assertNotNull(reloaded.getReadyDispatchClaimId());
+        assertNotEquals(oldClaim, reloaded.getReadyDispatchClaimId(),
+                "an expired unconfirmed claim must be fenced by a new batch token");
+        assertNull(reloaded.getReadyPublishedAt());
+        Message queued = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
+        assertNotNull(queued, "stale unconfirmed ready work must be retried in this sweep");
         assertEquals(attempt.getId().toString(), new String(queued.getBody()));
     }
 
