@@ -45,6 +45,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -282,6 +283,26 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
         Attempt scheduled = createScheduledAttempt(Instant.now().minusSeconds(1));
         new RetryScheduler(readyWorkRepository, retryProperties).releaseDueRetries();
         assertThat(reload(scheduled).getStatus()).isEqualTo(AttemptStatus.CREATED);
+    }
+
+    @Test
+    void confirmationExecutorRejectionLeavesMarkerNullAndLeaseIntact() {
+        Attempt attempt = createCreatedAttempt();
+        RecordingPublisher publisher = new RecordingPublisher(
+                CompletableFuture.completedFuture(ReadyPublishOutcome.CONFIRMED));
+        Executor rejectingExecutor = command -> {
+            throw new RejectedExecutionException("confirmation executor is closed");
+        };
+        ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(
+                readyWorkRepository, publisher, rejectingExecutor, retryProperties);
+
+        dispatcher.dispatchOnce();
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            Attempt reloaded = reload(attempt);
+            assertThat(reloaded.getReadyPublishedAt()).isNull();
+            assertThat(reloaded.getReadyDispatchClaimId()).isNotNull();
+        });
     }
 
     @Test
