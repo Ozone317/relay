@@ -22,7 +22,7 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
                 UPDATE attempts
                 SET status = 'IN_FLIGHT', updated_at = :now
                 WHERE id = :attemptId
-                AND status IN ('CREATED', 'SCHEDULED')
+                AND status = 'CREATED'
             """, nativeQuery = true)
     int claim(UUID attemptId, Instant now);
 
@@ -31,7 +31,11 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'CREATED', updated_at = :now
+                SET status = 'CREATED',
+                    ready_published_at = NULL,
+                    ready_dispatch_claim_id = NULL,
+                    ready_dispatch_claimed_at = NULL,
+                    updated_at = :now
                 WHERE id = :attemptId
                 AND status = 'IN_FLIGHT'
                 AND updated_at < :threshold
@@ -40,6 +44,10 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
     List<Attempt> findByStatusAndNextRetryAtBefore(AttemptStatus status, Instant threshold, Limit limit);
 
+    /**
+     * Transitional reconciliation operation retained until Task 4 moves scheduled recovery to
+     * RetryScheduler.
+     */
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
@@ -50,6 +58,10 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
             """, nativeQuery = true)
     int resetScheduled(UUID attemptId, Instant threshold, Instant now);
 
+    /**
+     * Transitional reconciliation operation retained until Task 4 moves ready publication to the
+     * durable ready-work dispatcher.
+     */
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts

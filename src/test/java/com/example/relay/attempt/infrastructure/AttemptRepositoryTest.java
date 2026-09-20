@@ -365,7 +365,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
     }
 
     @Test
-    void claim_returns1_whenRowIsScheduled() throws Exception {
+    void claim_returns0_whenRowIsScheduled() throws Exception {
         User user = new User("some_email@mail.com", "someHash");
         Environment environment = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", environment);
@@ -390,8 +390,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
 
         // Assert
-        assertEquals(1, rowsAffected);
-        assertEquals(AttemptStatus.IN_FLIGHT, underTest.findById(attempt.getId()).get().getStatus());
+        assertEquals(0, rowsAffected);
+        assertEquals(AttemptStatus.SCHEDULED, underTest.findById(attempt.getId()).get().getStatus());
     }
 
     @Test
