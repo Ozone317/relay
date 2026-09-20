@@ -105,7 +105,18 @@ public class DeliveryWorker {
 
             Attempt retry = attemptService.markFailedAndCreateRetry(attempt, dueAt, responseCode, responseBody,
                     lastError, latencyMs);
-            attemptPublisher.publishToRoutingKey(retry.getId(), tier.getRoutingKey());
+            attemptPublisher.publishToRoutingKey(retry.getId(), legacyRetryRoutingKey(nextAttemptNo));
         }
+    }
+
+    private String legacyRetryRoutingKey(int attemptNo) {
+        return switch (attemptNo) {
+        case 2 -> RabbitMqConfig.WAIT_30S_ROUTING_KEY;
+        case 3 -> RabbitMqConfig.WAIT_2M_ROUTING_KEY;
+        case 4 -> RabbitMqConfig.WAIT_10M_ROUTING_KEY;
+        case 5 -> RabbitMqConfig.WAIT_1H_ROUTING_KEY;
+        case 6 -> RabbitMqConfig.WAIT_6H_ROUTING_KEY;
+        default -> throw new IllegalArgumentException("No legacy retry routing key for attemptNo " + attemptNo);
+        };
     }
 }

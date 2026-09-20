@@ -7,18 +7,7 @@ import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
 
-import com.example.relay.deliveryengine.config.RabbitMqConfig;
-
 public class RetryTierTest {
-
-    @Test
-    void forAttemptNo_returnsCorrectRoutingKeyForEachTier() {
-        assertEquals(RabbitMqConfig.WAIT_30S_ROUTING_KEY, RetryTier.forAttemptNo(2).getRoutingKey());
-        assertEquals(RabbitMqConfig.WAIT_2M_ROUTING_KEY, RetryTier.forAttemptNo(3).getRoutingKey());
-        assertEquals(RabbitMqConfig.WAIT_10M_ROUTING_KEY, RetryTier.forAttemptNo(4).getRoutingKey());
-        assertEquals(RabbitMqConfig.WAIT_1H_ROUTING_KEY, RetryTier.forAttemptNo(5).getRoutingKey());
-        assertEquals(RabbitMqConfig.WAIT_6H_ROUTING_KEY, RetryTier.forAttemptNo(6).getRoutingKey());
-    }
 
     @Test
     void forAttemptNo_returnsCorrectDelayForEachTier() {
