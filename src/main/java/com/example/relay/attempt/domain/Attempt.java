@@ -91,6 +91,21 @@ public class Attempt {
     @Setter
     private Instant deadLetterNotifiedAt;
 
+    @Column(name = "ready_published_at", nullable = true, updatable = true)
+    @Getter
+    @Setter
+    private Instant readyPublishedAt;
+
+    @Column(name = "ready_dispatch_claim_id", nullable = true, updatable = true)
+    @Getter
+    @Setter
+    private UUID readyDispatchClaimId;
+
+    @Column(name = "ready_dispatch_claimed_at", nullable = true, updatable = true)
+    @Getter
+    @Setter
+    private Instant readyDispatchClaimedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreationTimestamp
     @Getter
