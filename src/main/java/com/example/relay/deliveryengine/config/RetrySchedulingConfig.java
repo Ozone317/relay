@@ -1,5 +1,7 @@
 package com.example.relay.deliveryengine.config;
 
+import java.time.Clock;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -7,6 +9,11 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 @Configuration
 public class RetrySchedulingConfig {
+
+    @Bean
+    Clock applicationClock() {
+        return Clock.systemUTC();
+    }
 
     @Bean(name = "retryTaskScheduler")
     ThreadPoolTaskScheduler retryTaskScheduler() {
