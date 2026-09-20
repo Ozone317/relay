@@ -20,7 +20,6 @@ import com.example.relay.delivery.exception.DeliveryNotFoundException;
 import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.delivery.infrastructure.DeliveryStatusRepository;
-import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
@@ -51,8 +50,6 @@ class DeliveryReplayServiceTest {
     @Mock
     private AttemptService attemptService;
     @Mock
-    private AttemptPublisher attemptPublisher;
-    @Mock
     private EntityManager entityManager;
 
     private DeliveryReplayService underTest;
@@ -66,7 +63,7 @@ class DeliveryReplayServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         underTest = new DeliveryReplayService(deliveryRepository, deliveryStatusRepository, attemptRepository,
-                attemptService, attemptPublisher, entityManager);
+                attemptService, entityManager);
 
         environmentId = UUID.randomUUID();
         appId = UUID.randomUUID();
@@ -155,7 +152,7 @@ class DeliveryReplayServiceTest {
     // real regression test is DeliveryReplayHttpIntegrationTest, which goes through the actual HTTP
     // layer (and therefore the real OSIV-bound Hibernate session) where this bug was only
     // observable in the first place.
-    void replay_createsAndPublishesTheReplay_whenEligible() throws Exception {
+    void replay_createsTheReplay_whenEligible() throws Exception {
         Attempt replayAttempt = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(),
                 delivery, 7);
         DeliveryStatus updatedStatus = statusOf(AttemptStatus.CREATED);
@@ -172,7 +169,7 @@ class DeliveryReplayServiceTest {
         DeliveryStatus result = underTest.replay(delivery.getId(), appId, environmentId, userId);
 
         assertEquals(updatedStatus, result);
-        verify(attemptPublisher).publish(replayAttempt.getId());
+        verify(attemptService).createReplay(deadAttempt);
     }
 
     @Test
@@ -192,6 +189,5 @@ class DeliveryReplayServiceTest {
         assertThrows(ActiveAttemptAlreadyExistsException.class,
                 () -> underTest.replay(delivery.getId(), appId, environmentId, userId));
 
-        verify(attemptPublisher, never()).publish(any());
     }
 }

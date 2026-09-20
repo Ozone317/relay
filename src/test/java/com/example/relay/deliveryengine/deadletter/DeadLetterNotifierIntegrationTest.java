@@ -58,11 +58,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class DeadLetterNotifierIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
-    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4-management");
+    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
     @Autowired
     private AttemptRepository attemptRepository;

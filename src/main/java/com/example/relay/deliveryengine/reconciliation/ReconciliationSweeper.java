@@ -2,7 +2,6 @@ package com.example.relay.deliveryengine.reconciliation;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +13,6 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
-import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 
@@ -23,43 +21,33 @@ public class ReconciliationSweeper {
     private static final Logger log = LoggerFactory.getLogger(ReconciliationSweeper.class);
 
     private AttemptRepository attemptRepository;
-    private ReadyWorkRepository readyWorkRepository;
     private AttemptPublisher attemptPublisher;
     private AttemptService attemptService;
     private ReconciliationProperties reconciliationProperties;
 
     public ReconciliationSweeper(
         AttemptRepository attemptRepository,
-        ReadyWorkRepository readyWorkRepository,
         AttemptPublisher attemptPublisher,
         AttemptService attemptService,
         ReconciliationProperties reconciliationProperties
     ) {
         this.attemptRepository = attemptRepository;
-        this.readyWorkRepository = readyWorkRepository;
         this.attemptPublisher = attemptPublisher;
         this.attemptService = attemptService;
         this.reconciliationProperties = reconciliationProperties;
     }
 
     @Scheduled(fixedDelayString = "${relay.reconciliation.interval}")
-    public void sweep() {
-        promoteDueScheduled();
-        recoverInFlight();
-        recoverUnconfirmedReady();
-        recoverDeadLetter();
+    public void scheduledSweep() {
+        if (!reconciliationProperties.isSchedulingEnabled()) {
+            return;
+        }
+        sweep();
     }
 
-    /**
-     * Transitional bridge until RetryScheduler owns scheduled eligibility promotion.
-     * ReadyWorkRepository uses PostgreSQL CURRENT_TIMESTAMP and clears the full ready-work
-     * incarnation atomically; this sweeper deliberately does not use a JVM-time UPDATE.
-     */
-    private void promoteDueScheduled() {
-        List<UUID> promoted = readyWorkRepository.promoteDueScheduled(reconciliationProperties.getBatchSize());
-        if (!promoted.isEmpty()) {
-            log.info("Promoted {} due SCHEDULED attempts to durable CREATED ready work", promoted.size());
-        }
+    public void sweep() {
+        recoverInFlight();
+        recoverDeadLetter();
     }
 
     private void recoverInFlight() {
@@ -75,21 +63,6 @@ public class ReconciliationSweeper {
             } else {
                 log.info("Attempt {} resolved before the sweep could reset it, skipping", attempt.getId());
             }
-        }
-    }
-
-    /**
-     * Transitional bridge until ReadyWorkDispatcher owns durable ready publication. The claim
-     * transaction returns before any Rabbit I/O starts, and the batch UUID fences later confirms
-     * or lease recovery without making this sweeper transactional across the broker call.
-     */
-    private void recoverUnconfirmedReady() {
-        UUID claimId = UUID.randomUUID();
-        List<UUID> attemptIds = readyWorkRepository.claimUnpublishedReady(
-                claimId, reconciliationProperties.getCreatedGrace(), reconciliationProperties.getBatchSize());
-
-        for (UUID attemptId : attemptIds) {
-            attemptPublisher.publish(attemptId);
         }
     }
 

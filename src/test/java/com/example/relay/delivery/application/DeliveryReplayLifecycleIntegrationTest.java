@@ -13,6 +13,7 @@ import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.domain.DeliveryStatus;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -42,6 +43,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -57,14 +59,19 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@TestPropertySource(properties = "relay.retry.scheduling-enabled=false")
 public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresContainer {
 
     @Container
     @ServiceConnection
-    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4-management");
+    static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
     @Autowired
     private DeliveryReplayService deliveryReplayService;
+
+    @Autowired
+    private ReadyWorkDispatcher readyWorkDispatcher;
 
     @Autowired
     private AttemptRepository attemptRepository;
@@ -142,7 +149,7 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     }
 
     private void drainQueues() {
-        while (rabbitTemplate.receive(RabbitMqConfig.WAIT_30S_QUEUE, 100) != null) {
+        while (rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 100) != null) {
             // discard leftover messages from a prior test
         }
         while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 100) != null) {
@@ -186,6 +193,7 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
                         .getContent().get(0);
 
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        readyWorkDispatcher.dispatchOnce();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
@@ -200,14 +208,15 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         Delivery delivery = persistDeadDelivery(mockWebServer.url("/webhook").toString());
 
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        readyWorkDispatcher.dispatchOnce();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
             assertEquals(AttemptStatus.DEAD, reloaded.getStatus());
         });
 
-        // Proves this reached DEAD via handleFailure's isFinal branch, not via a wait-tier requeue.
-        assertNull(rabbitTemplate.receive(RabbitMqConfig.WAIT_30S_QUEUE, 2000));
+        // Proves this reached DEAD via handleFailure's isFinal branch, not via a retry publication.
+        assertNull(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 2000));
     }
 
     @Test
@@ -220,11 +229,13 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
                         .getContent().get(0);
 
         DeliveryStatus firstReplay = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        readyWorkDispatcher.dispatchOnce();
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(AttemptStatus.DEAD,
                 attemptRepository.findById(firstReplay.getLatestAttemptId()).orElseThrow().getStatus()));
 
         // Delivery is write-once - a second replay of the same delivery, not a new one.
         DeliveryStatus secondReplay = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        readyWorkDispatcher.dispatchOnce();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(secondReplay.getLatestAttemptId()).orElseThrow();

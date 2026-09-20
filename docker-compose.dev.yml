@@ -29,7 +29,7 @@ services:
     restart: always
 
   rabbitmq:
-    image: rabbitmq:4-management
+    image: rabbitmq:4.3.6-management
     ports:
       - "5672:5672" # Port to reach out to for application clients
       - "15672:15672" # Port to view queues from UI

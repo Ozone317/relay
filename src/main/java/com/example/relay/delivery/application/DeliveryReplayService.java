@@ -12,7 +12,6 @@ import com.example.relay.delivery.exception.DeliveryNotFoundException;
 import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.delivery.infrastructure.DeliveryStatusRepository;
-import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import jakarta.persistence.EntityManager;
 import java.util.List;
 import java.util.UUID;
@@ -29,17 +28,15 @@ public class DeliveryReplayService {
     private final DeliveryStatusRepository deliveryStatusRepository;
     private final AttemptRepository attemptRepository;
     private final AttemptService attemptService;
-    private final AttemptPublisher attemptPublisher;
     private final EntityManager entityManager;
 
     public DeliveryReplayService(DeliveryRepository deliveryRepository,
             DeliveryStatusRepository deliveryStatusRepository, AttemptRepository attemptRepository,
-            AttemptService attemptService, AttemptPublisher attemptPublisher, EntityManager entityManager) {
+            AttemptService attemptService, EntityManager entityManager) {
         this.deliveryRepository = deliveryRepository;
         this.deliveryStatusRepository = deliveryStatusRepository;
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
-        this.attemptPublisher = attemptPublisher;
         this.entityManager = entityManager;
     }
 
@@ -78,8 +75,6 @@ public class DeliveryReplayService {
             // authority.
             throw new ActiveAttemptAlreadyExistsException(messageId, endpointId);
         }
-
-        attemptPublisher.publish(replay.getId());
 
         // The DeliveryStatus row loaded at the top of this method is in the session's identity
         // map, and open-in-view binds one session to the whole request - so a plain findById here
