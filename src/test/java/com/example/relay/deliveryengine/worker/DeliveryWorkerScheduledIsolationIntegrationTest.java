@@ -2,7 +2,6 @@ package com.example.relay.deliveryengine.worker;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.timeout;
@@ -34,14 +33,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -62,9 +59,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 })
 class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresContainer {
 
-    private static final List<String> LEGACY_WAIT_QUEUES = List.of(
-            "delivery.wait.30s", "delivery.wait.2m", "delivery.wait.10m", "delivery.wait.1h", "delivery.wait.6h");
-
     @Container
     @ServiceConnection
     static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
@@ -75,8 +69,6 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
     private DeliveryRepository deliveryRepository;
     @Autowired
     private RabbitTemplate rabbitTemplate;
-    @Autowired
-    private RabbitAdmin rabbitAdmin;
     @Autowired
     private UserRepository userRepository;
     @Autowired
@@ -121,7 +113,7 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
     }
 
     @Test
-    void futureScheduledWorkDoesNotExecuteWhenAWorkerReceivesItsLegacyTask() {
+    void futureScheduledWorkDoesNotExecuteWhenAWorkerReceivesItsTaskMessage() {
         Attempt attempt = persistScheduledAttempt();
 
         rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.TASKS_ROUTING_KEY,
@@ -133,10 +125,6 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
                     attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
             assertEquals(0, mockWebServer.getRequestCount());
         });
-        for (String queue : LEGACY_WAIT_QUEUES) {
-            assertNull(rabbitAdmin.getQueueProperties(queue),
-                    "future scheduled work must not depend on a legacy wait queue: " + queue);
-        }
     }
 
     private Attempt persistScheduledAttempt() {

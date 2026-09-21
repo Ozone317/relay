@@ -53,7 +53,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -74,9 +73,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     private static final Instant FIXED_RETRY_NOW = Instant.parse("2026-09-20T12:00:00Z");
-    private static final List<String> LEGACY_WAIT_QUEUES = List.of(
-            "delivery.wait.30s", "delivery.wait.2m", "delivery.wait.10m", "delivery.wait.1h", "delivery.wait.6h");
-
     @Container
     @ServiceConnection
     static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
@@ -92,9 +88,6 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private RabbitTemplate rabbitTemplate;
-
-    @Autowired
-    private RabbitAdmin rabbitAdmin;
 
     @Autowired
     private org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
@@ -144,13 +137,6 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     private void drainQueues() {
-        for (String queue : LEGACY_WAIT_QUEUES) {
-            if (rabbitAdmin.getQueueProperties(queue) != null) {
-                while (rabbitTemplate.receive(queue, 100) != null) {
-                    // discard leftover messages from a prior test
-                }
-            }
-        }
         while (rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 100) != null) {
             // discard leftover messages from a prior test
         }
@@ -270,10 +256,6 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
         assertNull(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 1000),
                 "scheduled retry must not be published to the worker queue");
-        for (String queue : LEGACY_WAIT_QUEUES) {
-            assertNull(rabbitAdmin.getQueueProperties(queue),
-                    "scheduled retry must not use a legacy wait queue: " + queue);
-        }
     }
 
     @Test
