@@ -11,8 +11,9 @@ import com.example.relay.deliveryengine.retry.RetryJitterSource;
 import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.signing.HmacSigner;
 import com.example.relay.endpoint.domain.Endpoint;
-import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -20,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -76,13 +78,14 @@ public class DeliveryWorker {
         Endpoint endpoint = attempt.getEndpoint();
         String relayId = attempt.getMessage().getId().toString();
         long timestamp = Instant.now().getEpochSecond();
-        String body = attempt.getMessage().getBody().toString();
+        byte[] body = attempt.getMessage().getBody().toString().getBytes(StandardCharsets.UTF_8);
         String signature = hmacSigner.sign(relayId, timestamp, body, endpoint.getSigningSecret());
 
         long startedAt = System.currentTimeMillis();
         try {
             ResponseEntity<String> response = deliveryRestClient.post().uri(endpoint.getUrl()).header("relay-id", relayId)
-                    .header("relay-timestamp", String.valueOf(timestamp)).header("relay-signature", signature).body(body)
+                    .header("relay-timestamp", String.valueOf(timestamp)).header("relay-signature", signature)
+                    .contentType(MediaType.APPLICATION_JSON).body(body)
                     .retrieve().onStatus(status -> true, (request, resp) -> {
                     }).toEntity(String.class);
             long latencyMs = System.currentTimeMillis() - startedAt;

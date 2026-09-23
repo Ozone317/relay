@@ -1,15 +1,19 @@
 package com.example.relay.deliveryengine.worker;
 
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import com.example.relay.app.domain.App;
-import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
@@ -27,35 +31,45 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.AppenderBase;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-
+import java.util.stream.Stream;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
@@ -162,16 +176,96 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     private Attempt persistAttempt(String url, int attemptNo) {
+        return persistAttempt(url, attemptNo, new ObjectMapper().createObjectNode().put("amount", 4999));
+    }
+
+    private Attempt persistAttempt(String url, int attemptNo, String payload) {
+        return persistAttempt(url, attemptNo, new ObjectMapper().createObjectNode().put("payload", payload));
+    }
+
+    private Attempt persistAttempt(String url, int attemptNo, ObjectNode body) {
         User user = userRepository.save(new User("test" + UUID.randomUUID().toString() + "@mail.com", "passwordHash"));
         Environment env = environmentRepository.save(new Environment("Env 1", "Desc 1", user));
         App app = appRepository.save(new App("App 1", env));
         Event event = eventRepository.save(new Event("payment.completed", app));
         Endpoint endpoint = endpointRepository.save(new Endpoint("EP 1", url, "whsec_1", app));
-        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = messageRepository.save(new Message(app, event, body));
         Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
 
         return attemptRepository.save(new Attempt(app, message, endpoint, delivery, attemptNo));
+    }
+
+    private static Stream<Arguments> payloadFixtures() {
+        return Stream.of(
+                Arguments.of(
+                        "ASCII",
+                        "ascii",
+                        "{\"payload\":\"ascii\"}".getBytes(StandardCharsets.UTF_8)),
+                Arguments.of(
+                        "ordinary Unicode café 世界",
+                        "café 世界",
+                        "{\"payload\":\"café 世界\"}".getBytes(StandardCharsets.UTF_8)),
+                Arguments.of(
+                        "supplementary Unicode surrogate pair",
+                        "\uD83D\uDE00",
+                        "{\"payload\":\"\uD83D\uDE00\"}".getBytes(StandardCharsets.UTF_8)),
+                Arguments.of(
+                        "JSON escaping quotes backslashes newline tab control",
+                        "quote\" slash\\ newline\n tab\t control\u0001",
+                        "{\"payload\":\"quote\\\" slash\\\\ newline\\n tab\\t control\\u0001\"}"
+                                .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static String v1SignatureOverRawBody(String relayId, String timestamp, byte[] rawBody) {
+        byte[] prefix = (relayId + "." + timestamp + ".").getBytes(StandardCharsets.UTF_8);
+        byte[] signedContent = new byte[prefix.length + rawBody.length];
+        System.arraycopy(prefix, 0, signedContent, 0, prefix.length);
+        System.arraycopy(rawBody, 0, signedContent, prefix.length, rawBody.length);
+
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec("whsec_1".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return "v1," + Base64.getEncoder().encodeToString(mac.doFinal(signedContent));
+        } catch (NoSuchAlgorithmException | InvalidKeyException ex) {
+            throw new IllegalStateException("Failed to compute test HMAC signature", ex);
+        }
+    }
+
+    @ParameterizedTest(name = "{0} payload catches text/plain ISO-8859-1 transport instead of JSON UTF-8")
+    @MethodSource("payloadFixtures")
+    void deliveryWorker_preservesJsonUtf8AndRawBodySignature_insteadOfTextPlainIso88591Transport(
+            String fixtureName, String payload, byte[] expectedJsonUtf8) throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1, payload);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus(), fixtureName);
+        });
+
+        RecordedRequest request = mockWebServer.takeRequest(10, TimeUnit.SECONDS);
+        assertNotNull(request, fixtureName + " request was not received");
+        byte[] rawBody = request.getBody().readByteArray();
+
+        assertAll(
+                fixtureName,
+                () -> assertArrayEquals(expectedJsonUtf8, rawBody,
+                        fixtureName + " must be sent as the exact hand-derived UTF-8 JSON bytes"),
+                () -> {
+                    MediaType contentType = MediaType.parseMediaType(request.getHeader("Content-Type"));
+                    assertEquals(MediaType.APPLICATION_JSON,
+                            new MediaType(contentType.getType(), contentType.getSubtype()),
+                            fixtureName + " must declare JSON content type");
+                },
+                () -> assertEquals(
+                        v1SignatureOverRawBody(
+                                request.getHeader("relay-id"),
+                                request.getHeader("relay-timestamp"),
+                                rawBody),
+                        request.getHeader("relay-signature"),
+                        fixtureName + " relay-signature must cover the exact received body bytes"));
     }
 
     @Test
