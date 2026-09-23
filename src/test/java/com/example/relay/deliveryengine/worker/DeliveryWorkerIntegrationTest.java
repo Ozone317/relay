@@ -15,6 +15,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
+import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
@@ -96,6 +97,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository attemptRepository;
+
+    @Autowired
+    private AttemptService attemptService;
 
     @Autowired
     private DeliveryRepository deliveryRepository;
@@ -280,6 +284,135 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
             assertEquals(200, reloaded.getResponseCode());
             assertEquals("ok", reloaded.getResponseBody());
+        });
+    }
+
+    @Test
+    void largeSuccessfulResponse_isBoundedAndStillCommitsSuccess() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("x".repeat(11_000)));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+            assertEquals(200, reloaded.getResponseCode());
+            assertTrue(reloaded.getResponseBody().length() <= 10_240);
+            assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+        });
+
+        assertEquals(1, mockWebServer.getRequestCount());
+        assertEquals(0, attemptService.resetStuck(
+                attempt.getId(), Instant.now().plusSeconds(1), Instant.now()),
+                "a successfully completed attempt must not become executable through IN_FLIGHT recovery");
+    }
+
+    @Test
+    void largeNon2xxResponse_isBoundedAndParentAndRetryCommitAtomically() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("x".repeat(50_000)));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
+            assertEquals(500, parent.getResponseCode());
+            assertTrue(parent.getResponseBody().length() <= 10_240);
+            assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+
+            List<Attempt> attempts = attemptRepository.findAll();
+            assertEquals(2, attempts.size());
+            Attempt retry = attempts.stream()
+                    .filter(candidate -> !candidate.getId().equals(attempt.getId()))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(2, retry.getAttemptNo());
+            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+        });
+    }
+
+    @Test
+    void chunkedResponseWithoutContentLength_abortsUnreadRemainderAndReleasesTheExchange() {
+        // The configured JDK client must finish after the diagnostic prefix, not after Spring
+        // drains the response. At this rate the complete body takes roughly 24 seconds, while
+        // the 10,241 bytes Relay reads arrive in well under one second.
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setChunkedBody("x".repeat(1_000_000), 257)
+                .throttleBody(1_024, 25, TimeUnit.MILLISECONDS));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+            assertTrue(reloaded.getResponseBody().length() <= 10_240);
+            assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+        });
+
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("second response"));
+        Attempt secondAttempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        attemptPublisher.publish(secondAttempt.getId());
+
+        await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(secondAttempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+            assertEquals("second response", reloaded.getResponseBody());
+        });
+        assertEquals(2, mockWebServer.getRequestCount());
+    }
+
+    @Test
+    void emptySuccessfulResponse_preservesNullDiagnosticBody() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(204));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+            assertEquals(204, reloaded.getResponseCode());
+            assertNull(reloaded.getResponseBody());
+        });
+    }
+
+    @Test
+    void emptyNon2xxResponse_preservesNullDiagnosticBodyAndCreatesRetry() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.FAILED_RETRYING, reloaded.getStatus());
+            assertEquals(500, reloaded.getResponseCode());
+            assertNull(reloaded.getResponseBody());
+            assertEquals(2, attemptRepository.findAll().size());
+        });
+    }
+
+    @Test
+    void responseBodyTimeoutAfterHeaders_preservesExistingTransportFailureSemantics() {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setBody("ok")
+                .setBodyDelay(20, TimeUnit.SECONDS));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(25)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.FAILED_RETRYING, reloaded.getStatus());
+            assertNull(reloaded.getResponseCode());
+            assertNull(reloaded.getResponseBody());
+            assertNotNull(reloaded.getLastError());
+            assertEquals(2, attemptRepository.findAll().size());
         });
     }
 

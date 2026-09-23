@@ -19,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AttemptService {
 
+    private static final int DIAGNOSTIC_CHARACTER_LIMIT = 10_240;
+
     private final AttemptRepository attemptRepository;
     private final DeliveryRepository deliveryRepository;
 
@@ -74,7 +76,7 @@ public class AttemptService {
     @Transactional
     public Attempt markSucceeded(Attempt attempt, Integer responseCode, String responseBody, Long latencyMs) {
         attempt.setResponseCode(responseCode);
-        attempt.setResponseBody(responseBody);
+        attempt.setResponseBody(truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT));
         attempt.setLatencyMs(latencyMs);
         attempt.setStatus(AttemptStatus.SUCCEEDED);
 
@@ -87,8 +89,8 @@ public class AttemptService {
         attempt.setStatus(status);
         attempt.setNextRetryAt(nextRetryAt);
         attempt.setResponseCode(responseCode);
-        attempt.setResponseBody(truncate(responseBody, 10240));
-        attempt.setLastError(truncate(lastError, 10240));
+        attempt.setResponseBody(truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT));
+        attempt.setLastError(truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT));
         attempt.setLatencyMs(latencyMs);
 
         return attemptRepository.save(attempt);
@@ -127,6 +129,14 @@ public class AttemptService {
             return null;
         }
 
-        return value.length() > maxLength ? value.substring(0, maxLength) : value;
+        if (value.length() <= maxLength) {
+            return value;
+        }
+
+        int end = maxLength;
+        if (Character.isHighSurrogate(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(0, end);
     }
 }

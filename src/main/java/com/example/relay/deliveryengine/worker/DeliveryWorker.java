@@ -22,7 +22,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -83,17 +82,21 @@ public class DeliveryWorker {
 
         long startedAt = System.currentTimeMillis();
         try {
-            ResponseEntity<String> response = deliveryRestClient.post().uri(endpoint.getUrl()).header("relay-id", relayId)
+            DeliveryHttpResponse response = deliveryRestClient.post().uri(endpoint.getUrl()).header("relay-id", relayId)
                     .header("relay-timestamp", String.valueOf(timestamp)).header("relay-signature", signature)
                     .contentType(MediaType.APPLICATION_JSON).body(body)
-                    .retrieve().onStatus(status -> true, (request, resp) -> {
-                    }).toEntity(String.class);
+                    .exchangeForRequiredValue((request, clientResponse) -> {
+                        int statusCode = clientResponse.getStatusCode().value();
+                        BoundedResponseBodyCapture.Capture capture =
+                                BoundedResponseBodyCapture.captureAndClose(clientResponse.getBody());
+                        return new DeliveryHttpResponse(statusCode, capture.body());
+                    });
             long latencyMs = System.currentTimeMillis() - startedAt;
             
-            if (response.getStatusCode().is2xxSuccessful()) {
-                attemptService.markSucceeded(attempt, response.getStatusCode().value(), response.getBody(), latencyMs);
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                attemptService.markSucceeded(attempt, response.statusCode(), response.responseBody(), latencyMs);
             } else {
-                handleFailure(attempt, response.getStatusCode().value(), response.getBody(), null, latencyMs);
+                handleFailure(attempt, response.statusCode(), response.responseBody(), null, latencyMs);
             }
         } catch (RestClientException ex) {
             long latencyMs = System.currentTimeMillis() - startedAt;
@@ -116,5 +119,8 @@ public class DeliveryWorker {
             attemptService.markFailedAndCreateRetry(attempt, dueAt, responseCode, responseBody,
                     lastError, latencyMs);
         }
+    }
+
+    private record DeliveryHttpResponse(int statusCode, String responseBody) {
     }
 }

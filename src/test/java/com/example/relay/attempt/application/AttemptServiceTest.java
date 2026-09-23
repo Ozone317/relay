@@ -189,6 +189,40 @@ public class AttemptServiceTest {
     }
 
     @Test
+    void markSucceeded_defensivelyFitsResponseBodyToThePersistenceContract() {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        Message message = new Message(app, event, new ObjectMapper().createObjectNode().put("amount", 4999));
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, new Delivery(app, message, endpoint), 1);
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Attempt result = underTest.markSucceeded(attempt, 200, "x".repeat(20_000), 10L);
+
+        assertEquals(10_240, result.getResponseBody().length());
+    }
+
+    @Test
+    void markSucceeded_defensiveTruncationDoesNotLeaveAnUnpairedSurrogate() {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        Message message = new Message(app, event, new ObjectMapper().createObjectNode().put("amount", 4999));
+        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
+        Attempt attempt = new Attempt(app, message, endpoint, new Delivery(app, message, endpoint), 1);
+        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        String responseBody = "x".repeat(10_239) + "\uD83D\uDE00";
+        Attempt result = underTest.markSucceeded(attempt, 200, responseBody, 10L);
+
+        assertEquals(10_239, result.getResponseBody().length());
+        assertEquals("x".repeat(10_239), result.getResponseBody());
+    }
+
+    @Test
     void markFailed_setsLastErrorAndLeavesResponseBodyNull_whenNoHttpResponseWasReceived() {
         // Arrange - simulates a timeout/connection error: no response ever came back, so there's
         // nothing to put in responseBody, but there is a network-level error to record.
