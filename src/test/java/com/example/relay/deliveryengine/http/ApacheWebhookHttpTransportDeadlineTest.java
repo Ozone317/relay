@@ -199,8 +199,10 @@ class ApacheWebhookHttpTransportDeadlineTest {
     @Test
     void tcpConnectUsesRemainingBudgetThroughApacheConnectionOperator() throws Exception {
         CountDownLatch connectStarted = new CountDownLatch(1);
+        CountDownLatch socketClosed = new CountDownLatch(1);
         AtomicReference<Integer> connectTimeoutMillis = new AtomicReference<>();
-        BlockingSocketFactory socketFactory = new BlockingSocketFactory(connectStarted, connectTimeoutMillis);
+        BlockingSocketFactory socketFactory = new BlockingSocketFactory(connectStarted, socketClosed,
+                connectTimeoutMillis);
         try (ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
                 CloseableHttpClient client = clientForSocketFactory(socketFactory)) {
             ApacheWebhookHttpTransport transport = new ApacheWebhookHttpTransport(client, input -> "", scheduler,
@@ -213,6 +215,7 @@ class ApacheWebhookHttpTransportDeadlineTest {
             assertEquals(true, connectStarted.await(1, TimeUnit.SECONDS));
             org.junit.jupiter.api.Assertions.assertTrue(connectTimeoutMillis.get() > 0);
             org.junit.jupiter.api.Assertions.assertTrue(connectTimeoutMillis.get() <= 160);
+            assertEquals(true, socketClosed.await(1, TimeUnit.SECONDS));
             org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis < 360,
                     "TCP connect must not receive independent phase budgets: " + elapsedMillis);
         }
@@ -667,26 +670,32 @@ class ApacheWebhookHttpTransportDeadlineTest {
 
     private static final class BlockingSocketFactory implements DetachedSocketFactory {
         private final CountDownLatch connectStarted;
+        private final CountDownLatch socketClosed;
         private final AtomicReference<Integer> connectTimeoutMillis;
 
-        private BlockingSocketFactory(CountDownLatch connectStarted, AtomicReference<Integer> connectTimeoutMillis) {
+        private BlockingSocketFactory(CountDownLatch connectStarted, CountDownLatch socketClosed,
+                AtomicReference<Integer> connectTimeoutMillis) {
             this.connectStarted = connectStarted;
+            this.socketClosed = socketClosed;
             this.connectTimeoutMillis = connectTimeoutMillis;
         }
 
         @Override
         public Socket create(Proxy proxy) {
-            return new BlockingSocket(connectStarted, connectTimeoutMillis);
+            return new BlockingSocket(connectStarted, socketClosed, connectTimeoutMillis);
         }
     }
 
     private static final class BlockingSocket extends Socket {
         private final CountDownLatch connectStarted;
+        private final CountDownLatch socketClosed;
         private final AtomicReference<Integer> connectTimeoutMillis;
         private final CountDownLatch closed = new CountDownLatch(1);
 
-        private BlockingSocket(CountDownLatch connectStarted, AtomicReference<Integer> connectTimeoutMillis) {
+        private BlockingSocket(CountDownLatch connectStarted, CountDownLatch socketClosed,
+                AtomicReference<Integer> connectTimeoutMillis) {
             this.connectStarted = connectStarted;
+            this.socketClosed = socketClosed;
             this.connectTimeoutMillis = connectTimeoutMillis;
         }
 
@@ -708,6 +717,7 @@ class ApacheWebhookHttpTransportDeadlineTest {
         @Override
         public void close() throws IOException {
             closed.countDown();
+            socketClosed.countDown();
             super.close();
         }
     }
