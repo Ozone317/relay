@@ -79,45 +79,65 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
         }
 
         DeliveryDeadline deadline = DeliveryDeadline.start(deadlineBudget, System::nanoTime);
+        Duration componentTimeout = positiveRemaining(deadline);
         HttpPost request = new HttpPost(destination.normalizedUri());
         request.setEntity(new ByteArrayEntity(body, ContentType.create("application/json")));
         request.setHeader("relay-id", headers.relayId());
         request.setHeader("relay-timestamp", Long.toString(headers.relayTimestamp()));
         request.setHeader("relay-signature", headers.relaySignature());
-        applyTimeouts(request, deadline);
+        applyTimeouts(request, componentTimeout);
 
         ScheduledFuture<?> cancellation = scheduleCancellation(request, deadline);
+        try {
+            try (CloseableHttpResponse response = executeApache(request, deadline)) {
+                if (deadline.remaining().isZero() || request.isCancelled()) {
+                    throw timeout("delivery deadline expired", null);
+                }
+                HttpEntity entity = response.getEntity();
+                InputStream bodyStream = entity == null ? InputStream.nullInputStream() : entity.getContent();
+                String responseBody = consumeWithinDeadline(bodyStream, request, deadline);
+                if (deadline.remaining().isZero() || request.isCancelled()) {
+                    throw timeout("delivery deadline expired", null);
+                }
+                return new WebhookHttpResponse(response.getCode(), responseBody);
+            }
+        } catch (WebhookDeliveryException exception) {
+            throw exception;
+        } catch (CancellationException exception) {
+            throw timeout("delivery was cancelled", exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw timeout("delivery was interrupted", exception);
+        } catch (IOException exception) {
+            if (deadline.remaining().isZero() || request.isCancelled()) {
+                throw timeout("delivery deadline expired", exception);
+            }
+            throw failure(WebhookFailureCode.TRANSPORT_FAILURE, "webhook exchange failed", exception);
+        } finally {
+            cancellation.cancel(false);
+        }
+    }
+
+    private CloseableHttpResponse executeApache(HttpUriRequestBase request, DeliveryDeadline deadline)
+            throws WebhookDeliveryException, IOException {
         try (DeliveryDeadlineContext.Scope ignored = DeliveryDeadlineContext.open(deadline)) {
             try {
                 if (client == null) {
                     throw new IllegalStateException("Apache webhook client is not configured");
                 }
-                try (CloseableHttpResponse response = client.execute(request)) {
-                    if (deadline.remaining().isZero()) {
-                        throw timeout("delivery deadline expired", null);
-                    }
-                    HttpEntity entity = response.getEntity();
-                    InputStream bodyStream = entity == null ? InputStream.nullInputStream() : entity.getContent();
-                    String responseBody = consumeWithinDeadline(bodyStream, request, deadline);
-                    if (deadline.remaining().isZero()) {
-                        throw timeout("delivery deadline expired", null);
-                    }
-                    return new WebhookHttpResponse(response.getCode(), responseBody);
-                }
-            } catch (WebhookDeliveryException exception) {
-                throw exception;
+                return client.execute(request);
             } catch (DestinationPolicyBlockedException exception) {
                 throw failure(WebhookFailureCode.DESTINATION_POLICY_BLOCKED, "destination is blocked by policy",
                         exception);
             } catch (UnknownHostException exception) {
+                if (deadline.remaining().isZero() || request.isCancelled()) {
+                    throw timeout("delivery deadline expired", exception);
+                }
                 throw failure(classifyDnsFailure(exception), "DNS resolution failed", exception);
             } catch (CancellationException exception) {
                 throw timeout("delivery was cancelled", exception);
             } catch (ConnectTimeoutException | ConnectionRequestTimeoutException exception) {
                 throw timeout("delivery deadline expired", exception);
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw timeout("delivery was interrupted", exception);
             } catch (IOException exception) {
                 if (deadline.remaining().isZero() || request.isCancelled()) {
                     throw timeout("delivery deadline expired", exception);
@@ -129,8 +149,6 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
                 }
                 throw failure(WebhookFailureCode.TRANSPORT_FAILURE, "webhook exchange failed", exception);
             }
-        } finally {
-            cancellation.cancel(false);
         }
     }
 
@@ -142,15 +160,18 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
             long remainingNanos = deadline.remaining().toNanos();
             if (remainingNanos <= 0) {
                 request.cancel();
+                closeQuietly(stream);
                 task.cancel(true);
                 throw timeout("delivery deadline expired", null);
             }
             return task.get(remainingNanos, TimeUnit.NANOSECONDS);
         } catch (TimeoutException exception) {
             request.cancel();
+            closeQuietly(stream);
             task.cancel(true);
             throw timeout("delivery deadline expired", exception);
         } catch (CancellationException exception) {
+            closeQuietly(stream);
             throw timeout("delivery was cancelled", exception);
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
@@ -167,15 +188,31 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
         }
     }
 
+    private static void closeQuietly(InputStream stream) {
+        try {
+            stream.close();
+        } catch (IOException ignored) {
+            // The exchange is already being canceled; the response owner closes it in the surrounding try block.
+        }
+    }
+
     private ScheduledFuture<?> scheduleCancellation(HttpUriRequestBase request, DeliveryDeadline deadline) {
         long remainingNanos = deadline.remaining().toNanos();
         return deadlineScheduler.schedule(request::cancel, Math.max(0, remainingNanos), TimeUnit.NANOSECONDS);
     }
 
-    private static void applyTimeouts(HttpUriRequestBase request, DeliveryDeadline deadline) {
-        Timeout timeout = Timeout.of(deadline.remaining());
+    private static void applyTimeouts(HttpUriRequestBase request, Duration remaining) {
+        Timeout timeout = Timeout.of(remaining);
         request.setConfig(RequestConfig.custom().setConnectionRequestTimeout(timeout).setConnectTimeout(timeout)
                 .setResponseTimeout(timeout).setRedirectsEnabled(false).build());
+    }
+
+    private static Duration positiveRemaining(DeliveryDeadline deadline) throws WebhookDeliveryException {
+        Duration remaining = deadline.remaining();
+        if (remaining.isZero() || remaining.isNegative()) {
+            throw timeout("delivery deadline expired", null);
+        }
+        return remaining;
     }
 
     private static WebhookFailureCode classifyDnsFailure(UnknownHostException exception) {

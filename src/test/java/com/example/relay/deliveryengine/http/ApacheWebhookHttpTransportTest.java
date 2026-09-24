@@ -27,6 +27,7 @@ import com.example.relay.deliveryengine.destination.HostAddressLookup;
 import com.example.relay.deliveryengine.destination.PolicyEnforcingDnsResolver;
 import com.example.relay.deliveryengine.destination.PublicDestinationAddressPolicy;
 import com.example.relay.deliveryengine.destination.SpecialPurposeAddressCatalog;
+import com.example.relay.deliveryengine.signing.HmacSigner;
 
 class ApacheWebhookHttpTransportTest {
 
@@ -34,7 +35,11 @@ class ApacheWebhookHttpTransportTest {
     void sendsExactBytesAndRelayHeadersWithoutFollowingRedirects() throws Exception {
         byte[] body = "{\"message\":\"héllo 🌍\"}".getBytes(StandardCharsets.UTF_8);
         AtomicReference<byte[]> receivedBody = new AtomicReference<>();
-        AtomicReference<String> receivedHeaders = new AtomicReference<>();
+        AtomicReference<java.util.Map<String, String>> receivedHeaders = new AtomicReference<>();
+        String relayId = "relay-1";
+        long relayTimestamp = 1700000000L;
+        String secret = "whsec_task_e";
+        String signature = new HmacSigner().sign(relayId, relayTimestamp, body, secret);
 
         try (ServerSocket server = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
                 CloseableHttpClient client = clientForLoopback();
@@ -44,16 +49,18 @@ class ApacheWebhookHttpTransportTest {
                     input -> new String(input.readAllBytes(), StandardCharsets.UTF_8), scheduler);
 
             WebhookHttpResponse response = transport.post("http://webhook.test:" + server.getLocalPort() + "/hook",
-                    body, new WebhookHeaders("relay-1", 1700000000L, "sig"));
+                    body, new WebhookHeaders(relayId, relayTimestamp, signature));
 
             assertEquals(302, response.statusCode());
             assertArrayEquals(body, receivedBody.get());
-            String headers = receivedHeaders.get();
-            org.junit.jupiter.api.Assertions.assertTrue(headers.contains("relay-id: relay-1"));
-            org.junit.jupiter.api.Assertions.assertTrue(headers.contains("relay-timestamp: 1700000000"));
-            org.junit.jupiter.api.Assertions.assertTrue(headers.contains("relay-signature: sig"));
-            org.junit.jupiter.api.Assertions.assertTrue(headers.contains("content-type: application/json"));
-            org.junit.jupiter.api.Assertions.assertTrue(headers.contains("host: webhook.test:" + server.getLocalPort()));
+            java.util.Map<String, String> headers = receivedHeaders.get();
+            assertEquals(relayId, headers.get("relay-id"));
+            assertEquals(Long.toString(relayTimestamp), headers.get("relay-timestamp"));
+            assertEquals(signature, headers.get("relay-signature"));
+            assertEquals("application/json", headers.get("content-type"));
+            assertEquals("webhook.test:" + server.getLocalPort(), headers.get("host"));
+            assertEquals(signature, new HmacSigner().sign(headers.get("relay-id"),
+                    Long.parseLong(headers.get("relay-timestamp")), receivedBody.get(), secret));
         }
     }
 
@@ -80,21 +87,25 @@ class ApacheWebhookHttpTransportTest {
     }
 
     private static void capture(ServerSocket server, AtomicReference<byte[]> body,
-            AtomicReference<String> headers) {
+            AtomicReference<java.util.Map<String, String>> headers) {
         try (Socket socket = server.accept();
                 BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(),
                         StandardCharsets.ISO_8859_1));
                 OutputStream output = socket.getOutputStream()) {
-            StringBuilder requestHeaders = new StringBuilder();
+            java.util.Map<String, String> requestHeaders = new java.util.LinkedHashMap<>();
             String line;
             int contentLength = 0;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                requestHeaders.append(line.toLowerCase()).append('\n');
+                int separator = line.indexOf(':');
+                if (separator > 0) {
+                    requestHeaders.put(line.substring(0, separator).toLowerCase(java.util.Locale.ROOT),
+                            line.substring(separator + 1).trim());
+                }
                 if (line.regionMatches(true, 0, "content-length:", 0, 15)) {
                     contentLength = Integer.parseInt(line.substring(15).trim());
                 }
             }
-            headers.set(requestHeaders.toString());
+            headers.set(requestHeaders);
             ByteArrayOutputStream requestBody = new ByteArrayOutputStream();
             for (int i = 0; i < contentLength; i++) {
                 requestBody.write(reader.read());
