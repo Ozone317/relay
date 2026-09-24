@@ -20,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -66,10 +67,14 @@ class ApacheResponseConsumptionIntegrationTest {
             ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(2));
             WebhookHttpResponse first = transport.post(fixture.url("/fixed"), new byte[0], headers());
             assertTrue(first.responseBody().endsWith("[relay response truncated at 10240 bytes]"));
+            assertTrue(fixture.progressBeyondLimit.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(fixture.producerBytesWritten.get() > 10_241);
+            assertTrue(!fixture.producerFinishedAll.get());
+            fixture.allowProducerContinue.countDown();
+            assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             WebhookHttpResponse second = transport.post(fixture.url("/fixed-next"), new byte[0], headers());
             assertEquals("ok", second.responseBody());
             assertTrue(fixture.limitReached.await(1, java.util.concurrent.TimeUnit.SECONDS));
-            assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             assertEquals(10_241, fixture.firstBytesWritten.get());
             assertEquals(2, fixture.acceptedConnections.get());
         }
@@ -83,10 +88,14 @@ class ApacheResponseConsumptionIntegrationTest {
             ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(2));
             WebhookHttpResponse first = transport.post(fixture.url("/chunked"), new byte[0], headers());
             assertTrue(first.responseBody().endsWith("[relay response truncated at 10240 bytes]"));
+            assertTrue(fixture.progressBeyondLimit.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(fixture.producerBytesWritten.get() > 10_241);
+            assertTrue(!fixture.producerFinishedAll.get());
+            fixture.allowProducerContinue.countDown();
+            assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             WebhookHttpResponse second = transport.post(fixture.url("/chunked-next"), new byte[0], headers());
             assertEquals("ok", second.responseBody());
             assertTrue(fixture.limitReached.await(1, java.util.concurrent.TimeUnit.SECONDS));
-            assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             assertEquals(10_241, fixture.firstBytesWritten.get());
             assertEquals(2, fixture.acceptedConnections.get());
         }
@@ -124,11 +133,15 @@ class ApacheResponseConsumptionIntegrationTest {
             ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(2));
             long started = System.nanoTime();
             Future<WebhookHttpResponse> result = calls.submit(() -> transport.post(fixture.url("/slow"), new byte[0], headers()));
+            assertTrue(fixture.progressBeyondLimit.await(1, java.util.concurrent.TimeUnit.SECONDS));
             WebhookHttpResponse response = result.get(1, java.util.concurrent.TimeUnit.SECONDS);
             assertTrue(response.responseBody().endsWith("[relay response truncated at 10240 bytes]"));
-            assertTrue(Duration.ofNanos(System.nanoTime() - started).toMillis() < 2_500);
-            assertTrue(fixture.limitReached.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).toMillis() < 1_000);
+            assertTrue(fixture.producerBytesWritten.get() > 10_241);
+            assertTrue(!fixture.producerFinishedAll.get());
+            fixture.allowProducerContinue.countDown();
             assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(fixture.limitReached.await(1, java.util.concurrent.TimeUnit.SECONDS));
         }
     }
 
@@ -199,9 +212,13 @@ class ApacheResponseConsumptionIntegrationTest {
         private final boolean chunked;
         private final ServerSocket server;
         private final CountDownLatch limitReached = new CountDownLatch(1);
+        private final CountDownLatch progressBeyondLimit = new CountDownLatch(1);
+        private final CountDownLatch allowProducerContinue = new CountDownLatch(1);
         private final CountDownLatch clientClosed = new CountDownLatch(1);
         private final AtomicInteger acceptedConnections = new AtomicInteger();
         private final AtomicInteger firstBytesWritten = new AtomicInteger();
+        private final AtomicInteger producerBytesWritten = new AtomicInteger();
+        private final AtomicBoolean producerFinishedAll = new AtomicBoolean();
 
         private ConsumptionFixture(boolean chunked) throws IOException {
             this.chunked = chunked;
@@ -234,11 +251,16 @@ class ApacheResponseConsumptionIntegrationTest {
                     output.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
                             .getBytes(StandardCharsets.US_ASCII));
                 } else {
-                    output.write("HTTP/1.1 200 OK\r\nContent-Length: 200000\r\nConnection: keep-alive\r\n\r\n"
+                    output.write("HTTP/1.1 200 OK\r\nContent-Length: 65536\r\nConnection: keep-alive\r\n\r\n"
                             .getBytes(StandardCharsets.US_ASCII));
                 }
                 output.flush();
-                writeUntilLimitThenObserveClose(first, reader, output);
+                try {
+                    writePacedBody(output);
+                } catch (IOException ignored) {
+                    // The client is expected to abort the oversized endpoint.
+                }
+                observeClientClosure(first, reader);
             } catch (IOException ignored) {
                 // The client is expected to abort the oversized endpoint.
             }
@@ -253,11 +275,10 @@ class ApacheResponseConsumptionIntegrationTest {
             }
         }
 
-        private void writeUntilLimitThenObserveClose(Socket socket, BufferedReader reader, OutputStream output)
-                throws IOException {
+        private void writePacedBody(OutputStream output) throws IOException {
             int written = 0;
-            while (written < 10_241) {
-                int chunk = Math.min(1_024, 10_241 - written);
+            while (written < 65_536) {
+                int chunk = Math.min(1_024, (written < 10_241 ? 10_241 : 65_536) - written);
                 if (chunked) {
                     output.write(Integer.toHexString(chunk).getBytes(StandardCharsets.US_ASCII));
                     output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
@@ -268,19 +289,48 @@ class ApacheResponseConsumptionIntegrationTest {
                 }
                 output.flush();
                 written += chunk;
+                producerBytesWritten.set(written);
+                if (written == 10_241) {
+                    firstBytesWritten.set(written);
+                    limitReached.countDown();
+                }
+                if (written > 10_241 && progressBeyondLimit.getCount() != 0) {
+                    progressBeyondLimit.countDown();
+                    try {
+                        if (!allowProducerContinue.await(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                            return;
+                        }
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                if (written > 10_241) {
+                    try {
+                        Thread.sleep(5);
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
             }
-            firstBytesWritten.set(written);
-            limitReached.countDown();
-            socket.setSoTimeout(2_000);
+            if (chunked) {
+                output.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                output.flush();
+            }
+            producerFinishedAll.set(true);
+        }
+
+        private void observeClientClosure(Socket socket, BufferedReader reader) {
             try {
+                socket.setSoTimeout(2_000);
                 if (reader.read() == -1) {
                     clientClosed.countDown();
                 }
             } catch (SocketTimeoutException ignored) {
-                // Keep the fixture moving; the assertion below proves whether the client closed the stream.
+                // The assertion below proves whether the client closed the stream.
             } catch (IOException exception) {
                 clientClosed.countDown();
-                throw exception;
             }
         }
 
