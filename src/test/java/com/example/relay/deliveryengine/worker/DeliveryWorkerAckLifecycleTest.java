@@ -2,8 +2,10 @@ package com.example.relay.deliveryengine.worker;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.doAnswer;
@@ -23,6 +25,7 @@ import com.example.relay.deliveryengine.http.WebhookHeaders;
 import com.example.relay.deliveryengine.http.WebhookHttpResponse;
 import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.signing.HmacSigner;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -47,9 +50,11 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
-import java.util.stream.Stream;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -108,12 +113,16 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
     @MockitoBean
     private WebhookHttpTransport webhookHttpTransport;
 
+    @MockitoBean
+    private HmacSigner hmacSigner;
+
     private MockWebServer mockWebServer;
     private final HttpClient managementClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() throws Exception {
+        when(hmacSigner.sign(anyString(), anyLong(), any(byte[].class), anyString())).thenReturn("signature");
         when(webhookHttpTransport.post(anyString(), any(byte[].class), any(WebhookHeaders.class)))
                 .thenReturn(new WebhookHttpResponse(200, "ok"));
         attemptRepository.deleteAll();
@@ -222,6 +231,28 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
     }
 
     @Test
+    void workerPassesSameAuthoritativeBodyReferenceToSignerAndTransport() throws Exception {
+        AtomicReference<byte[]> signedBody = new AtomicReference<>();
+        AtomicReference<byte[]> transportedBody = new AtomicReference<>();
+        doAnswer(invocation -> {
+            signedBody.set(invocation.getArgument(2));
+            return "signature";
+        }).when(hmacSigner).sign(anyString(), anyLong(), any(byte[].class), anyString());
+        doAnswer(invocation -> {
+            transportedBody.set(invocation.getArgument(1));
+            return new WebhookHttpResponse(200, "ok");
+        }).when(webhookHttpTransport).post(anyString(), any(byte[].class), any(WebhookHeaders.class));
+
+        Attempt attempt = persistAttempt("http://webhook.test/webhook");
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.SUCCEEDED,
+                        attemptRepository.findById(attempt.getId()).orElseThrow().getStatus()));
+        assertSame(signedBody.get(), transportedBody.get());
+    }
+
+    @Test
     void modeledTransportFailure_isPersistedWithStableBoundedCodeBeforeAcknowledgment() throws Exception {
         doThrow(new WebhookDeliveryException(WebhookFailureCode.TRANSPORT_FAILURE, "x".repeat(2_000)))
                 .when(webhookHttpTransport)
@@ -245,7 +276,8 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
         List<WebhookFailureCode> codes = List.of(WebhookFailureCode.DESTINATION_INVALID,
                 WebhookFailureCode.DNS_RESOLUTION_FAILED, WebhookFailureCode.DESTINATION_POLICY_BLOCKED,
                 WebhookFailureCode.DELIVERY_TIMEOUT, WebhookFailureCode.TRANSPORT_FAILURE);
-        return codes.stream().flatMap(code -> Stream.of(Arguments.of(code, 1), Arguments.of(code, 6)));
+        return codes.stream().flatMap(code -> IntStream.rangeClosed(1, 6)
+                .mapToObj(attemptNo -> Arguments.of(code, attemptNo)));
     }
 
     @ParameterizedTest(name = "{0} on attempt {1} follows existing lifecycle")
@@ -264,6 +296,16 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
             assertTrue(reloaded.getLastError().startsWith(code + ": "));
             assertTrue(reloaded.getLastError().length() <= 10_240);
         });
-        assertEquals(attemptNo == 6 ? 1 : 2, attemptRepository.findAll().size());
+        List<Attempt> attempts = attemptRepository.findAll();
+        assertEquals(attemptNo == 6 ? 1 : 2, attempts.size());
+        if (attemptNo < 6) {
+            Attempt retry = attempts.stream()
+                    .filter(candidate -> !candidate.getId().equals(attempt.getId()))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(attemptNo + 1, retry.getAttemptNo());
+            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+            assertTrue(retry.getNextRetryAt() != null);
+        }
     }
 }
