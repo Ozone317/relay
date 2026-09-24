@@ -1,5 +1,6 @@
 package com.example.relay.deliveryengine.config;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -118,5 +119,10 @@ class DeliveryHttpClientPinningTest {
                         + "ns, tolerance=" + noiseToleranceNanos + "ns) - a small overage is expected noise; "
                         + "only investigate the client choice if this fails by a wide margin, and re-run once "
                         + "before concluding it's a real regression rather than a noisy measurement");
+    }
+
+    @Test
+    void existingJdkRestClientBean_remainsAvailableAlongsideApacheClient() {
+        assertNotNull(new DeliveryHttpClientConfig().deliveryRestClient());
     }
 }
