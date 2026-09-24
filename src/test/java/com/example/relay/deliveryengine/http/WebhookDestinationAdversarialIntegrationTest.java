@@ -15,8 +15,13 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.ProxySelector;
 import java.net.ServerSocket;
+import java.net.SocketAddress;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -31,7 +36,6 @@ import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
-import org.apache.hc.core5.util.TimeValue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -145,7 +149,7 @@ class WebhookDestinationAdversarialIntegrationTest {
                     assertEquals(200, response.getCode());
                     EntityUtils.consume(response.getEntity());
                 }
-                manager.closeIdle(TimeValue.ZERO_MILLISECONDS);
+                assertTrue(permitted.connectionClosed.await(5, TimeUnit.SECONDS));
                 assertThrows(DestinationPolicyBlockedException.class, () -> execute(client,
                         "http://" + TARGET_HOST + ":" + permitted.port() + "/two"));
             }
@@ -163,8 +167,13 @@ class WebhookDestinationAdversarialIntegrationTest {
         String[] keys = {"http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort",
                 "socksProxyHost", "socksProxyPort", "java.net.useSystemProxies"};
         Map<String, String> old = remember(keys);
-        try (HttpListener permitted = HttpListener.keepAlive(loopback(2), 1);
-                HttpListener proxy = HttpListener.keepAlive(loopback(1), 1)) {
+        ProxySelector oldProxySelector = ProxySelector.getDefault();
+        synchronized (ProxySelector.class) {
+            try (HttpListener permitted = HttpListener.keepAlive(loopback(2), 1);
+                    WebhookTlsIdentityIntegrationTest.TlsListener secure =
+                            WebhookTlsIdentityIntegrationTest.TlsListener.start(
+                                    "p03-webhook-test-cert.pem", "p03-webhook-test-key.pem");
+                    HttpListener proxy = HttpListener.keepAlive(loopback(1), 2)) {
             System.setProperty("http.proxyHost", "127.0.0.1");
             System.setProperty("http.proxyPort", Integer.toString(proxy.port()));
             System.setProperty("https.proxyHost", "127.0.0.1");
@@ -172,6 +181,18 @@ class WebhookDestinationAdversarialIntegrationTest {
             System.setProperty("socksProxyHost", "127.0.0.1");
             System.setProperty("socksProxyPort", Integer.toString(proxy.port()));
             System.setProperty("java.net.useSystemProxies", "true");
+            ProxySelector.setDefault(new ProxySelector() {
+                @Override
+                public List<Proxy> select(URI uri) {
+                    return List.of(new Proxy(Proxy.Type.HTTP,
+                            InetSocketAddress.createUnresolved("127.0.0.1", proxy.port())));
+                }
+
+                @Override
+                public void connectFailed(URI uri, SocketAddress address, IOException exception) {
+                    // The direct Apache route must never call this selector.
+                }
+            });
             ControllableHostAddressLookup lookup = new ControllableHostAddressLookup().enqueue(loopback(2));
             try (CloseableHttpClient client = client(testPolicy(), lookup)) {
                 try (ClassicHttpResponse response = execute(client,
@@ -180,11 +201,22 @@ class WebhookDestinationAdversarialIntegrationTest {
                     EntityUtils.consume(response.getEntity());
                 }
             }
+            try (CloseableHttpClient client = WebhookTlsIdentityIntegrationTest.clientFor(secure)) {
+                try (ClassicHttpResponse response = execute(client,
+                        "https://webhook.test:" + secure.port() + "/direct")) {
+                    assertEquals(200, response.getCode());
+                    EntityUtils.consume(response.getEntity());
+                }
+            }
             assertEquals(1, permitted.requestsSeen.get());
             assertEquals(loopback(2), permitted.localPeers.get(0));
+            assertEquals(1, secure.requestBytes.get());
+            assertEquals(loopback(2), secure.localPeers.get(0));
             assertEquals(0, proxy.acceptedSockets.get());
         } finally {
+            ProxySelector.setDefault(oldProxySelector);
             restore(old);
+        }
         }
     }
 
@@ -262,6 +294,7 @@ class WebhookDestinationAdversarialIntegrationTest {
         private final AtomicInteger acceptedSockets = new AtomicInteger();
         private final AtomicInteger requestsSeen = new AtomicInteger();
         private final CountDownLatch requestLatch;
+        private final CountDownLatch connectionClosed = new CountDownLatch(1);
         private final List<InetAddress> localPeers = new CopyOnWriteArrayList<>();
         private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -334,7 +367,8 @@ class WebhookDestinationAdversarialIntegrationTest {
                     }
                     requestsSeen.incrementAndGet();
                     requestLatch.countDown();
-                    String connection = mode == Mode.CLOSE || mode == Mode.REDIRECT ? "close" : "keep-alive";
+                    String connection = mode == Mode.CLOSE || mode == Mode.REDIRECT
+                            || requestsSeen.get() >= expectedRequests ? "close" : "keep-alive";
                     String response = mode == Mode.REDIRECT
                             ? "HTTP/1.1 " + status + " Redirect\r\nLocation: http://trap.test:" + redirectPort
                                     + "/trap\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -343,6 +377,7 @@ class WebhookDestinationAdversarialIntegrationTest {
                     output.write(response.getBytes(StandardCharsets.US_ASCII));
                     output.flush();
                     if (mode != Mode.KEEP_ALIVE || requestsSeen.get() >= expectedRequests) {
+                        connectionClosed.countDown();
                         return;
                     }
                 }
