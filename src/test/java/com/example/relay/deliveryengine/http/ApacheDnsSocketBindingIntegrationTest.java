@@ -22,11 +22,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
-import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.core5.http.ClassicHttpResponse;
@@ -35,6 +33,8 @@ import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 import com.example.relay.deliveryengine.config.DeliveryHttpClientConfig;
 import com.example.relay.deliveryengine.destination.HostAddressLookup;
@@ -44,6 +44,8 @@ import com.example.relay.deliveryengine.destination.SpecialPurposeAddressCatalog
 
 class ApacheDnsSocketBindingIntegrationTest {
 
+    private static final String TARGET_HOST = "localhost.localdomain";
+
     private final ExecutorService servers = Executors.newVirtualThreadPerTaskExecutor();
 
     @AfterEach
@@ -52,14 +54,19 @@ class ApacheDnsSocketBindingIntegrationTest {
     }
 
     @Test
+    @ResourceLock(Resources.SYSTEM_PROPERTIES)
     void bindsOnlyToResolverReturnedAddressAndReusesValidatedSocketDespiteProxyProperties() throws Exception {
-        try (HttpFixture destination = HttpFixture.keepAlive(2); HttpFixture proxy = HttpFixture.keepAlive(1);
-                CloseableHttpClient client = clientFor(destination, true)) {
+        try (HttpFixture destination = HttpFixture.keepAlive(2, InetAddress.getLoopbackAddress());
+                HttpFixture destinationTrap = HttpFixture.keepAlive(1, InetAddress.getByName("::1"), destination.port());
+                HttpFixture proxy = HttpFixture.keepAlive(1, InetAddress.getLoopbackAddress())) {
             String oldProxyHost = System.getProperty("http.proxyHost");
             String oldProxyPort = System.getProperty("http.proxyPort");
             System.setProperty("http.proxyHost", "127.0.0.1");
             System.setProperty("http.proxyPort", Integer.toString(proxy.port()));
             try {
+                // Properties must be installed before the production client is built: this is the
+                // only point at which a useSystemProperties mutation can capture them.
+                try (CloseableHttpClient client = clientFor(destination, true)) {
                 ClassicHttpResponse first = execute(client, new HttpGet(uri(destination, "/one")));
                 EntityUtils.consume(first.getEntity());
                 first.close();
@@ -70,9 +77,12 @@ class ApacheDnsSocketBindingIntegrationTest {
                 assertTrue(destination.requests.await(5, TimeUnit.SECONDS));
                 assertEquals(1, destination.acceptedSockets.get());
                 assertEquals(2, destination.requestsSeen.get());
-                assertEquals("webhook.test:" + destination.port(), destination.hostHeaders.get(0));
+                assertEquals(List.of(TARGET_HOST + ":" + destination.port(), TARGET_HOST + ":" + destination.port()),
+                        destination.hostHeaders);
+                assertEquals(0, destinationTrap.acceptedSockets.get());
                 assertEquals(0, proxy.acceptedSockets.get());
                 assertEquals(1, destination.resolverCalls.get());
+                }
             } finally {
                 restoreProperty("http.proxyHost", oldProxyHost);
                 restoreProperty("http.proxyPort", oldProxyPort);
@@ -82,7 +92,8 @@ class ApacheDnsSocketBindingIntegrationTest {
 
     @Test
     void returnsRedirectWithoutFollowingTrapLocation() throws Exception {
-        try (HttpFixture trap = HttpFixture.keepAlive(1); HttpFixture destination = HttpFixture.redirect(trap.port());
+        try (HttpFixture trap = HttpFixture.keepAlive(1, InetAddress.getLoopbackAddress());
+                HttpFixture destination = HttpFixture.redirect(trap.port(), InetAddress.getLoopbackAddress());
                 CloseableHttpClient client = clientFor(destination, false)) {
             ClassicHttpResponse response = execute(client, new HttpGet(uri(destination, "/redirect")));
             try {
@@ -106,6 +117,20 @@ class ApacheDnsSocketBindingIntegrationTest {
 
             assertThrows(IOException.class, () -> execute(client, post));
             assertTrue(destination.requests.await(5, TimeUnit.SECONDS));
+            Thread.sleep(250);
+            assertEquals(1, destination.acceptedSockets.get());
+            assertEquals(1, destination.requestsSeen.get());
+            assertEquals(1, destination.resolverCalls.get());
+        }
+    }
+
+    @Test
+    void doesNotAutomaticallyRetryDroppedIdempotentGet() throws Exception {
+        try (HttpFixture destination = HttpFixture.dropGet();
+                CloseableHttpClient client = clientFor(destination, false)) {
+            assertThrows(IOException.class, () -> execute(client, new HttpGet(uri(destination, "/drop-get"))));
+            assertTrue(destination.requests.await(5, TimeUnit.SECONDS));
+            Thread.sleep(250);
             assertEquals(1, destination.acceptedSockets.get());
             assertEquals(1, destination.requestsSeen.get());
             assertEquals(1, destination.resolverCalls.get());
@@ -121,13 +146,12 @@ class ApacheDnsSocketBindingIntegrationTest {
             }
             return List.of(permitted);
         };
-        PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
-                testPolicyAllowingLoopback());
         HostAddressLookup countedLookup = (hostname, deadline) -> {
             destination.resolverCalls.incrementAndGet();
             return lookup.lookup(hostname, deadline);
         };
-        resolver = new PolicyEnforcingDnsResolver(countedLookup, testPolicyAllowingLoopback());
+        PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(countedLookup,
+                testPolicyAllowingLoopback());
         DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
         PoolingHttpClientConnectionManager manager = config.deliveryConnectionManager(resolver);
         return config.deliveryApacheHttpClient(manager);
@@ -142,7 +166,7 @@ class ApacheDnsSocketBindingIntegrationTest {
     }
 
     private static String uri(HttpFixture fixture, String path) {
-        return "http://webhook.test:" + fixture.port() + path;
+        return "http://" + TARGET_HOST + ":" + fixture.port() + path;
     }
 
     private static PublicDestinationAddressPolicy testPolicyAllowingLoopback() {
@@ -165,6 +189,7 @@ class ApacheDnsSocketBindingIntegrationTest {
         private final Mode mode;
         private final int expectedRequests;
         private final int redirectPort;
+        private final int maxConnections;
         private final AtomicInteger acceptedSockets = new AtomicInteger();
         private final AtomicInteger requestsSeen = new AtomicInteger();
         private final AtomicInteger resolverCalls = new AtomicInteger();
@@ -173,28 +198,42 @@ class ApacheDnsSocketBindingIntegrationTest {
         private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
         private HttpFixture(Mode mode, int expectedRequests) throws IOException {
-            this(mode, expectedRequests, -1);
+            this(mode, expectedRequests, -1, InetAddress.getLoopbackAddress(), 1, 0);
         }
 
-        private HttpFixture(Mode mode, int expectedRequests, int redirectPort) throws IOException {
-            this.server = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        private HttpFixture(Mode mode, int expectedRequests, int redirectPort, InetAddress bindAddress,
+                int maxConnections, int port) throws IOException {
+            this.server = new ServerSocket(port, 8, bindAddress);
             this.mode = mode;
             this.expectedRequests = expectedRequests;
             this.redirectPort = redirectPort;
+            this.maxConnections = maxConnections;
             this.requests = new CountDownLatch(expectedRequests);
             executor.submit(this::serve);
         }
 
         static HttpFixture keepAlive(int expectedRequests) throws IOException {
-            return new HttpFixture(Mode.OK, expectedRequests);
+            return keepAlive(expectedRequests, InetAddress.getLoopbackAddress());
         }
 
-        static HttpFixture redirect(int trapPort) throws IOException {
-            return new HttpFixture(Mode.REDIRECT, 1, trapPort);
+        static HttpFixture keepAlive(int expectedRequests, InetAddress bindAddress) throws IOException {
+            return keepAlive(expectedRequests, bindAddress, 0);
+        }
+
+        static HttpFixture keepAlive(int expectedRequests, InetAddress bindAddress, int port) throws IOException {
+            return new HttpFixture(Mode.OK, expectedRequests, -1, bindAddress, expectedRequests, port);
         }
 
         static HttpFixture dropPost() throws IOException {
-            return new HttpFixture(Mode.DROP, 1);
+            return new HttpFixture(Mode.DROP, 1, -1, InetAddress.getLoopbackAddress(), 4, 0);
+        }
+
+        static HttpFixture dropGet() throws IOException {
+            return new HttpFixture(Mode.DROP, 1, -1, InetAddress.getLoopbackAddress(), 4, 0);
+        }
+
+        static HttpFixture redirect(int trapPort, InetAddress bindAddress) throws IOException {
+            return new HttpFixture(Mode.REDIRECT, 1, trapPort, bindAddress, 1, 0);
         }
 
         int port() {
@@ -203,7 +242,7 @@ class ApacheDnsSocketBindingIntegrationTest {
 
         private void serve() {
             try {
-                while (!server.isClosed() && requestsSeen.get() < expectedRequests) {
+                while (!server.isClosed() && acceptedSockets.get() < maxConnections) {
                     Socket socket = server.accept();
                     acceptedSockets.incrementAndGet();
                     executor.submit(() -> serveSocket(socket));
