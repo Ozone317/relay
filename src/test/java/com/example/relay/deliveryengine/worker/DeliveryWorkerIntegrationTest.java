@@ -8,8 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Logger;
@@ -24,10 +22,6 @@ import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
-import com.example.relay.deliveryengine.http.WebhookDeliveryException;
-import com.example.relay.deliveryengine.http.WebhookHeaders;
-import com.example.relay.deliveryengine.http.WebhookHttpResponse;
-import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.deliveryengine.retry.RetryJitterSource;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -45,12 +39,9 @@ import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.io.ByteArrayInputStream;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
@@ -80,18 +71,35 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+
+import com.example.relay.deliveryengine.config.DeliveryHttpClientConfig;
+import com.example.relay.deliveryengine.destination.HostAddressLookup;
+import com.example.relay.deliveryengine.destination.PolicyEnforcingDnsResolver;
+import com.example.relay.deliveryengine.destination.PublicDestinationAddressPolicy;
+import com.example.relay.deliveryengine.destination.SpecialPurposeAddressCatalog;
+import com.example.relay.deliveryengine.http.BoundedApacheResponseBodyConsumer;
+import com.example.relay.deliveryengine.http.ApacheWebhookHttpTransport;
+import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
 @org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@Import(DeliveryWorkerIntegrationTest.LoopbackWebhookTransportConfiguration.class)
 @TestPropertySource(properties = {
         "relay.retry.scheduling-enabled=false",
         "relay.reconciliation.scheduling-enabled=false"
@@ -151,14 +159,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @MockitoBean
     private RetryJitterSource retryJitterSource;
 
-    @MockitoBean
-    private WebhookHttpTransport webhookHttpTransport;
-
     private MockWebServer mockWebServer;
-    private final HttpClient testClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -170,11 +171,6 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
         mockWebServer = new MockWebServer();
         mockWebServer.start();
-
-        doAnswer(invocation -> testPost(invocation.getArgument(0), invocation.getArgument(1),
-                invocation.getArgument(2)))
-                .when(webhookHttpTransport)
-                .post(anyString(), any(byte[].class), any(WebhookHeaders.class));
     }
 
     private void drainQueues() {
@@ -202,31 +198,8 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         mockWebServer.shutdown();
     }
 
-    private WebhookHttpResponse testPost(String rawUrl, byte[] body, WebhookHeaders headers)
-            throws WebhookDeliveryException {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(rawUrl))
-                .timeout(Duration.ofSeconds(15))
-                .header("relay-id", headers.relayId())
-                .header("relay-timestamp", Long.toString(headers.relayTimestamp()))
-                .header("relay-signature", headers.relaySignature())
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .build();
-        try {
-            HttpResponse<byte[]> response = testClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
-                    new ByteArrayInputStream(response.body()));
-            return new WebhookHttpResponse(response.statusCode(), capture.body());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new WebhookDeliveryException(
-                    com.example.relay.deliveryengine.http.WebhookFailureCode.DELIVERY_TIMEOUT,
-                    "test transport interrupted", exception);
-        } catch (IOException exception) {
-            throw new WebhookDeliveryException(
-                    com.example.relay.deliveryengine.http.WebhookFailureCode.TRANSPORT_FAILURE,
-                    "test transport failed", exception);
-        }
+    private String webhookUrl(String path) {
+        return "http://webhook.test:" + mockWebServer.getPort() + path;
     }
 
     private Attempt persistAttempt(String url, int attemptNo) {
@@ -290,7 +263,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     void deliveryWorker_preservesJsonUtf8AndRawBodySignature_insteadOfTextPlainIso88591Transport(
             String fixtureName, String payload, byte[] expectedJsonUtf8) throws InterruptedException {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1, payload);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1, payload);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -325,7 +298,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @Test
     void successfulDelivery_marksAttemptSucceeded() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -340,7 +313,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @Test
     void largeSuccessfulResponse_isBoundedAndStillCommitsSuccess() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("x".repeat(11_000)));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -361,7 +334,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @Test
     void largeNon2xxResponse_isBoundedAndParentAndRetryCommitAtomically() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("x".repeat(50_000)));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -385,14 +358,14 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void chunkedResponseWithoutContentLength_abortsUnreadRemainderAndReleasesTheExchange() {
-        // The configured JDK client must finish after the diagnostic prefix, not after Spring
-        // drains the response. At this rate the complete body takes roughly 24 seconds, while
-        // the 10,241 bytes Relay reads arrive in well under one second.
+        // The real Apache transport must finish after the bounded diagnostic prefix, not after a
+        // caller buffers the full response. At this rate the complete body takes roughly 24 seconds,
+        // while the 10,241 bytes Relay reads arrive in well under one second.
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setChunkedBody("x".repeat(1_000_000), 257)
                 .throttleBody(1_024, 25, TimeUnit.MILLISECONDS));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -404,7 +377,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         });
 
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("second response"));
-        Attempt secondAttempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt secondAttempt = persistAttempt(webhookUrl("/webhook"), 1);
         attemptPublisher.publish(secondAttempt.getId());
 
         await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
@@ -418,7 +391,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @Test
     void emptySuccessfulResponse_preservesNullDiagnosticBody() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(204));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -433,7 +406,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @Test
     void emptyNon2xxResponse_preservesNullDiagnosticBodyAndCreatesRetry() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -452,7 +425,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 .setResponseCode(200)
                 .setBody("ok")
                 .setBodyDelay(20, TimeUnit.SECONDS));
-        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), 1);
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
 
@@ -474,7 +447,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                         .setBody("internal error"));
 
         Attempt attempt = persistAttempt(
-                mockWebServer.url("/webhook").toString(),
+                webhookUrl("/webhook"),
                 1);
 
         attemptPublisher.publish(attempt.getId());
@@ -547,7 +520,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                         .setBody("redirecting"));
 
         Attempt attempt = persistAttempt(
-                mockWebServer.url("/webhook").toString(),
+                webhookUrl("/webhook"),
                 1);
 
         attemptPublisher.publish(attempt.getId());
@@ -628,7 +601,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                         .setBody("internal error"));
 
         Attempt attempt = persistAttempt(
-                mockWebServer.url("/webhook").toString(),
+                webhookUrl("/webhook"),
                 RetryTier.MAX_ATTEMPTS);
 
         attemptPublisher.publish(attempt.getId());
@@ -699,7 +672,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         int attemptNo = RetryTier.MAX_ATTEMPTS - 1;
 
         Attempt attempt = persistAttempt(
-                mockWebServer.url("/webhook").toString(),
+                webhookUrl("/webhook"),
                 attemptNo);
 
         attemptPublisher.publish(attempt.getId());
@@ -794,6 +767,41 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                     "expected exactly one failed delivery, not a requeue loop");
         } finally {
             errorHandlerLogger.detachAppender(appender);
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class LoopbackWebhookTransportConfiguration {
+
+        @Bean(name = "loopbackDeliveryConnectionManager", destroyMethod = "close")
+        @Primary
+        PoolingHttpClientConnectionManager loopbackDeliveryConnectionManager() {
+            DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
+            HostAddressLookup lookup = (absoluteHostname, deadline) -> List.of(InetAddress.getLoopbackAddress());
+            PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
+                    loopbackPermittingPolicy());
+            return config.deliveryConnectionManager(resolver);
+        }
+
+        @Bean(name = "loopbackDeliveryApacheHttpClient", destroyMethod = "close")
+        @Primary
+        CloseableHttpClient loopbackDeliveryApacheHttpClient(
+                @Qualifier("loopbackDeliveryConnectionManager") PoolingHttpClientConnectionManager manager) {
+            return new DeliveryHttpClientConfig().deliveryApacheHttpClient(manager);
+        }
+
+        @Bean
+        @Primary
+        WebhookHttpTransport loopbackWebhookHttpTransport(
+                @Qualifier("loopbackDeliveryApacheHttpClient") CloseableHttpClient client) {
+            return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer());
+        }
+
+        private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {
+            byte[] sentinelCatalog = "0.0.0.0/32|TEST_SENTINEL\n::/128|TEST_SENTINEL\n"
+                    .getBytes(StandardCharsets.UTF_8);
+            return new PublicDestinationAddressPolicy(
+                    new SpecialPurposeAddressCatalog(new ByteArrayInputStream(sentinelCatalog)));
         }
     }
 }
