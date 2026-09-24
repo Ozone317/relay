@@ -1,21 +1,22 @@
 package com.example.relay.deliveryengine.http;
 
+import com.example.relay.deliveryengine.destination.DestinationPolicyBlockedException;
+import com.example.relay.deliveryengine.destination.DnsResolutionException;
+import com.example.relay.endpoint.domain.InvalidWebhookUriException;
+import com.example.relay.endpoint.domain.ParsedWebhookUri;
+import com.example.relay.endpoint.domain.WebhookUriParser;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-
+import org.apache.hc.client5.http.ConnectTimeoutException;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
-import org.apache.hc.client5.http.ConnectTimeoutException;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
@@ -24,12 +25,6 @@ import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.util.Timeout;
-
-import com.example.relay.deliveryengine.destination.DestinationPolicyBlockedException;
-import com.example.relay.deliveryengine.destination.DnsResolutionException;
-import com.example.relay.endpoint.domain.InvalidWebhookUriException;
-import com.example.relay.endpoint.domain.ParsedWebhookUri;
-import com.example.relay.endpoint.domain.WebhookUriParser;
 
 /** Delivery-only Apache exchange orchestration. */
 public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
@@ -105,9 +100,6 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
             throw exception;
         } catch (CancellationException exception) {
             throw timeout("delivery was cancelled", exception);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw timeout("delivery was interrupted", exception);
         } catch (IOException exception) {
             if (deadline.remaining().isZero() || request.isCancelled()) {
                 throw timeout("delivery deadline expired", exception);
@@ -144,8 +136,11 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
                 }
                 WebhookFailureCode resolverCode = classifyResolverFailure(exception);
                 if (resolverCode != null) {
-                    throw failure(resolverCode, resolverCode == WebhookFailureCode.DESTINATION_POLICY_BLOCKED
-                            ? "destination is blocked by policy" : "DNS resolution failed", exception);
+                    throw failure(resolverCode,
+                            resolverCode == WebhookFailureCode.DESTINATION_POLICY_BLOCKED
+                                    ? "destination is blocked by policy"
+                                    : "DNS resolution failed",
+                            exception);
                 }
                 throw failure(WebhookFailureCode.TRANSPORT_FAILURE, "webhook exchange failed", exception);
             }
@@ -153,39 +148,13 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
     }
 
     private String consumeWithinDeadline(InputStream stream, HttpUriRequestBase request, DeliveryDeadline deadline)
-            throws IOException, InterruptedException, WebhookDeliveryException {
-        FutureTask<String> task = new FutureTask<>(() -> responseBodyConsumer.consume(stream));
-        Thread.startVirtualThread(task);
-        try {
-            long remainingNanos = deadline.remaining().toNanos();
-            if (remainingNanos <= 0) {
-                request.cancel();
-                closeQuietly(stream);
-                task.cancel(true);
-                throw timeout("delivery deadline expired", null);
-            }
-            return task.get(remainingNanos, TimeUnit.NANOSECONDS);
-        } catch (TimeoutException exception) {
+            throws IOException, WebhookDeliveryException {
+        if (deadline.remaining().isZero() || deadline.remaining().isNegative() || request.isCancelled()) {
             request.cancel();
             closeQuietly(stream);
-            task.cancel(true);
-            throw timeout("delivery deadline expired", exception);
-        } catch (CancellationException exception) {
-            closeQuietly(stream);
-            throw timeout("delivery was cancelled", exception);
-        } catch (ExecutionException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof IOException ioException) {
-                throw ioException;
-            }
-            if (cause instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw new IllegalStateException("Unexpected response consumer failure", cause);
+            throw timeout("delivery deadline expired", null);
         }
+        return responseBodyConsumer.consume(stream);
     }
 
     private static void closeQuietly(InputStream stream) {
@@ -246,8 +215,8 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
     }
 
     private static final class DeadlineSchedulerHolder {
-        private static final ScheduledExecutorService INSTANCE = java.util.concurrent.Executors
-                .newSingleThreadScheduledExecutor(runnable -> {
+        private static final ScheduledExecutorService INSTANCE =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
                     Thread thread = new Thread(runnable, "relay-webhook-deadline");
                     thread.setDaemon(true);
                     return thread;
