@@ -25,12 +25,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.DnsResolver;
+import org.apache.hc.client5.http.impl.DefaultSchemePortResolver;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.client5.http.ssl.DefaultClientTlsStrategy;
 import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.io.SocketConfig;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.apache.hc.core5.util.TimeValue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
@@ -44,7 +50,7 @@ import com.example.relay.deliveryengine.destination.SpecialPurposeAddressCatalog
 
 class ApacheDnsSocketBindingIntegrationTest {
 
-    private static final String TARGET_HOST = "localhost.localdomain";
+    private static final String TARGET_HOST = "webhook.invalid";
 
     private final ExecutorService servers = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -66,7 +72,7 @@ class ApacheDnsSocketBindingIntegrationTest {
             try {
                 // Properties must be installed before the production client is built: this is the
                 // only point at which a useSystemProperties mutation can capture them.
-                try (CloseableHttpClient client = clientFor(destination, true)) {
+                try (CloseableHttpClient client = clientFor(legacyFallbackProbe(destination))) {
                 ClassicHttpResponse first = execute(client, new HttpGet(uri(destination, "/one")));
                 EntityUtils.consume(first.getEntity());
                 first.close();
@@ -155,6 +161,47 @@ class ApacheDnsSocketBindingIntegrationTest {
         DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
         PoolingHttpClientConnectionManager manager = config.deliveryConnectionManager(resolver);
         return config.deliveryApacheHttpClient(manager);
+    }
+
+    private CloseableHttpClient clientFor(DnsResolver resolver) throws Exception {
+        DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
+        PoolingHttpClientConnectionManager manager = PoolingHttpClientConnectionManagerBuilder.create()
+                .setDnsResolver(resolver)
+                .setTlsSocketStrategy(DefaultClientTlsStrategy.createDefault())
+                .setDefaultSocketConfig(SocketConfig.custom().setSocksProxyAddress(null).build())
+                .setSchemePortResolver(DefaultSchemePortResolver.INSTANCE)
+                .setMaxConnTotal(40)
+                .setMaxConnPerRoute(40)
+                .setConnectionTimeToLive(TimeValue.ofMinutes(5))
+                .build();
+        return config.deliveryApacheHttpClient(manager);
+    }
+
+    private static DnsResolver legacyFallbackProbe(HttpFixture destination) throws Exception {
+        InetAddress trapAddress = InetAddress.getByName("::1");
+        InetAddress unavailable = InetAddress.getByName("127.0.0.2");
+        HostAddressLookup lookup = (hostname, deadline) -> {
+            destination.resolverCalls.incrementAndGet();
+            return List.of(unavailable, InetAddress.getLoopbackAddress());
+        };
+        PolicyEnforcingDnsResolver enforcing = new PolicyEnforcingDnsResolver(lookup,
+                testPolicyAllowingLoopback());
+        return new DnsResolver() {
+            @Override
+            public List<InetSocketAddress> resolve(String host, int port) throws java.net.UnknownHostException {
+                return enforcing.resolve(host, port);
+            }
+
+            @Override
+            public InetAddress[] resolve(String host) {
+                return new InetAddress[] { trapAddress };
+            }
+
+            @Override
+            public String resolveCanonicalHostname(String host) {
+                return host;
+            }
+        };
     }
 
     private static ClassicHttpResponse execute(CloseableHttpClient client, org.apache.hc.core5.http.ClassicHttpRequest request)
