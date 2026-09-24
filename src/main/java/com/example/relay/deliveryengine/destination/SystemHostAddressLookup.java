@@ -61,13 +61,19 @@ public class SystemHostAddressLookup implements HostAddressLookup, AutoCloseable
         if (remaining.isZero() || remaining.isNegative()) {
             throw new DnsResolutionException("Delivery deadline expired before DNS lookup");
         }
-        Duration waitBudget = remaining.compareTo(properties.getTimeout()) < 0 ? remaining : properties.getTimeout();
         Future<InetAddress[]> future;
         try {
             future = executor.submit(() -> platformLookup.apply(absoluteHostname));
         } catch (RejectedExecutionException exception) {
             throw new DnsResolutionException("DNS resolver executor is saturated", exception);
         }
+        Duration remainingAfterSubmit = deadline.remaining();
+        if (remainingAfterSubmit.isZero() || remainingAfterSubmit.isNegative()) {
+            future.cancel(true);
+            throw new DnsResolutionException("Delivery deadline expired before DNS wait");
+        }
+        Duration waitBudget = remainingAfterSubmit.compareTo(properties.getTimeout()) < 0
+                ? remainingAfterSubmit : properties.getTimeout();
         try {
             InetAddress[] result = future.get(waitBudget.toNanos(), TimeUnit.NANOSECONDS);
             if (deadline.remaining().isZero() || deadline.remaining().isNegative()) {
@@ -86,6 +92,9 @@ public class SystemHostAddressLookup implements HostAddressLookup, AutoCloseable
             throw new DnsResolutionException("DNS lookup interrupted", exception);
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
+            if (cause instanceof PlatformLookupException platformFailure) {
+                cause = platformFailure.getCause();
+            }
             throw new DnsResolutionException("DNS lookup failed", cause);
         } catch (java.util.concurrent.CancellationException exception) {
             throw new DnsResolutionException("DNS lookup was cancelled", exception);

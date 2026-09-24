@@ -10,9 +10,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -47,21 +47,43 @@ class SystemHostAddressLookupTest {
     }
 
     @Test
-    void timeoutCancelsLatePlatformResultAndReturnsNoCandidates() throws Exception {
+    void timeoutCancelsLatePlatformResultAndNeverReturnsLateCandidates() throws Exception {
         DeliveryDnsProperties properties = properties(1, 1, Duration.ofMillis(20));
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        AtomicBoolean completed = new AtomicBoolean();
+        CountDownLatch platformCompleted = new CountDownLatch(1);
+        AtomicReference<List<InetAddress>> returnedToCaller = new AtomicReference<>();
         try (SystemHostAddressLookup lookup = new SystemHostAddressLookup(properties, ignored -> {
             started.countDown();
-            await(release);
-            completed.set(true);
+            awaitIgnoringInterrupts(release);
+            platformCompleted.countDown();
             return new InetAddress[] { addressUnchecked("93.184.216.34") };
         })) {
-            assertThrows(DnsResolutionException.class, () -> lookup.lookup("hooks.example.test.", deadline(1)));
-            assertFalse(completed.get());
-            release.countDown();
+            Thread caller = new Thread(() -> {
+                try {
+                    returnedToCaller.set(lookup.lookup("hooks.example.test.", deadline(1)));
+                } catch (DnsResolutionException expected) {
+                    // The caller must fail before the platform lookup is released.
+                }
+            });
+            caller.start();
             assertEquals(true, started.await(1, TimeUnit.SECONDS));
+            caller.join(1_000L);
+            assertFalse(caller.isAlive());
+            assertEquals(null, returnedToCaller.get());
+            release.countDown();
+            assertEquals(true, platformCompleted.await(1, TimeUnit.SECONDS));
+            assertEquals(null, returnedToCaller.get());
+        }
+    }
+
+    @Test
+    void nativeUnknownHostIsPreservedAsDnsFailureCause() {
+        DeliveryDnsProperties properties = properties(1, 1, Duration.ofSeconds(1));
+        try (SystemHostAddressLookup lookup = new SystemHostAddressLookup(properties)) {
+            DnsResolutionException failure = assertThrows(DnsResolutionException.class,
+                    () -> lookup.lookup("definitely-not-a-real-relay-hostname.invalid.", deadline(1)));
+            assertEquals(UnknownHostException.class, failure.getCause().getClass());
         }
     }
 
@@ -92,8 +114,10 @@ class SystemHostAddressLookupTest {
     @Test
     void configuredConcurrencyAndQueueCapacityRejectSaturationAndRecover() throws Exception {
         DeliveryDnsProperties properties = properties(1, 1, Duration.ofSeconds(2));
+        CountDownLatch secondQueued = new CountDownLatch(1);
+        BlockingQueue<Runnable> queue = new SignalingQueue(secondQueued);
         ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(1));
+                queue);
         CountDownLatch firstStarted = new CountDownLatch(1);
         CountDownLatch releaseFirst = new CountDownLatch(1);
         AtomicInteger platformCalls = new AtomicInteger();
@@ -112,9 +136,7 @@ class SystemHostAddressLookupTest {
 
             Thread second = new Thread(() -> invokeLookup(lookup, workerFailure));
             second.start();
-            while (executor.getQueue().size() != 1) {
-                Thread.onSpinWait();
-            }
+            assertEquals(true, secondQueued.await(1, TimeUnit.SECONDS));
 
             assertThrows(DnsResolutionException.class,
                     () -> lookup.lookup("hooks.example.test.", deadline(1)));
@@ -173,6 +195,41 @@ class SystemHostAddressLookupTest {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
+        }
+    }
+
+    private static void awaitIgnoringInterrupts(CountDownLatch latch) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                if (latch.await(10, TimeUnit.MILLISECONDS)) {
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return;
+                }
+            } catch (InterruptedException exception) {
+                interrupted = true;
+            }
+        }
+    }
+
+    private static final class SignalingQueue extends ArrayBlockingQueue<Runnable> {
+
+        private final CountDownLatch queued;
+
+        private SignalingQueue(CountDownLatch queued) {
+            super(1);
+            this.queued = queued;
+        }
+
+        @Override
+        public boolean offer(Runnable runnable) {
+            boolean accepted = super.offer(runnable);
+            if (accepted) {
+                queued.countDown();
+            }
+            return accepted;
         }
     }
 }
