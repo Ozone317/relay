@@ -159,6 +159,32 @@ public class EndpointControllerTest {
     }
 
     @Test
+    void create_rejectsProtectedLiteralAddresses_butDoesNotResolveDnsNames() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        for (String url : List.of("http://127.0.0.1/", "http://[::1]/", "http://192.168.1.10/",
+                "http://[fc00::1]/", "http://[fe80::1]/", "http://[::ffff:127.0.0.1]/")) {
+            mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/endpoints", env.getId(),
+                    app.getId()).with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"name\":\"Production\",\"url\":\"" + url + "\"}"))
+                    .andExpect(status().isBadRequest());
+        }
+
+        EndpointCreateDto dnsRequest = new EndpointCreateDto("Production",
+                "https://deliberately-nonexistent.example.invalid/hook");
+        when(endpointService.create(dnsRequest, app.getId(), env.getId(), user.getId())).thenReturn(null);
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/endpoints", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(dnsRequest))).andExpect(status().isCreated());
+
+        verify(endpointService).create(dnsRequest, app.getId(), env.getId(), user.getId());
+    }
+
+    @Test
     void update_returnsBadRequest_forAmbiguousNumericHost() throws Exception {
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
