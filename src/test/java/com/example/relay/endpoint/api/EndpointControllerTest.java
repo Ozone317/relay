@@ -36,6 +36,7 @@ import com.example.relay.user.application.AuthService;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -123,6 +124,72 @@ public class EndpointControllerTest {
 
         // Verify
         verify(endpointMapper, never()).toEndpointCreatedDto(any());
+    }
+
+    @Test
+    void create_returnsBadRequest_forAmbiguousNumericHost() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/endpoints", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Production\",\"url\":\"http://2130706433/\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(endpointService, never()).create(any(), any(), any(), any());
+    }
+
+    @Test
+    void create_returnsBadRequest_forMalformedPort() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/endpoints", env.getId(), app.getId())
+                .with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Production\",\"url\":\"http://example.com:65536/\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(endpointService, never()).create(any(), any(), any(), any());
+    }
+
+    @Test
+    void update_returnsBadRequest_forAmbiguousNumericHost() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        UUID endpointId = UUID.randomUUID();
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        mockMvc.perform(patch("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}", env.getId(),
+                app.getId(), endpointId).with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"url\":\"http://2130706433/\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(endpointService, never()).update(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void update_returnsBadRequest_forMalformedPort() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        UUID endpointId = UUID.randomUUID();
+        AuthenticatedUser principal = new AuthenticatedUser(user.getId(), user.getEmail());
+        Authentication auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        mockMvc.perform(patch("/api/v1/environments/{environmentId}/apps/{appId}/endpoints/{endpointId}", env.getId(),
+                app.getId(), endpointId).with(authentication(auth)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"url\":\"http://example.com:65536/\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(endpointService, never()).update(any(), any(), any(), any(), any());
     }
 
     @Test
