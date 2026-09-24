@@ -26,6 +26,7 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -65,8 +66,12 @@ class WebhookTlsIdentityIntegrationTest {
                 EntityUtils.consume(response.getEntity());
             }
             assertTrue(server.requestSeen.await(5, TimeUnit.SECONDS));
+            assertTrue(server.terminal.await(5, TimeUnit.SECONDS));
             assertEquals(1, server.acceptedSockets.get());
             assertEquals(1, server.requestBytes.get());
+            assertEquals(1, server.lookup.invocationCount());
+            assertEquals(List.of("webhook.test."), server.lookup.absoluteHostnames());
+            assertEquals(List.of(loopback(2)), server.localPeers);
             assertEquals(HOST, server.sniHost);
             assertEquals(HOST + ":" + server.port(), server.hostHeader);
         }
@@ -78,14 +83,22 @@ class WebhookTlsIdentityIntegrationTest {
                 CloseableHttpClient client = client(server, "p03-webhook-test-cert.pem")) {
             assertThrows(IOException.class, () -> execute(client, server.port()));
             assertTrue(server.accepted.await(5, TimeUnit.SECONDS));
-            Thread.sleep(100);
+            assertTrue(server.terminal.await(5, TimeUnit.SECONDS));
             assertEquals(0, server.requestBytes.get(), "hostname failure must precede HTTP request bytes");
+            assertEquals(1, server.lookup.invocationCount());
+            assertEquals(List.of("webhook.test."), server.lookup.absoluteHostnames());
+            assertEquals(List.of(loopback(2)), server.localPeers);
         }
     }
 
     private CloseableHttpClient client(TlsListener server, String ignoredServerCertificate) throws Exception {
+        return clientFor(server);
+    }
+
+    static CloseableHttpClient clientFor(TlsListener server) throws Exception {
         SSLContext clientContext = trustContext(certificate("p03-test-ca.pem"));
         ControllableHostAddressLookup lookup = new ControllableHostAddressLookup().enqueue(loopback(2));
+        server.lookup = lookup;
         PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup, testPolicy());
         PoolingHttpClientConnectionManager manager = PoolingHttpClientConnectionManagerBuilder.create()
                 .setDnsResolver(resolver)
@@ -166,13 +179,16 @@ class WebhookTlsIdentityIntegrationTest {
         return input;
     }
 
-    private static final class TlsListener implements AutoCloseable {
+    static final class TlsListener implements AutoCloseable {
         private final SSLServerSocket server;
         private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         private final CountDownLatch accepted = new CountDownLatch(1);
         private final CountDownLatch requestSeen = new CountDownLatch(1);
+        private final CountDownLatch terminal = new CountDownLatch(1);
         private final AtomicInteger acceptedSockets = new AtomicInteger();
-        private final AtomicInteger requestBytes = new AtomicInteger();
+        final AtomicInteger requestBytes = new AtomicInteger();
+        final List<InetAddress> localPeers = new CopyOnWriteArrayList<>();
+        volatile ControllableHostAddressLookup lookup;
         private volatile String sniHost;
         private volatile String hostHeader;
 
@@ -195,6 +211,7 @@ class WebhookTlsIdentityIntegrationTest {
         private void serve() {
             try (SSLSocket socket = (SSLSocket) server.accept()) {
                 acceptedSockets.incrementAndGet();
+                localPeers.add(socket.getLocalAddress());
                 accepted.countDown();
                 try {
                     socket.startHandshake();
@@ -226,6 +243,8 @@ class WebhookTlsIdentityIntegrationTest {
                 }
             } catch (IOException ignored) {
                 // close interrupts accept
+            } finally {
+                terminal.countDown();
             }
         }
 
