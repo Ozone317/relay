@@ -62,9 +62,9 @@ class ApacheDnsSocketBindingIntegrationTest {
     @Test
     @ResourceLock(Resources.SYSTEM_PROPERTIES)
     void bindsOnlyToResolverReturnedAddressAndReusesValidatedSocketDespiteProxyProperties() throws Exception {
-        try (HttpFixture destination = HttpFixture.keepAlive(2, InetAddress.getLoopbackAddress());
-                HttpFixture destinationTrap = HttpFixture.keepAlive(1, InetAddress.getByName("::1"), destination.port());
-                HttpFixture proxy = HttpFixture.keepAlive(1, InetAddress.getLoopbackAddress())) {
+        try (HttpFixture destination = HttpFixture.keepAlive(2, safeIpv4());
+                HttpFixture destinationTrap = HttpFixture.keepAlive(1, ipv6Loopback(), destination.port());
+                HttpFixture proxy = HttpFixture.keepAlive(1, safeIpv4())) {
             String oldProxyHost = System.getProperty("http.proxyHost");
             String oldProxyPort = System.getProperty("http.proxyPort");
             System.setProperty("http.proxyHost", "127.0.0.1");
@@ -72,22 +72,22 @@ class ApacheDnsSocketBindingIntegrationTest {
             try {
                 // Properties must be installed before the production client is built: this is the
                 // only point at which a useSystemProperties mutation can capture them.
-                try (CloseableHttpClient client = clientFor(legacyFallbackProbe(destination))) {
-                ClassicHttpResponse first = execute(client, new HttpGet(uri(destination, "/one")));
-                EntityUtils.consume(first.getEntity());
-                first.close();
-                ClassicHttpResponse second = execute(client, new HttpGet(uri(destination, "/two")));
-                EntityUtils.consume(second.getEntity());
-                second.close();
+                try (CloseableHttpClient client = clientFor(destination, true)) {
+                    ClassicHttpResponse first = execute(client, new HttpGet(uri(destination, "/one")));
+                    EntityUtils.consume(first.getEntity());
+                    first.close();
+                    ClassicHttpResponse second = execute(client, new HttpGet(uri(destination, "/two")));
+                    EntityUtils.consume(second.getEntity());
+                    second.close();
 
-                assertTrue(destination.requests.await(5, TimeUnit.SECONDS));
-                assertEquals(1, destination.acceptedSockets.get());
-                assertEquals(2, destination.requestsSeen.get());
-                assertEquals(List.of(TARGET_HOST + ":" + destination.port(), TARGET_HOST + ":" + destination.port()),
-                        destination.hostHeaders);
-                assertEquals(0, destinationTrap.acceptedSockets.get());
-                assertEquals(0, proxy.acceptedSockets.get());
-                assertEquals(1, destination.resolverCalls.get());
+                    assertTrue(destination.requests.await(5, TimeUnit.SECONDS));
+                    assertEquals(1, destination.acceptedSockets.get());
+                    assertEquals(2, destination.requestsSeen.get());
+                    assertEquals(List.of(TARGET_HOST + ":" + destination.port(), TARGET_HOST + ":" + destination.port()),
+                            destination.hostHeaders);
+                    assertEquals(0, destinationTrap.acceptedSockets.get());
+                    assertEquals(0, proxy.acceptedSockets.get());
+                    assertEquals(1, destination.resolverCalls.get());
                 }
             } finally {
                 restoreProperty("http.proxyHost", oldProxyHost);
@@ -98,8 +98,8 @@ class ApacheDnsSocketBindingIntegrationTest {
 
     @Test
     void returnsRedirectWithoutFollowingTrapLocation() throws Exception {
-        try (HttpFixture trap = HttpFixture.keepAlive(1, InetAddress.getLoopbackAddress());
-                HttpFixture destination = HttpFixture.redirect(trap.port(), InetAddress.getLoopbackAddress());
+        try (HttpFixture trap = HttpFixture.keepAlive(1, safeIpv4());
+                HttpFixture destination = HttpFixture.redirect(trap.port(), safeIpv4());
                 CloseableHttpClient client = clientFor(destination, false)) {
             ClassicHttpResponse response = execute(client, new HttpGet(uri(destination, "/redirect")));
             try {
@@ -143,9 +143,24 @@ class ApacheDnsSocketBindingIntegrationTest {
         }
     }
 
+    @Test
+    void portAwareResolverWinsOverLegacyResolverTrap() throws Exception {
+        try (HttpFixture destination = HttpFixture.keepAlive(1, safeIpv4());
+                HttpFixture legacyTrap = HttpFixture.keepAlive(1, ipv6Loopback(), destination.port());
+                CloseableHttpClient client = clientFor(legacyFallbackProbe(destination))) {
+            ClassicHttpResponse response = execute(client, new HttpGet(uri(destination, "/port-aware")));
+            EntityUtils.consume(response.getEntity());
+            response.close();
+            assertTrue(destination.requests.await(5, TimeUnit.SECONDS));
+            assertEquals(1, destination.acceptedSockets.get());
+            assertEquals(0, legacyTrap.acceptedSockets.get());
+            assertEquals(1, destination.resolverCalls.get());
+        }
+    }
+
     private CloseableHttpClient clientFor(HttpFixture destination, boolean failover) throws Exception {
-        InetAddress unavailable = InetAddress.getByName("127.0.0.2");
-        InetAddress permitted = InetAddress.getByName("127.0.0.1");
+        InetAddress unavailable = ipv4(127, 0, 0, 2);
+        InetAddress permitted = safeIpv4();
         HostAddressLookup lookup = (hostname, deadline) -> {
             if (failover) {
                 return List.of(unavailable, permitted);
@@ -178,11 +193,11 @@ class ApacheDnsSocketBindingIntegrationTest {
     }
 
     private static DnsResolver legacyFallbackProbe(HttpFixture destination) throws Exception {
-        InetAddress trapAddress = InetAddress.getByName("::1");
-        InetAddress unavailable = InetAddress.getByName("127.0.0.2");
+        InetAddress trapAddress = ipv6Loopback();
+        InetAddress unavailable = ipv4(127, 0, 0, 2);
         HostAddressLookup lookup = (hostname, deadline) -> {
             destination.resolverCalls.incrementAndGet();
-            return List.of(unavailable, InetAddress.getLoopbackAddress());
+            return List.of(unavailable, safeIpv4());
         };
         PolicyEnforcingDnsResolver enforcing = new PolicyEnforcingDnsResolver(lookup,
                 testPolicyAllowingLoopback());
@@ -216,6 +231,28 @@ class ApacheDnsSocketBindingIntegrationTest {
         return "http://" + TARGET_HOST + ":" + fixture.port() + path;
     }
 
+    private static InetAddress safeIpv4() {
+        return ipv4(127, 0, 0, 1);
+    }
+
+    private static InetAddress ipv4(int first, int second, int third, int fourth) {
+        return explicitAddress(new byte[] {(byte) first, (byte) second, (byte) third, (byte) fourth});
+    }
+
+    private static InetAddress ipv6Loopback() {
+        byte[] address = new byte[16];
+        address[15] = 1;
+        return explicitAddress(address);
+    }
+
+    private static InetAddress explicitAddress(byte[] address) {
+        try {
+            return InetAddress.getByAddress(address);
+        } catch (java.net.UnknownHostException exception) {
+            throw new AssertionError("fixed test address must be valid", exception);
+        }
+    }
+
     private static PublicDestinationAddressPolicy testPolicyAllowingLoopback() {
         SpecialPurposeAddressCatalog fixture = new SpecialPurposeAddressCatalog(new ByteArrayInputStream(
                 "0.0.0.0/32|TEST_SENTINEL\n".getBytes(StandardCharsets.UTF_8)));
@@ -245,7 +282,7 @@ class ApacheDnsSocketBindingIntegrationTest {
         private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
         private HttpFixture(Mode mode, int expectedRequests) throws IOException {
-            this(mode, expectedRequests, -1, InetAddress.getLoopbackAddress(), 1, 0);
+            this(mode, expectedRequests, -1, safeIpv4(), 1, 0);
         }
 
         private HttpFixture(Mode mode, int expectedRequests, int redirectPort, InetAddress bindAddress,
@@ -260,7 +297,7 @@ class ApacheDnsSocketBindingIntegrationTest {
         }
 
         static HttpFixture keepAlive(int expectedRequests) throws IOException {
-            return keepAlive(expectedRequests, InetAddress.getLoopbackAddress());
+            return keepAlive(expectedRequests, safeIpv4());
         }
 
         static HttpFixture keepAlive(int expectedRequests, InetAddress bindAddress) throws IOException {
@@ -272,11 +309,11 @@ class ApacheDnsSocketBindingIntegrationTest {
         }
 
         static HttpFixture dropPost() throws IOException {
-            return new HttpFixture(Mode.DROP, 1, -1, InetAddress.getLoopbackAddress(), 4, 0);
+            return new HttpFixture(Mode.DROP, 1, -1, safeIpv4(), 4, 0);
         }
 
         static HttpFixture dropGet() throws IOException {
-            return new HttpFixture(Mode.DROP, 1, -1, InetAddress.getLoopbackAddress(), 4, 0);
+            return new HttpFixture(Mode.DROP, 1, -1, safeIpv4(), 4, 0);
         }
 
         static HttpFixture redirect(int trapPort, InetAddress bindAddress) throws IOException {
