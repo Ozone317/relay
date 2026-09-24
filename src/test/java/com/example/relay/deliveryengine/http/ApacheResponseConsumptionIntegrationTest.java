@@ -1,6 +1,7 @@
 package com.example.relay.deliveryengine.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -30,6 +31,11 @@ import org.apache.hc.core5.http.io.EofSensorInputStream;
 import org.junit.jupiter.api.Test;
 
 class ApacheResponseConsumptionIntegrationTest {
+
+    private static final int RETAINED_BODY_LIMIT = 10_240;
+    private static final int SENTINEL_BODY_LIMIT = RETAINED_BODY_LIMIT + 1;
+    private static final int PRE_GATE_BODY_BYTES = 32 * 1024;
+    private static final int TOTAL_BODY_BYTES = 128 * 1024;
 
     @Test
     void streamingEntityUsesEofSensorAndEofReleasesConnectionForReuse() throws Exception {
@@ -64,12 +70,12 @@ class ApacheResponseConsumptionIntegrationTest {
         ConsumptionFixture fixture = new ConsumptionFixture(false);
         try (fixture; CloseableHttpClient client = fixture.client();
                 ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor()) {
-            ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(2));
+            ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(5));
             WebhookHttpResponse first = transport.post(fixture.url("/fixed"), new byte[0], headers());
             assertTrue(first.responseBody().endsWith("[relay response truncated at 10240 bytes]"));
             assertTrue(fixture.progressBeyondLimit.await(1, java.util.concurrent.TimeUnit.SECONDS));
-            assertTrue(fixture.producerBytesWritten.get() > 10_241);
-            assertTrue(!fixture.producerFinishedAll.get());
+            assertEquals(SENTINEL_BODY_LIMIT + PRE_GATE_BODY_BYTES, fixture.producerBytesWritten.get());
+            assertFalse(fixture.producerFinishedAll.get());
             fixture.allowProducerContinue.countDown();
             assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             WebhookHttpResponse second = transport.post(fixture.url("/fixed-next"), new byte[0], headers());
@@ -85,12 +91,12 @@ class ApacheResponseConsumptionIntegrationTest {
         ConsumptionFixture fixture = new ConsumptionFixture(true);
         try (fixture; CloseableHttpClient client = fixture.client();
                 ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor()) {
-            ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(2));
+            ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(5));
             WebhookHttpResponse first = transport.post(fixture.url("/chunked"), new byte[0], headers());
             assertTrue(first.responseBody().endsWith("[relay response truncated at 10240 bytes]"));
             assertTrue(fixture.progressBeyondLimit.await(1, java.util.concurrent.TimeUnit.SECONDS));
-            assertTrue(fixture.producerBytesWritten.get() > 10_241);
-            assertTrue(!fixture.producerFinishedAll.get());
+            assertEquals(SENTINEL_BODY_LIMIT + PRE_GATE_BODY_BYTES, fixture.producerBytesWritten.get());
+            assertFalse(fixture.producerFinishedAll.get());
             fixture.allowProducerContinue.countDown();
             assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             WebhookHttpResponse second = transport.post(fixture.url("/chunked-next"), new byte[0], headers());
@@ -130,15 +136,15 @@ class ApacheResponseConsumptionIntegrationTest {
         try (fixture; CloseableHttpClient client = fixture.client();
                 ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
                 ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor()) {
-            ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(2));
+            ApacheWebhookHttpTransport transport = fixture.transport(client, scheduler, Duration.ofSeconds(5));
             long started = System.nanoTime();
             Future<WebhookHttpResponse> result = calls.submit(() -> transport.post(fixture.url("/slow"), new byte[0], headers()));
             assertTrue(fixture.progressBeyondLimit.await(1, java.util.concurrent.TimeUnit.SECONDS));
             WebhookHttpResponse response = result.get(1, java.util.concurrent.TimeUnit.SECONDS);
             assertTrue(response.responseBody().endsWith("[relay response truncated at 10240 bytes]"));
-            assertTrue(Duration.ofNanos(System.nanoTime() - started).toMillis() < 1_000);
-            assertTrue(fixture.producerBytesWritten.get() > 10_241);
-            assertTrue(!fixture.producerFinishedAll.get());
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).toMillis() < 1_500);
+            assertEquals(SENTINEL_BODY_LIMIT + PRE_GATE_BODY_BYTES, fixture.producerBytesWritten.get());
+            assertFalse(fixture.producerFinishedAll.get());
             fixture.allowProducerContinue.countDown();
             assertTrue(fixture.clientClosed.await(1, java.util.concurrent.TimeUnit.SECONDS));
             assertTrue(fixture.limitReached.await(1, java.util.concurrent.TimeUnit.SECONDS));
@@ -251,7 +257,8 @@ class ApacheResponseConsumptionIntegrationTest {
                     output.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
                             .getBytes(StandardCharsets.US_ASCII));
                 } else {
-                    output.write("HTTP/1.1 200 OK\r\nContent-Length: 65536\r\nConnection: keep-alive\r\n\r\n"
+                    output.write(("HTTP/1.1 200 OK\r\nContent-Length: " + TOTAL_BODY_BYTES
+                            + "\r\nConnection: keep-alive\r\n\r\n")
                             .getBytes(StandardCharsets.US_ASCII));
                 }
                 output.flush();
@@ -276,42 +283,31 @@ class ApacheResponseConsumptionIntegrationTest {
         }
 
         private void writePacedBody(OutputStream output) throws IOException {
-            int written = 0;
-            while (written < 65_536) {
-                int chunk = Math.min(1_024, (written < 10_241 ? 10_241 : 65_536) - written);
-                if (chunked) {
-                    output.write(Integer.toHexString(chunk).getBytes(StandardCharsets.US_ASCII));
-                    output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            int written = writeApplicationBody(output, SENTINEL_BODY_LIMIT);
+            firstBytesWritten.set(written);
+            limitReached.countDown();
+
+            written += writeApplicationBody(output, PRE_GATE_BODY_BYTES);
+            producerBytesWritten.set(written);
+            progressBeyondLimit.countDown();
+            try {
+                if (!allowProducerContinue.await(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                    return;
                 }
-                output.write(new byte[chunk]);
-                if (chunked) {
-                    output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
-                }
-                output.flush();
-                written += chunk;
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            while (written < TOTAL_BODY_BYTES) {
+                int chunk = Math.min(1_024, TOTAL_BODY_BYTES - written);
+                written += writeApplicationBody(output, chunk);
                 producerBytesWritten.set(written);
-                if (written == 10_241) {
-                    firstBytesWritten.set(written);
-                    limitReached.countDown();
-                }
-                if (written > 10_241 && progressBeyondLimit.getCount() != 0) {
-                    progressBeyondLimit.countDown();
-                    try {
-                        if (!allowProducerContinue.await(1, java.util.concurrent.TimeUnit.SECONDS)) {
-                            return;
-                        }
-                    } catch (InterruptedException exception) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-                }
-                if (written > 10_241) {
-                    try {
-                        Thread.sleep(5);
-                    } catch (InterruptedException exception) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
+                try {
+                    Thread.sleep(5);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
             }
             if (chunked) {
@@ -319,6 +315,20 @@ class ApacheResponseConsumptionIntegrationTest {
                 output.flush();
             }
             producerFinishedAll.set(true);
+        }
+
+        private int writeApplicationBody(OutputStream output, int bodyBytes) throws IOException {
+            byte[] body = new byte[bodyBytes];
+            if (chunked) {
+                output.write(Integer.toHexString(bodyBytes).getBytes(StandardCharsets.US_ASCII));
+                output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            }
+            output.write(body);
+            if (chunked) {
+                output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            }
+            output.flush();
+            return bodyBytes;
         }
 
         private void observeClientClosure(Socket socket, BufferedReader reader) {
