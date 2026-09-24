@@ -11,7 +11,9 @@ import org.apache.hc.client5.http.DnsResolver;
 
 import com.example.relay.deliveryengine.http.DeliveryDeadline;
 import com.example.relay.deliveryengine.http.DeliveryDeadlineContext;
+import com.example.relay.endpoint.domain.InvalidWebhookUriException;
 import com.example.relay.endpoint.domain.IpLiteral;
+import com.example.relay.endpoint.domain.WebhookUriParser;
 
 public final class PolicyEnforcingDnsResolver implements DnsResolver {
 
@@ -25,6 +27,7 @@ public final class PolicyEnforcingDnsResolver implements DnsResolver {
 
     @Override
     public List<InetSocketAddress> resolve(String host, int port) throws UnknownHostException {
+        DeliveryDeadline deadline = DeliveryDeadlineContext.current();
         if (host == null || host.isBlank() || port < 1 || port > 65_535) {
             throw unknownHost(host, new IllegalArgumentException("invalid host or port"));
         }
@@ -33,11 +36,19 @@ public final class PolicyEnforcingDnsResolver implements DnsResolver {
             return List.of(validatedAddress(literal.get().addressBytes(), port));
         }
 
-        DeliveryDeadline deadline = DeliveryDeadlineContext.current();
         if (deadline.remaining().isZero() || deadline.remaining().isNegative()) {
             throw unknownHost(host, new IllegalStateException("delivery deadline expired"));
         }
-        String absoluteHostname = host.endsWith(".") ? host : host + ".";
+        String normalizedHost;
+        try {
+            normalizedHost = WebhookUriParser.normalizeDnsHostname(host);
+        } catch (InvalidWebhookUriException exception) {
+            throw unknownHost(host, exception);
+        }
+        if (!normalizedHost.equals(host)) {
+            throw unknownHost(host, new IllegalArgumentException("hostname is not canonical"));
+        }
+        String absoluteHostname = normalizedHost + ".";
         List<InetAddress> candidates;
         try {
             candidates = lookup.lookup(absoluteHostname, deadline);

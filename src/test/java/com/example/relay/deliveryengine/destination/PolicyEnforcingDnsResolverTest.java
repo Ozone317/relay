@@ -88,7 +88,7 @@ class PolicyEnforcingDnsResolverTest {
         };
         PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
                 new PublicDestinationAddressPolicy());
-        resolve(resolver, "hooks.example.test.");
+        resolve(resolver, "hooks.example.test");
         assertEquals("hooks.example.test.", lookedUp.get());
     }
 
@@ -103,6 +103,27 @@ class PolicyEnforcingDnsResolverTest {
                 new PublicDestinationAddressPolicy());
         List<InetSocketAddress> result = resolve(resolver, "93.184.216.34");
         assertEquals(1, result.size());
+        assertEquals(null, lookedUp.get());
+    }
+
+    @Test
+    void permittedLiteralRequiresDeliveryDeadlineContext() {
+        PolicyEnforcingDnsResolver resolver = resolverWith(List.of());
+        assertThrows(IllegalStateException.class, () -> resolver.resolve("93.184.216.34", PORT));
+    }
+
+    @Test
+    void nonCanonicalHostnameIsRejectedBeforeLookup() {
+        AtomicReference<String> lookedUp = new AtomicReference<>();
+        HostAddressLookup lookup = (hostname, deadline) -> {
+            lookedUp.set(hostname);
+            return List.of(address("93.184.216.34"));
+        };
+        PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
+                new PublicDestinationAddressPolicy());
+        assertThrows(UnknownHostException.class, () -> resolve(resolver, "Hooks.Example.Test"));
+        assertEquals(null, lookedUp.get());
+        assertThrows(UnknownHostException.class, () -> resolve(resolver, "hooks.example.test."));
         assertEquals(null, lookedUp.get());
     }
 

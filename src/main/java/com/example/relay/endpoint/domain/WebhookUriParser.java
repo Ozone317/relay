@@ -76,7 +76,7 @@ public final class WebhookUriParser {
             if (bracketed || rawHost.indexOf(':') >= 0 || looksAmbiguousNumeric(rawHost)) {
                 throw invalid("Host is not a valid IP literal");
             }
-            normalizedHost = normalizeDnsHost(rawHost);
+            normalizedHost = normalizeDnsHostname(rawHost);
         }
 
         String authority = bracketed ? "[" + normalizedHost + "]" : normalizedHost;
@@ -97,7 +97,8 @@ public final class WebhookUriParser {
         }
     }
 
-    private static String normalizeDnsHost(String rawHost) {
+    /** Returns the canonical ASCII DNS name used by HTTP/TLS identity and absolute lookup. */
+    public static String normalizeDnsHostname(String rawHost) {
         String host = rawHost;
         if (host.endsWith(".")) {
             if (host.length() == 1 || host.endsWith("..")) {

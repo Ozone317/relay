@@ -83,4 +83,13 @@ class WebhookUriParserTest {
         assertEquals(1, WebhookUriParser.class.getDeclaredConstructors().length);
         assertEquals(0, WebhookUriParser.class.getDeclaredConstructors()[0].getParameterCount());
     }
+
+    @Test
+    void normalizeDnsHostnameExposesTaskACanonicalHostContract() {
+        assertEquals("example.com", WebhookUriParser.normalizeDnsHostname("example.com"));
+        assertEquals("xn--bcher-kva.example", WebhookUriParser.normalizeDnsHostname("BÜCHER.Example"));
+        assertEquals("example.com", WebhookUriParser.normalizeDnsHostname("example.com."));
+        assertThrows(InvalidWebhookUriException.class,
+                () -> WebhookUriParser.normalizeDnsHostname("localhost"));
+    }
 }
