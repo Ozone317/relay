@@ -16,14 +16,15 @@ import org.junit.jupiter.api.Test;
 class BoundedResponseBodyCaptureTest {
 
     @Test
-    void oversizedBody_readsOnlyTheDiagnosticPrefixAndSentinel_thenClosesTheStream() throws IOException {
+    void oversizedBody_readsOnlyTheDiagnosticPrefixAndSentinel_withoutClosingTheStream() throws IOException {
         CountingInputStream input = new CountingInputStream(
                 new ByteArrayInputStream("x".repeat(1_000_000).getBytes(StandardCharsets.UTF_8)));
 
-        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.captureAndClose(input);
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(input);
 
         assertEquals(10_241, input.bytesRead());
-        assertTrue(input.closed());
+        assertFalse(input.closed());
+        assertEquals(10_241, capture.bytesRead());
         assertTrue(capture.truncated());
         assertTrue(capture.body().length() <= 10_240);
         assertTrue(capture.body().endsWith("[relay response truncated at 10240 bytes]"));
@@ -33,16 +34,38 @@ class BoundedResponseBodyCaptureTest {
     void exactLimitBody_isRetainedWithoutATruncationMarker() throws IOException {
         String body = "x".repeat(10_240);
 
-        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.captureAndClose(
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
                 new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
 
         assertEquals(body, capture.body());
         assertFalse(capture.truncated());
+        assertEquals(10_240, capture.bytesRead());
+    }
+
+    @Test
+    void oneByteBody_isReadExactlyOnce() throws IOException {
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
+                new ByteArrayInputStream(new byte[] {'x'}));
+
+        assertEquals("x", capture.body());
+        assertFalse(capture.truncated());
+        assertEquals(1, capture.bytesRead());
+    }
+
+    @Test
+    void bodyLargerThanSentinel_readsExactlyTheSentinel() throws IOException {
+        byte[] body = new byte[20_000];
+
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
+                new ByteArrayInputStream(body));
+
+        assertTrue(capture.truncated());
+        assertEquals(10_241, capture.bytesRead());
     }
 
     @Test
     void emptyBody_isRepresentedAsNull() throws IOException {
-        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.captureAndClose(
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
                 InputStream.nullInputStream());
 
         assertNull(capture.body());
@@ -53,7 +76,7 @@ class BoundedResponseBodyCaptureTest {
     void malformedUtf8_isDecodedWithReplacementCharacters() throws IOException {
         byte[] malformed = {(byte) 0xC3, 0x28};
 
-        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.captureAndClose(
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
                 new ByteArrayInputStream(malformed));
 
         assertEquals("\uFFFD(", capture.body());
@@ -65,7 +88,7 @@ class BoundedResponseBodyCaptureTest {
         java.util.Arrays.fill(body, (byte) 'x');
         body[10_239] = (byte) 0xE2;
 
-        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.captureAndClose(
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
                 new ByteArrayInputStream(body));
 
         assertEquals("x".repeat(10_239) + "\uFFFD", capture.body());
@@ -80,7 +103,7 @@ class BoundedResponseBodyCaptureTest {
         byte[] euro = "€".getBytes(StandardCharsets.UTF_8);
         System.arraycopy(euro, 0, body, 10_239, euro.length);
 
-        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.captureAndClose(
+        BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
                 new ByteArrayInputStream(body));
 
         assertTrue(capture.truncated());
@@ -90,12 +113,12 @@ class BoundedResponseBodyCaptureTest {
     }
 
     @Test
-    void bodyReadFailure_isPropagatedAndStillClosesTheStream() {
+    void bodyReadFailure_isPropagatedWithoutUtilityClosingTheStream() {
         FailingInputStream input = new FailingInputStream();
 
-        assertThrows(IOException.class, () -> BoundedResponseBodyCapture.captureAndClose(input));
+        assertThrows(IOException.class, () -> BoundedResponseBodyCapture.capture(input));
 
-        assertTrue(input.closed());
+        assertFalse(input.closed());
     }
 
     private static final class CountingInputStream extends FilterInputStream {

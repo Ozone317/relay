@@ -22,6 +22,7 @@ import org.springframework.web.client.RestClient;
 import com.example.relay.deliveryengine.destination.PolicyEnforcingDnsResolver;
 import com.example.relay.deliveryengine.destination.PublicDestinationAddressPolicy;
 import com.example.relay.deliveryengine.destination.SystemHostAddressLookup;
+import com.example.relay.deliveryengine.http.BoundedApacheResponseBodyConsumer;
 
 @Configuration
 public class DeliveryHttpClientConfig {
@@ -86,6 +87,11 @@ public class DeliveryHttpClientConfig {
                 .disableRedirectHandling()
                 .disableAutomaticRetries()
                 .build();
+    }
+
+    @Bean
+    public BoundedApacheResponseBodyConsumer deliveryResponseBodyConsumer() {
+        return new BoundedApacheResponseBodyConsumer();
     }
 
     @Bean
