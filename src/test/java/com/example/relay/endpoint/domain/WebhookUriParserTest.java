@@ -40,7 +40,7 @@ class WebhookUriParserTest {
                         "xn--bcher-kva.example", 443, false),
                 Arguments.of("https://example.com./hook", "https://example.com/hook", "example.com", 443, false),
                 Arguments.of("http://example.com:1/hook", "http://example.com:1/hook", "example.com", 1, false),
-                Arguments.of("https://example.com:65535/hook?sig=a%2Fb&x=1", 
+                Arguments.of("https://example.com:65535/hook?sig=a%2Fb&x=1",
                         "https://example.com:65535/hook?sig=a%2Fb&x=1", "example.com", 65535, false),
                 Arguments.of("http://example.com/a%2Fb?x=%2F", "http://example.com/a%2Fb?x=%2F", "example.com", 80,
                         false));

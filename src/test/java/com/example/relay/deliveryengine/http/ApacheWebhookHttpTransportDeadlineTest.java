@@ -18,7 +18,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketException;
-import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -56,6 +55,9 @@ import org.junit.jupiter.api.Test;
 
 class ApacheWebhookHttpTransportDeadlineTest {
 
+    private static final Duration PHASE_TEST_BUDGET = Duration.ofMillis(250);
+    private static final long DEADLINE_TOLERANCE_MILLIS = 75;
+
     @Test
     void clearsDeadlineContextAfterUnexpectedExchangeException() throws Exception {
         try (ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor()) {
@@ -80,12 +82,14 @@ class ApacheWebhookHttpTransportDeadlineTest {
             ApacheWebhookHttpTransport transport = new ApacheWebhookHttpTransport(client, input -> {
                 input.read();
                 return "unreachable";
-            }, scheduler, new com.example.relay.endpoint.domain.WebhookUriParser(), Duration.ofMillis(120));
+            }, scheduler, new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
+            long started = System.nanoTime();
             Future<WebhookHttpResponse> result =
                     calls.submit(() -> transport.post("http://webhook.test:" + server.getLocalPort() + "/hook",
                             new byte[0], new WebhookHeaders("id", 1, "sig")));
             assertEquals(true, headersSent.await(1, TimeUnit.SECONDS));
             ExecutionException failure = assertThrows(ExecutionException.class, () -> result.get(1, TimeUnit.SECONDS));
+            assertWithinSingleBudget(started, PHASE_TEST_BUDGET, "response body");
             assertEquals(WebhookFailureCode.DELIVERY_TIMEOUT,
                     ((WebhookDeliveryException) failure.getCause()).failureCode());
             assertThrows(IllegalStateException.class, DeliveryDeadlineContext::current);
@@ -172,24 +176,23 @@ class ApacheWebhookHttpTransportDeadlineTest {
                 firstResponseBodyHeld.countDown();
                 input.read();
                 return "unreachable";
-            }, scheduler, new com.example.relay.endpoint.domain.WebhookUriParser(), Duration.ofMillis(160));
+            }, scheduler, new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
             Future<WebhookHttpResponse> firstResult =
                     calls.submit(() -> first.post("http://webhook.test:" + server.getLocalPort() + "/first",
                             new byte[0], new WebhookHeaders("id", 1, "sig")));
             assertEquals(true, firstResponseBodyHeld.await(1, TimeUnit.SECONDS));
 
             ApacheWebhookHttpTransport second = new ApacheWebhookHttpTransport(client, input -> "", scheduler,
-                    new com.example.relay.endpoint.domain.WebhookUriParser(), Duration.ofMillis(160));
+                    new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
             long started = System.nanoTime();
             WebhookDeliveryException exception = assertThrows(WebhookDeliveryException.class,
                     () -> second.post("http://webhook.test:" + server.getLocalPort() + "/second", new byte[0],
                             new WebhookHeaders("id", 1, "sig")));
             long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
             assertEquals(WebhookFailureCode.DELIVERY_TIMEOUT, exception.failureCode());
-            org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis >= 100,
-                    "pool contention should consume the configured budget: " + elapsedMillis);
-            org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis < 360,
-                    "pool contention must not receive independent phase budgets: " + elapsedMillis);
+            org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis <= PHASE_TEST_BUDGET.toMillis()
+                    + DEADLINE_TOLERANCE_MILLIS,
+                    "pool contention exceeded one shared budget: " + elapsedMillis);
             firstResult.cancel(true);
         } finally {
             closeQuietly(firstSocket.get());
@@ -204,20 +207,22 @@ class ApacheWebhookHttpTransportDeadlineTest {
         BlockingSocketFactory socketFactory = new BlockingSocketFactory(connectStarted, socketClosed,
                 connectTimeoutMillis);
         try (ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-                CloseableHttpClient client = clientForSocketFactory(socketFactory)) {
+                CloseableHttpClient client = clientForSocketFactory(socketFactory);
+                ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor()) {
             ApacheWebhookHttpTransport transport = new ApacheWebhookHttpTransport(client, input -> "", scheduler,
-                    new com.example.relay.endpoint.domain.WebhookUriParser(), Duration.ofMillis(160));
+                    new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
             long started = System.nanoTime();
-            WebhookDeliveryException exception = assertThrows(WebhookDeliveryException.class,
-                    () -> transport.post("http://webhook.test/hook", new byte[0], new WebhookHeaders("id", 1, "sig")));
-            long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            Future<WebhookHttpResponse> result = calls.submit(() -> transport.post("http://webhook.test/hook",
+                    new byte[0], new WebhookHeaders("id", 1, "sig")));
+            assertEquals(true, connectStarted.await(1, TimeUnit.SECONDS));
+            ExecutionException failure = assertThrows(ExecutionException.class, () -> result.get(1, TimeUnit.SECONDS));
+            WebhookDeliveryException exception = (WebhookDeliveryException) failure.getCause();
+            assertWithinSingleBudget(started, PHASE_TEST_BUDGET, "TCP connect cancellation");
             assertEquals(WebhookFailureCode.DELIVERY_TIMEOUT, exception.failureCode());
             assertEquals(true, connectStarted.await(1, TimeUnit.SECONDS));
             org.junit.jupiter.api.Assertions.assertTrue(connectTimeoutMillis.get() > 0);
-            org.junit.jupiter.api.Assertions.assertTrue(connectTimeoutMillis.get() <= 160);
             assertEquals(true, socketClosed.await(1, TimeUnit.SECONDS));
-            org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis < 360,
-                    "TCP connect must not receive independent phase budgets: " + elapsedMillis);
+            org.junit.jupiter.api.Assertions.assertTrue(connectTimeoutMillis.get() <= PHASE_TEST_BUDGET.toMillis());
         }
     }
 
@@ -231,20 +236,62 @@ class ApacheWebhookHttpTransportDeadlineTest {
                 ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor()) {
             Thread.startVirtualThread(() -> withholdResponseHeaders(server, requestReceived, acceptedSocket));
             ApacheWebhookHttpTransport transport = new ApacheWebhookHttpTransport(client, input -> "", scheduler,
-                    new com.example.relay.endpoint.domain.WebhookUriParser(), Duration.ofMillis(160));
+                    new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
+            long started = System.nanoTime();
             Future<WebhookHttpResponse> result =
                     calls.submit(() -> transport.post("http://webhook.test:" + server.getLocalPort() + "/headers",
                             new byte[0], new WebhookHeaders("id", 1, "sig")));
             assertEquals(true, requestReceived.await(1, TimeUnit.SECONDS));
-            long started = System.nanoTime();
             ExecutionException failure = assertThrows(ExecutionException.class, () -> result.get(1, TimeUnit.SECONDS));
-            long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            assertWithinSingleBudget(started, PHASE_TEST_BUDGET, "response headers");
             assertEquals(WebhookFailureCode.DELIVERY_TIMEOUT,
                     ((WebhookDeliveryException) failure.getCause()).failureCode());
-            org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis < 360,
-                    "response-header stall must not receive independent phase budgets: " + elapsedMillis);
         } finally {
             closeQuietly(acceptedSocket.get());
+        }
+    }
+
+    @Test
+    void poolWaitThenResponseHeadersShareOneAbsoluteDeadline() throws Exception {
+        CountDownLatch firstResponseBodyHeld = new CountDownLatch(1);
+        CountDownLatch releaseFirstResponse = new CountDownLatch(1);
+        CountDownLatch secondRequestReceived = new CountDownLatch(1);
+        AtomicReference<Socket> firstSocket = new AtomicReference<>();
+        AtomicReference<Socket> secondSocket = new AtomicReference<>();
+        try (ServerSocket server = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+                CloseableHttpClient client = clientForLoopback(1);
+                ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+                ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor()) {
+            Thread.startVirtualThread(() -> holdFirstThenWithholdHeaders(server, firstResponseBodyHeld,
+                    releaseFirstResponse, secondRequestReceived, firstSocket, secondSocket));
+            ApacheWebhookHttpTransport first = new ApacheWebhookHttpTransport(client, input -> {
+                firstResponseBodyHeld.countDown();
+                input.read();
+                return "unreachable";
+            }, scheduler, new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
+            Future<WebhookHttpResponse> firstResult = calls.submit(() -> first.post(
+                    "http://webhook.test:" + server.getLocalPort() + "/first", new byte[0],
+                    new WebhookHeaders("id", 1, "sig")));
+            assertEquals(true, firstResponseBodyHeld.await(1, TimeUnit.SECONDS));
+
+            ApacheWebhookHttpTransport second = new ApacheWebhookHttpTransport(client, input -> "", scheduler,
+                    new com.example.relay.endpoint.domain.WebhookUriParser(), PHASE_TEST_BUDGET);
+            long started = System.nanoTime();
+            Future<WebhookHttpResponse> secondResult = calls.submit(() -> second.post(
+                    "http://webhook.test:" + server.getLocalPort() + "/second", new byte[0],
+                    new WebhookHeaders("id", 1, "sig")));
+            Thread.sleep(120);
+            releaseFirstResponse.countDown();
+            assertEquals(true, secondRequestReceived.await(1, TimeUnit.SECONDS));
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> secondResult.get(1, TimeUnit.SECONDS));
+            assertEquals(WebhookFailureCode.DELIVERY_TIMEOUT,
+                    ((WebhookDeliveryException) failure.getCause()).failureCode());
+            assertWithinSingleBudget(started, PHASE_TEST_BUDGET, "pool plus response headers");
+            firstResult.cancel(true);
+        } finally {
+            closeQuietly(firstSocket.get());
+            closeQuietly(secondSocket.get());
         }
     }
 
@@ -472,6 +519,12 @@ class ApacheWebhookHttpTransportDeadlineTest {
         }
     }
 
+    private static void assertWithinSingleBudget(long started, Duration budget, String phase) {
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+        org.junit.jupiter.api.Assertions.assertTrue(elapsedMillis <= budget.toMillis() + DEADLINE_TOLERANCE_MILLIS,
+                phase + " exceeded one absolute budget: " + elapsedMillis + "ms");
+    }
+
     private static CloseableHttpClient clientForLoopback() {
         return clientForLoopback(40);
     }
@@ -542,6 +595,41 @@ class ApacheWebhookHttpTransportDeadlineTest {
             }
         } catch (IOException ignored) {
             // Closing the accepted socket is the deterministic cancellation signal for this fixture.
+        }
+    }
+
+    private static void holdFirstThenWithholdHeaders(ServerSocket server, CountDownLatch firstResponseSent,
+            CountDownLatch releaseFirstResponse, CountDownLatch secondRequestReceived,
+            AtomicReference<Socket> firstSocket,
+            AtomicReference<Socket> secondSocket) {
+        try {
+            Socket first = server.accept();
+            firstSocket.set(first);
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(first.getInputStream(),
+                    StandardCharsets.ISO_8859_1)); OutputStream output = first.getOutputStream()) {
+                readRequestHeaders(reader);
+                output.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
+                        .getBytes(StandardCharsets.US_ASCII));
+                output.flush();
+                firstResponseSent.countDown();
+                if (!releaseFirstResponse.await(1, TimeUnit.SECONDS)) {
+                    return;
+                }
+                output.write('x');
+                output.flush();
+            }
+            Socket second = server.accept();
+            secondSocket.set(second);
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(second.getInputStream(),
+                    StandardCharsets.ISO_8859_1))) {
+                readRequestHeaders(reader);
+                secondRequestReceived.countDown();
+                second.getInputStream().read();
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        } catch (IOException ignored) {
+            // Fixture teardown closes the accepted sockets.
         }
     }
 
@@ -703,15 +791,21 @@ class ApacheWebhookHttpTransportDeadlineTest {
         public void connect(SocketAddress endpoint, int timeout) throws IOException {
             connectTimeoutMillis.set(timeout);
             connectStarted.countDown();
+            boolean interrupted = false;
             try {
-                if (closed.await(timeout, TimeUnit.MILLISECONDS)) {
-                    throw new SocketException("socket closed by request cancellation");
+                while (closed.getCount() != 0) {
+                    try {
+                        closed.await();
+                    } catch (InterruptedException exception) {
+                        interrupted = true;
+                    }
                 }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new SocketException("socket connect interrupted");
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
-            throw new SocketTimeoutException("deterministic connect stall");
+            throw new SocketException("socket closed by request cancellation");
         }
 
         @Override
