@@ -12,8 +12,16 @@ import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.domain.DeliveryStatus;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
+import com.example.relay.deliveryengine.config.DeliveryHttpClientConfig;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.destination.HostAddressLookup;
+import com.example.relay.deliveryengine.destination.PolicyEnforcingDnsResolver;
+import com.example.relay.deliveryengine.destination.PublicDestinationAddressPolicy;
+import com.example.relay.deliveryengine.destination.SpecialPurposeAddressCatalog;
 import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
+import com.example.relay.deliveryengine.http.ApacheWebhookHttpTransport;
+import com.example.relay.deliveryengine.http.BoundedApacheResponseBodyConsumer;
+import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
 import com.example.relay.environment.domain.Environment;
@@ -30,8 +38,12 @@ import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -41,8 +53,15 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -60,6 +79,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @Testcontainers
 @org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@Import(DeliveryReplayLifecycleIntegrationTest.LoopbackWebhookTransportConfiguration.class)
 @TestPropertySource(properties = "relay.retry.scheduling-enabled=false")
 public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresContainer {
 
@@ -119,6 +139,10 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     private App app;
     private Event event;
     private Message message;
+
+    private String webhookUrl(String path) {
+        return "http://webhook.test:" + mockWebServer.getPort() + path;
+    }
 
     @BeforeEach
     void setUp() throws IOException {
@@ -187,7 +211,7 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     @Test
     void replaySucceeds_marksTheNewAttemptSucceeded() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
-        Delivery delivery = persistDeadDelivery(mockWebServer.url("/webhook").toString());
+        Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
         Attempt dead =
                 attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
                         .getContent().get(0);
@@ -205,7 +229,7 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     @Test
     void replayFails_goesStraightBackToDead_notFailedRetryingOrScheduled() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("still broken"));
-        Delivery delivery = persistDeadDelivery(mockWebServer.url("/webhook").toString());
+        Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
 
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
         readyWorkDispatcher.dispatchOnce();
@@ -223,7 +247,7 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     void aFailedReplay_canBeReplayedAgain_attemptNoKeepsIncrementing() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("still broken"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
-        Delivery delivery = persistDeadDelivery(mockWebServer.url("/webhook").toString());
+        Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
         Attempt dead =
                 attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
                         .getContent().get(0);
@@ -242,5 +266,40 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
             assertEquals(dead.getAttemptNo() + 2, reloaded.getAttemptNo());
         });
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class LoopbackWebhookTransportConfiguration {
+
+        @Bean(name = "replayDeliveryConnectionManager", destroyMethod = "close")
+        @Primary
+        PoolingHttpClientConnectionManager replayDeliveryConnectionManager() {
+            DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
+            HostAddressLookup lookup = (absoluteHostname, deadline) -> List.of(InetAddress.getLoopbackAddress());
+            PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
+                    loopbackPermittingPolicy());
+            return config.deliveryConnectionManager(resolver);
+        }
+
+        @Bean(name = "replayDeliveryApacheHttpClient", destroyMethod = "close")
+        @Primary
+        CloseableHttpClient replayDeliveryApacheHttpClient(
+                @Qualifier("replayDeliveryConnectionManager") PoolingHttpClientConnectionManager manager) {
+            return new DeliveryHttpClientConfig().deliveryApacheHttpClient(manager);
+        }
+
+        @Bean
+        @Primary
+        WebhookHttpTransport replayWebhookHttpTransport(
+                @Qualifier("replayDeliveryApacheHttpClient") CloseableHttpClient client) {
+            return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer());
+        }
+
+        private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {
+            byte[] sentinelCatalog = "0.0.0.0/32|TEST_SENTINEL\n::/128|TEST_SENTINEL\n"
+                    .getBytes(StandardCharsets.UTF_8);
+            return new PublicDestinationAddressPolicy(
+                    new SpecialPurposeAddressCatalog(new ByteArrayInputStream(sentinelCatalog)));
+        }
     }
 }
