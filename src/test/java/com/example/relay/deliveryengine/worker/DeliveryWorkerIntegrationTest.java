@@ -160,9 +160,11 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     private RetryJitterSource retryJitterSource;
 
     private MockWebServer mockWebServer;
+    private static final AtomicInteger resolverInvocations = new AtomicInteger();
 
     @BeforeEach
     void setUp() throws Exception {
+        resolverInvocations.set(0);
         when(clock.instant()).thenReturn(FIXED_RETRY_NOW);
         when(retryJitterSource.next(any(Duration.class))).thenReturn(Duration.ZERO);
         clearDatabase();
@@ -308,10 +310,12 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertEquals(200, reloaded.getResponseCode());
             assertEquals("ok", reloaded.getResponseBody());
         });
+        assertEquals(1, resolverInvocations.get(), "public webhook.test destination must use the enforcing resolver");
+        assertEquals(1, mockWebServer.getRequestCount());
     }
 
     @Test
-    void largeSuccessfulResponse_isBoundedAndStillCommitsSuccess() {
+    void largeSuccessfulResponse_isBoundedAndStillCommitsSuccess() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("x".repeat(11_000)));
         Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
@@ -325,14 +329,26 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
         });
 
-        assertEquals(1, mockWebServer.getRequestCount());
+        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(firstRequest);
+        assertEquals(0, firstRequest.getSequenceNumber());
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("replacement response"));
+        Attempt replacementAttempt = persistAttempt(webhookUrl("/replacement"), 1);
+        attemptPublisher.publish(replacementAttempt.getId());
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.SUCCEEDED,
+                        attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
+        RecordedRequest replacementRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(replacementRequest);
+        assertEquals(0, replacementRequest.getSequenceNumber(),
+                "truncating a fixed-length response must discard its connection");
         assertEquals(0, attemptService.resetStuck(
                 attempt.getId(), Instant.now().plusSeconds(1), Instant.now()),
                 "a successfully completed attempt must not become executable through IN_FLIGHT recovery");
     }
 
     @Test
-    void largeNon2xxResponse_isBoundedAndParentAndRetryCommitAtomically() {
+    void largeNon2xxResponse_isBoundedAndParentAndRetryCommitAtomically() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("x".repeat(50_000)));
         Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
@@ -354,10 +370,24 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertEquals(2, retry.getAttemptNo());
             assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
         });
+
+        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(firstRequest);
+        assertEquals(0, firstRequest.getSequenceNumber());
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("replacement response"));
+        Attempt replacementAttempt = persistAttempt(webhookUrl("/replacement"), 1);
+        attemptPublisher.publish(replacementAttempt.getId());
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.SUCCEEDED,
+                        attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
+        RecordedRequest replacementRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(replacementRequest);
+        assertEquals(0, replacementRequest.getSequenceNumber(),
+                "truncating a non-2xx fixed-length response must discard its connection");
     }
 
     @Test
-    void chunkedResponseWithoutContentLength_abortsUnreadRemainderAndReleasesTheExchange() {
+    void chunkedResponseWithoutContentLength_abortsUnreadRemainderAndReleasesTheExchange() throws InterruptedException {
         // The real Apache transport must finish after the bounded diagnostic prefix, not after a
         // caller buffers the full response. At this rate the complete body takes roughly 24 seconds,
         // while the 10,241 bytes Relay reads arrive in well under one second.
@@ -385,7 +415,72 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
             assertEquals("second response", reloaded.getResponseBody());
         });
+        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        RecordedRequest secondRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(firstRequest);
+        assertNotNull(secondRequest);
+        assertEquals(0, firstRequest.getSequenceNumber());
+        assertEquals(0, secondRequest.getSequenceNumber(),
+                "truncating a chunked response must discard its connection");
         assertEquals(2, mockWebServer.getRequestCount());
+    }
+
+    @Test
+    void oversizedChunkedNon2xxResponse_isBoundedAndReplacesTheConnection() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(500)
+                .setChunkedBody("x".repeat(1_000_000), 257)
+                .throttleBody(1_024, 25, TimeUnit.MILLISECONDS));
+        Attempt attempt = persistAttempt(webhookUrl("/chunked-failure"), 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+            Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
+            assertEquals(500, parent.getResponseCode());
+            assertTrue(parent.getResponseBody().length() <= 10_240);
+            assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+            assertEquals(2, attemptRepository.findAll().size());
+        });
+
+        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(firstRequest);
+        assertEquals(0, firstRequest.getSequenceNumber());
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("replacement response"));
+        Attempt replacementAttempt = persistAttempt(webhookUrl("/replacement"), 1);
+        attemptPublisher.publish(replacementAttempt.getId());
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.SUCCEEDED,
+                        attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
+        RecordedRequest replacementRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(replacementRequest);
+        assertEquals(0, replacementRequest.getSequenceNumber(),
+                "truncating a chunked non-2xx response must discard its connection");
+    }
+
+    @Test
+    void smallEofResponses_mayReuseApacheConnectionThroughWorker() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("first"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("second"));
+        Attempt firstAttempt = persistAttempt(webhookUrl("/first"), 1);
+        Attempt secondAttempt = persistAttempt(webhookUrl("/second"), 1);
+
+        attemptPublisher.publish(firstAttempt.getId());
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.SUCCEEDED,
+                        attemptRepository.findById(firstAttempt.getId()).orElseThrow().getStatus()));
+        attemptPublisher.publish(secondAttempt.getId());
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.SUCCEEDED,
+                        attemptRepository.findById(secondAttempt.getId()).orElseThrow().getStatus()));
+
+        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        RecordedRequest secondRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
+        assertNotNull(firstRequest);
+        assertNotNull(secondRequest);
+        assertEquals(0, firstRequest.getSequenceNumber());
+        assertEquals(1, secondRequest.getSequenceNumber(), "small EOF response may return connection to pool");
     }
 
     @Test
@@ -424,7 +519,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         mockWebServer.enqueue(new MockResponse()
                 .setResponseCode(200)
                 .setBody("ok")
-                .setBodyDelay(20, TimeUnit.SECONDS));
+                .setBodyDelay(16, TimeUnit.SECONDS));
         Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
 
         attemptPublisher.publish(attempt.getId());
@@ -591,6 +686,39 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
             assertNotNull(retry.getNextRetryAt());
         });
+    }
+
+    @ParameterizedTest(name = "protected destination {0} is rejected before a socket is opened")
+    @MethodSource("protectedDestinationFixtures")
+    void protectedDestination_isRejectedThroughWorkerLifecycleWithoutOpeningListener(
+            String fixtureName, String destinationHost, int expectedResolverInvocations) {
+        Attempt attempt = persistAttempt("http://" + destinationHost + ":" + mockWebServer.getPort() + "/webhook", 1);
+
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.FAILED_RETRYING, reloaded.getStatus(), fixtureName);
+            assertTrue(reloaded.getLastError().startsWith("DESTINATION_POLICY_BLOCKED: "), fixtureName);
+            List<Attempt> attempts = attemptRepository.findAll();
+            assertEquals(2, attempts.size(), fixtureName);
+            Attempt retry = attempts.stream()
+                    .filter(candidate -> !candidate.getId().equals(attempt.getId()))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(2, retry.getAttemptNo(), fixtureName);
+            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus(), fixtureName);
+        });
+
+        assertEquals(expectedResolverInvocations, resolverInvocations.get(), fixtureName);
+        assertEquals(0, mockWebServer.getRequestCount(), fixtureName + " must open no listener socket");
+    }
+
+    private static Stream<Arguments> protectedDestinationFixtures() {
+        return Stream.of(
+                Arguments.of("protected literal", "0.0.0.0", 0),
+                Arguments.of("protected DNS", "blocked.webhook.test", 1),
+                Arguments.of("mixed DNS answers", "mixed.webhook.test", 1));
     }
 
     @Test
@@ -777,7 +905,16 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         @Primary
         PoolingHttpClientConnectionManager loopbackDeliveryConnectionManager() {
             DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
-            HostAddressLookup lookup = (absoluteHostname, deadline) -> List.of(InetAddress.getLoopbackAddress());
+            HostAddressLookup lookup = (absoluteHostname, deadline) -> {
+                resolverInvocations.incrementAndGet();
+                if ("blocked.webhook.test.".equals(absoluteHostname)) {
+                    return List.of(protectedZeroAddress());
+                }
+                if ("mixed.webhook.test.".equals(absoluteHostname)) {
+                    return List.of(InetAddress.getLoopbackAddress(), protectedZeroAddress());
+                }
+                return List.of(InetAddress.getLoopbackAddress());
+            };
             PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
                     loopbackPermittingPolicy());
             return config.deliveryConnectionManager(resolver);
@@ -802,6 +939,14 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                     .getBytes(StandardCharsets.UTF_8);
             return new PublicDestinationAddressPolicy(
                     new SpecialPurposeAddressCatalog(new ByteArrayInputStream(sentinelCatalog)));
+        }
+
+        private static InetAddress protectedZeroAddress() {
+            try {
+                return InetAddress.getByAddress(new byte[] {0, 0, 0, 0});
+            } catch (java.net.UnknownHostException exception) {
+                throw new AssertionError("fixed test address must be valid", exception);
+            }
         }
     }
 }
