@@ -31,14 +31,14 @@ public final class PolicyEnforcingDnsResolver implements DnsResolver {
         if (host == null || host.isBlank() || port < 1 || port > 65_535) {
             throw unknownHost(host, new IllegalArgumentException("invalid host or port"));
         }
+        if (deadline.remaining().isZero() || deadline.remaining().isNegative()) {
+            throw unknownHost(host, new IllegalStateException("delivery deadline expired"));
+        }
         var literal = IpLiteral.parse(host);
         if (literal.isPresent()) {
             return List.of(validatedAddress(literal.get().addressBytes(), port));
         }
 
-        if (deadline.remaining().isZero() || deadline.remaining().isNegative()) {
-            throw unknownHost(host, new IllegalStateException("delivery deadline expired"));
-        }
         String normalizedHost;
         try {
             normalizedHost = WebhookUriParser.normalizeDnsHostname(host);
