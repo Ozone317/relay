@@ -43,6 +43,19 @@ class BoundedApacheResponseBodyConsumerTest {
     }
 
     @Test
+    void exactSentinelBodyIsTruncatedAndAbortsEofSensor() throws IOException {
+        TrackingWatcher watcher = new TrackingWatcher();
+        EofSensorInputStream stream = new EofSensorInputStream(
+                new ByteArrayInputStream(new byte[10_241]), watcher);
+
+        String body = new BoundedApacheResponseBodyConsumer().consume(stream);
+
+        assertTrue(body.endsWith("[relay response truncated at 10240 bytes]"));
+        assertTrue(watcher.aborted.get());
+        assertFalse(watcher.eof.get());
+    }
+
+    @Test
     void bodyReadFailurePropagatesAndAbortsEofSensor() {
         TrackingWatcher watcher = new TrackingWatcher();
         EofSensorInputStream stream = new EofSensorInputStream(new FailingInputStream(), watcher);
