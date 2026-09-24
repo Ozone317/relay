@@ -708,6 +708,11 @@ class ApacheWebhookHttpTransportDeadlineTest {
         }
 
         @Override
+        public java.util.Set<String> getTrailerNames() {
+            return java.util.Set.of();
+        }
+
+        @Override
         public void close() {
             closeSawContext.set(hasDeadlineContext());
         }

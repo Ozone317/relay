@@ -24,6 +24,7 @@ import org.apache.hc.core5.http.ConnectionRequestTimeoutException;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
+import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.util.Timeout;
 
 /** Delivery-only Apache exchange orchestration. */
@@ -84,18 +85,7 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
 
         ScheduledFuture<?> cancellation = scheduleCancellation(request, deadline);
         try {
-            try (CloseableHttpResponse response = executeApache(request, deadline)) {
-                if (deadline.remaining().isZero() || request.isCancelled()) {
-                    throw timeout("delivery deadline expired", null);
-                }
-                HttpEntity entity = response.getEntity();
-                InputStream bodyStream = entity == null ? InputStream.nullInputStream() : entity.getContent();
-                String responseBody = consumeWithinDeadline(bodyStream, request, deadline);
-                if (deadline.remaining().isZero() || request.isCancelled()) {
-                    throw timeout("delivery deadline expired", null);
-                }
-                return new WebhookHttpResponse(response.getCode(), responseBody);
-            }
+            return consumeResponse(request, deadline);
         } catch (WebhookDeliveryException exception) {
             throw exception;
         } catch (CancellationException exception) {
@@ -107,6 +97,61 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
             throw failure(WebhookFailureCode.TRANSPORT_FAILURE, "webhook exchange failed", exception);
         } finally {
             cancellation.cancel(false);
+        }
+    }
+
+    private WebhookHttpResponse consumeResponse(HttpUriRequestBase request, DeliveryDeadline deadline)
+            throws WebhookDeliveryException, IOException {
+        CloseableHttpResponse response = executeApache(request, deadline);
+        ApacheResponseBodyOwnership ownership = responseBodyConsumer instanceof ApacheResponseBodyOwnership candidate
+                ? candidate
+                : null;
+        boolean responseCloseAttempted = false;
+        try {
+            if (deadline.remaining().isZero() || request.isCancelled()) {
+                throw timeout("delivery deadline expired", null);
+            }
+            HttpEntity entity = response.getEntity();
+            InputStream bodyStream = entity == null ? InputStream.nullInputStream() : entity.getContent();
+            String responseBody = consumeWithinDeadline(bodyStream, request, deadline);
+            if (deadline.remaining().isZero() || request.isCancelled()) {
+                throw timeout("delivery deadline expired", null);
+            }
+            WebhookHttpResponse result = new WebhookHttpResponse(response.getCode(), responseBody);
+            responseCloseAttempted = true;
+            closeResponse(response, ownership, null);
+            return result;
+        } catch (WebhookDeliveryException | IOException | RuntimeException exception) {
+            if (!responseCloseAttempted) {
+                closeResponse(response, ownership, exception);
+            }
+            throw exception;
+        } catch (Error error) {
+            if (!responseCloseAttempted) {
+                closeResponse(response, ownership, error);
+            }
+            throw error;
+        }
+    }
+
+    private static void closeResponse(CloseableHttpResponse response, ApacheResponseBodyOwnership ownership,
+            Throwable primary) throws IOException {
+        try {
+            if (ownership != null && ownership.responseRequiresDiscard()) {
+                response.close(CloseMode.IMMEDIATE);
+            } else {
+                response.close();
+            }
+        } catch (IOException closeException) {
+            if (primary != null) {
+                primary.addSuppressed(closeException);
+            } else {
+                throw closeException;
+            }
+        } finally {
+            if (ownership != null) {
+                ownership.clearResponseDisposition();
+            }
         }
     }
 

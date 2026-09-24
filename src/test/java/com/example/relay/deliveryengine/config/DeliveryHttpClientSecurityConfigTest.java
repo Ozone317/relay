@@ -36,8 +36,15 @@ import com.example.relay.deliveryengine.destination.PublicDestinationAddressPoli
 import com.example.relay.deliveryengine.destination.SpecialPurposeAddressCatalog;
 import com.example.relay.deliveryengine.http.DeliveryDeadline;
 import com.example.relay.deliveryengine.http.DeliveryDeadlineContext;
+import com.example.relay.deliveryengine.http.BoundedApacheResponseBodyConsumer;
 
 class DeliveryHttpClientSecurityConfigTest {
+
+    @Test
+    void productionApacheResponseConsumerIsBoundedAndApacheAware() {
+        assertTrue(new DeliveryHttpClientConfig().deliveryResponseBodyConsumer()
+                instanceof BoundedApacheResponseBodyConsumer);
+    }
 
     @Test
     void productionRequestTargetKeepsHostnameAndNoEmbeddedAddress() {

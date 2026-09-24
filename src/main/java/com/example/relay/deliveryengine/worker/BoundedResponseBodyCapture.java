@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets;
 /**
  * Captures a UTF-8 diagnostic prefix without materializing an unbounded receiver response.
  */
-final class BoundedResponseBodyCapture {
+public final class BoundedResponseBodyCapture {
 
     static final int RETAINED_BYTE_LIMIT = 10_240;
     static final int PERSISTED_CHARACTER_LIMIT = 10_240;
@@ -16,30 +16,34 @@ final class BoundedResponseBodyCapture {
     private BoundedResponseBodyCapture() {
     }
 
+    public static Capture capture(InputStream responseBody) throws IOException {
+        // One extra byte distinguishes an exact-limit body from an oversized one without
+        // relying on Content-Length, which may be absent or incorrect.
+        byte[] bytes = new byte[RETAINED_BYTE_LIMIT + 1];
+        int count = 0;
+        while (count < bytes.length) {
+            int read = responseBody.read(bytes, count, bytes.length - count);
+            if (read == -1) {
+                break;
+            }
+            count += read;
+        }
+
+        if (count == 0) {
+            return new Capture(null, false, 0);
+        }
+
+        boolean truncated = count > RETAINED_BYTE_LIMIT;
+        int retainedCount = Math.min(count, RETAINED_BYTE_LIMIT);
+        String decoded = new String(bytes, 0, retainedCount, StandardCharsets.UTF_8);
+        return new Capture(truncated ? markTruncated(decoded) : decoded, truncated, count);
+    }
+
     static Capture captureAndClose(InputStream responseBody) throws IOException {
-        // Closing the JDK response stream before RestClient closes its response is deliberate.
-        // RestClient's JDK response wrapper otherwise drains the unread remainder on close.
+        // Legacy JDK RestClient ownership still requires a graceful close. Apache ownership
+        // uses capture(InputStream) and decides between EOF release and abort/discard itself.
         try (responseBody) {
-            // One extra byte distinguishes an exact-limit body from an oversized one without
-            // relying on Content-Length, which may be absent or incorrect.
-            byte[] bytes = new byte[RETAINED_BYTE_LIMIT + 1];
-            int count = 0;
-            while (count < bytes.length) {
-                int read = responseBody.read(bytes, count, bytes.length - count);
-                if (read == -1) {
-                    break;
-                }
-                count += read;
-            }
-
-            if (count == 0) {
-                return new Capture(null, false);
-            }
-
-            boolean truncated = count > RETAINED_BYTE_LIMIT;
-            int retainedCount = Math.min(count, RETAINED_BYTE_LIMIT);
-            String decoded = new String(bytes, 0, retainedCount, StandardCharsets.UTF_8);
-            return new Capture(truncated ? markTruncated(decoded) : decoded, truncated);
+            return capture(responseBody);
         }
     }
 
@@ -52,6 +56,6 @@ final class BoundedResponseBodyCapture {
         return decoded.substring(0, prefixEnd) + TRUNCATION_MARKER;
     }
 
-    record Capture(String body, boolean truncated) {
+    public record Capture(String body, boolean truncated, int bytesRead) {
     }
 }
