@@ -39,14 +39,6 @@ public final class BoundedResponseBodyCapture {
         return new Capture(truncated ? markTruncated(decoded) : decoded, truncated, count);
     }
 
-    static Capture captureAndClose(InputStream responseBody) throws IOException {
-        // Legacy JDK RestClient ownership still requires a graceful close. Apache ownership
-        // uses capture(InputStream) and decides between EOF release and abort/discard itself.
-        try (responseBody) {
-            return capture(responseBody);
-        }
-    }
-
     private static String markTruncated(String decoded) {
         int prefixLimit = PERSISTED_CHARACTER_LIMIT - TRUNCATION_MARKER.length();
         int prefixEnd = Math.min(decoded.length(), prefixLimit);

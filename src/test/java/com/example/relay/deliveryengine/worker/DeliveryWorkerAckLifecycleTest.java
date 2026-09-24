@@ -2,6 +2,12 @@ package com.example.relay.deliveryengine.worker;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.when;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -11,6 +17,11 @@ import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.http.WebhookDeliveryException;
+import com.example.relay.deliveryengine.http.WebhookFailureCode;
+import com.example.relay.deliveryengine.http.WebhookHeaders;
+import com.example.relay.deliveryengine.http.WebhookHttpResponse;
+import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
@@ -35,7 +46,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
+import java.util.stream.Stream;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -44,10 +58,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -87,12 +105,17 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
     @Autowired
     private MessageRepository messageRepository;
 
+    @MockitoBean
+    private WebhookHttpTransport webhookHttpTransport;
+
     private MockWebServer mockWebServer;
     private final HttpClient managementClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
-    void setUp() throws IOException {
+    void setUp() throws Exception {
+        when(webhookHttpTransport.post(anyString(), any(byte[].class), any(WebhookHeaders.class)))
+                .thenReturn(new WebhookHttpResponse(200, "ok"));
         attemptRepository.deleteAll();
         deliveryRepository.deleteAll();
         messageRepository.deleteAll();
@@ -115,6 +138,10 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
     }
 
     private Attempt persistAttempt(String url) {
+        return persistAttempt(url, 1);
+    }
+
+    private Attempt persistAttempt(String url, int attemptNo) {
         User user = userRepository.save(new User("test" + UUID.randomUUID() + "@mail.com", "hash"));
         Environment env = environmentRepository.save(new Environment("Env", "Desc", user));
         App app = appRepository.save(new App("App", env));
@@ -123,7 +150,7 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 1);
         Message message = messageRepository.save(new Message(app, event, body));
         Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
-        return attemptRepository.save(new Attempt(app, message, endpoint, delivery, 1));
+        return attemptRepository.save(new Attempt(app, message, endpoint, delivery, attemptNo));
     }
 
     private long unacknowledgedCount(String queueName) throws Exception {
@@ -146,13 +173,11 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
         // mock delivery here must stay in flight for comfortably longer than that interval so the
         // mid-flight await() below has real headroom to observe at least one stats refresh landing
         // while the message is genuinely still unacked, rather than racing a stale/delayed reading.
-        mockWebServer.setDispatcher(new Dispatcher() {
-            @Override
-            public MockResponse dispatch(RecordedRequest request) throws InterruptedException {
-                Thread.sleep(12000);
-                return new MockResponse().setResponseCode(200).setBody("ok");
-            }
-        });
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            release.await();
+            return new WebhookHttpResponse(200, "ok");
+        }).when(webhookHttpTransport).post(anyString(), any(byte[].class), any(WebhookHeaders.class));
 
         Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString());
         attemptPublisher.publish(attempt.getId());
@@ -165,6 +190,8 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
         Thread.sleep(1000);
         await().atMost(Duration.ofSeconds(8)).untilAsserted(() ->
                 assertEquals(1, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
+
+        release.countDown();
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
@@ -179,7 +206,8 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
 
     @Test
     void modeledFailure_stillCompletesFutureNormally_andAcks() throws Exception {
-        mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("internal error"));
+        when(webhookHttpTransport.post(anyString(), any(byte[].class), any(WebhookHeaders.class)))
+                .thenReturn(new WebhookHttpResponse(500, "internal error"));
         Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString());
         attemptPublisher.publish(attempt.getId());
 
@@ -191,5 +219,51 @@ class DeliveryWorkerAckLifecycleTest implements SharedPostgresContainer {
         // Same management-API stats-refresh headroom as the successful-delivery test above.
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertEquals(0, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
+    }
+
+    @Test
+    void modeledTransportFailure_isPersistedWithStableBoundedCodeBeforeAcknowledgment() throws Exception {
+        doThrow(new WebhookDeliveryException(WebhookFailureCode.TRANSPORT_FAILURE, "x".repeat(2_000)))
+                .when(webhookHttpTransport)
+                .post(anyString(), any(byte[].class), any(WebhookHeaders.class));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString());
+        attemptPublisher.publish(attempt.getId());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(AttemptStatus.FAILED_RETRYING, reloaded.getStatus());
+            assertTrue(reloaded.getLastError().startsWith("TRANSPORT_FAILURE: "));
+            assertTrue(reloaded.getLastError().length() <= 10_240);
+            assertTrue(reloaded.getStatus() != AttemptStatus.IN_FLIGHT);
+        });
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(0, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
+    }
+
+    static Stream<Arguments> modeledFailureCases() {
+        List<WebhookFailureCode> codes = List.of(WebhookFailureCode.DESTINATION_INVALID,
+                WebhookFailureCode.DNS_RESOLUTION_FAILED, WebhookFailureCode.DESTINATION_POLICY_BLOCKED,
+                WebhookFailureCode.DELIVERY_TIMEOUT, WebhookFailureCode.TRANSPORT_FAILURE);
+        return codes.stream().flatMap(code -> Stream.of(Arguments.of(code, 1), Arguments.of(code, 6)));
+    }
+
+    @ParameterizedTest(name = "{0} on attempt {1} follows existing lifecycle")
+    @MethodSource("modeledFailureCases")
+    void eachModeledFailureCode_usesRetryThenDeadLifecycle(WebhookFailureCode code, int attemptNo) throws Exception {
+        doThrow(new WebhookDeliveryException(code, "diagnostic-".repeat(1_000)))
+                .when(webhookHttpTransport)
+                .post(anyString(), any(byte[].class), any(WebhookHeaders.class));
+        Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString(), attemptNo);
+        attemptPublisher.publish(attempt.getId());
+
+        AttemptStatus expected = attemptNo == 6 ? AttemptStatus.DEAD : AttemptStatus.FAILED_RETRYING;
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+            assertEquals(expected, reloaded.getStatus());
+            assertTrue(reloaded.getLastError().startsWith(code + ": "));
+            assertTrue(reloaded.getLastError().length() <= 10_240);
+        });
+        assertEquals(attemptNo == 6 ? 1 : 2, attemptRepository.findAll().size());
     }
 }
