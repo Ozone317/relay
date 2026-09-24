@@ -77,8 +77,8 @@ class DeliveryHttpClientSecurityConfigTest {
     @Test
     @ResourceLock(Resources.SYSTEM_PROPERTIES)
     void productionApacheClientExecutesHostnameRouteWithoutSystemProxy() throws Exception {
-        try (ServerSocket destination = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
-                ServerSocket proxyTrap = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket destination = new ServerSocket(0, 8, safeIpv4());
+                ServerSocket proxyTrap = new ServerSocket(0, 8, safeIpv4())) {
             CountDownLatch destinationAccepted = new CountDownLatch(1);
             CountDownLatch destinationRequest = new CountDownLatch(1);
             AtomicInteger proxyAccepted = new AtomicInteger();
@@ -163,5 +163,13 @@ class DeliveryHttpClientSecurityConfigTest {
         SpecialPurposeAddressCatalog fixture = new SpecialPurposeAddressCatalog(
                 new java.io.ByteArrayInputStream("0.0.0.0/32|TEST_SENTINEL\n".getBytes(StandardCharsets.UTF_8)));
         return new PolicyEnforcingDnsResolver(lookup, new PublicDestinationAddressPolicy(fixture));
+    }
+
+    private static InetAddress safeIpv4() {
+        try {
+            return InetAddress.getByAddress(new byte[] {127, 0, 0, 1});
+        } catch (java.net.UnknownHostException exception) {
+            throw new AssertionError("fixed test address must be valid", exception);
+        }
     }
 }
