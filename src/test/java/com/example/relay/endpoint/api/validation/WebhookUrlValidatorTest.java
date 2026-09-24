@@ -28,4 +28,19 @@ class WebhookUrlValidatorTest {
     void isValid_rejectsMalformedPort() {
         assertFalse(validator.isValid("http://example.com:65536/", null));
     }
+
+    @Test
+    void isValid_rejectsProtectedLiteralAddresses() {
+        assertFalse(validator.isValid("http://127.0.0.1/", null));
+        assertFalse(validator.isValid("http://[::1]/", null));
+        assertFalse(validator.isValid("http://192.168.1.10/", null));
+        assertFalse(validator.isValid("http://[fc00::1]/", null));
+        assertFalse(validator.isValid("http://[fe80::1]/", null));
+        assertFalse(validator.isValid("http://[::ffff:127.0.0.1]/", null));
+    }
+
+    @Test
+    void isValid_doesNotResolveDnsNames() {
+        assertTrue(validator.isValid("https://deliberately-nonexistent.example.invalid/hook", null));
+    }
 }
