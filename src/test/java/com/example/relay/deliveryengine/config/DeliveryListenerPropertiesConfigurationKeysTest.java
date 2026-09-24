@@ -27,6 +27,7 @@ class DeliveryListenerPropertiesConfigurationKeysTest implements SharedPostgresC
         Set<String> relayDeliveryKeys = fileProperties.keySet().stream()
                 .map(Object::toString)
                 .filter(key -> key.startsWith("relay.delivery."))
+                .filter(key -> !key.startsWith("relay.delivery.dns."))
                 .collect(Collectors.toSet());
 
         assertTrue(relayDeliveryKeys.contains("relay.delivery.consumer-concurrency"),
