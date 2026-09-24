@@ -113,6 +113,17 @@ class PolicyEnforcingDnsResolverTest {
     }
 
     @Test
+    void expiredDeadlineRejectsPermittedLiteralBeforeReturningSocket() {
+        PolicyEnforcingDnsResolver resolver = resolverWith(List.of());
+        DeliveryDeadline deadline = DeliveryDeadline.start(Duration.ZERO, () -> 0L);
+        assertThrows(UnknownHostException.class, () -> {
+            try (DeliveryDeadlineContext.Scope ignored = DeliveryDeadlineContext.open(deadline)) {
+                resolver.resolve("93.184.216.34", PORT);
+            }
+        });
+    }
+
+    @Test
     void nonCanonicalHostnameIsRejectedBeforeLookup() {
         AtomicReference<String> lookedUp = new AtomicReference<>();
         HostAddressLookup lookup = (hostname, deadline) -> {
