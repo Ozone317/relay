@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Logger;
@@ -22,6 +24,10 @@ import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.http.WebhookDeliveryException;
+import com.example.relay.deliveryengine.http.WebhookHeaders;
+import com.example.relay.deliveryengine.http.WebhookHttpResponse;
+import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.deliveryengine.retry.RetryJitterSource;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -39,7 +45,12 @@ import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
@@ -140,10 +151,17 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @MockitoBean
     private RetryJitterSource retryJitterSource;
 
+    @MockitoBean
+    private WebhookHttpTransport webhookHttpTransport;
+
     private MockWebServer mockWebServer;
+    private final HttpClient testClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
 
     @BeforeEach
-    void setUp() throws IOException {
+    void setUp() throws Exception {
         when(clock.instant()).thenReturn(FIXED_RETRY_NOW);
         when(retryJitterSource.next(any(Duration.class))).thenReturn(Duration.ZERO);
         clearDatabase();
@@ -152,6 +170,11 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
         mockWebServer = new MockWebServer();
         mockWebServer.start();
+
+        doAnswer(invocation -> testPost(invocation.getArgument(0), invocation.getArgument(1),
+                invocation.getArgument(2)))
+                .when(webhookHttpTransport)
+                .post(anyString(), any(byte[].class), any(WebhookHeaders.class));
     }
 
     private void drainQueues() {
@@ -177,6 +200,33 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     void tearDown() throws IOException {
         rabbitListenerEndpointRegistry.getListenerContainer("deadLetterNotifier").start();
         mockWebServer.shutdown();
+    }
+
+    private WebhookHttpResponse testPost(String rawUrl, byte[] body, WebhookHeaders headers)
+            throws WebhookDeliveryException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(rawUrl))
+                .timeout(Duration.ofSeconds(15))
+                .header("relay-id", headers.relayId())
+                .header("relay-timestamp", Long.toString(headers.relayTimestamp()))
+                .header("relay-signature", headers.relaySignature())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+        try {
+            HttpResponse<byte[]> response = testClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            BoundedResponseBodyCapture.Capture capture = BoundedResponseBodyCapture.capture(
+                    new ByteArrayInputStream(response.body()));
+            return new WebhookHttpResponse(response.statusCode(), capture.body());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new WebhookDeliveryException(
+                    com.example.relay.deliveryengine.http.WebhookFailureCode.DELIVERY_TIMEOUT,
+                    "test transport interrupted", exception);
+        } catch (IOException exception) {
+            throw new WebhookDeliveryException(
+                    com.example.relay.deliveryengine.http.WebhookFailureCode.TRANSPORT_FAILURE,
+                    "test transport failed", exception);
+        }
     }
 
     private Attempt persistAttempt(String url, int attemptNo) {
@@ -487,10 +537,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Test
     void redirectResponse_isNotFollowed_andTreatedAsFailure() {
-        // DeliveryHttpClientConfig explicitly sets Redirect.NEVER (a deliberate change from the old
-        // SimpleClientHttpRequestFactory/HttpURLConnection client, which followed redirects by
-        // default). A 302 from the endpoint must therefore be recorded as the delivery outcome itself
-        // - a non-2xx failure - not silently followed to whatever the Location header points at.
+        // The delivery transport explicitly disables redirects. A 302 from the endpoint must therefore
+        // be recorded as the delivery outcome itself - a non-2xx failure - not silently followed to
+        // whatever the Location header points at.
         mockWebServer.enqueue(
                 new MockResponse()
                         .setResponseCode(302)

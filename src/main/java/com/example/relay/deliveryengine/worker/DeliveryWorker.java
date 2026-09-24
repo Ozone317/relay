@@ -5,6 +5,10 @@ import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.http.WebhookDeliveryException;
+import com.example.relay.deliveryengine.http.WebhookHeaders;
+import com.example.relay.deliveryengine.http.WebhookHttpResponse;
+import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.deliveryengine.retry.RetryDelayCalculator;
 import com.example.relay.deliveryengine.retry.RetryJitterSource;
@@ -20,11 +24,7 @@ import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
 
 @Component
 public class DeliveryWorker {
@@ -36,18 +36,18 @@ public class DeliveryWorker {
     private final AttemptRepository attemptRepository;
     private final AttemptService attemptService;
     private final HmacSigner hmacSigner;
-    private final RestClient deliveryRestClient;
+    private final WebhookHttpTransport webhookHttpTransport;
     private final ExecutorService virtualThreadExecutor;
     private final RetryDelayCalculator retryDelayCalculator;
 
     public DeliveryWorker(AttemptRepository attemptRepository, AttemptService attemptService, HmacSigner hmacSigner,
-            @Qualifier("deliveryRestClient") RestClient deliveryRestClient, AttemptPublisher attemptPublisher,
+            WebhookHttpTransport webhookHttpTransport, AttemptPublisher attemptPublisher,
             ExecutorService virtualThreadExecutor, Clock clock, RetryProperties retryProperties,
             RetryJitterSource retryJitterSource) {
         this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;
-        this.deliveryRestClient = deliveryRestClient;
+        this.webhookHttpTransport = webhookHttpTransport;
         this.attemptPublisher = attemptPublisher;
         this.virtualThreadExecutor = virtualThreadExecutor;
         this.retryDelayCalculator = new RetryDelayCalculator(clock, retryProperties, retryJitterSource);
@@ -82,15 +82,8 @@ public class DeliveryWorker {
 
         long startedAt = System.currentTimeMillis();
         try {
-            DeliveryHttpResponse response = deliveryRestClient.post().uri(endpoint.getUrl()).header("relay-id", relayId)
-                    .header("relay-timestamp", String.valueOf(timestamp)).header("relay-signature", signature)
-                    .contentType(MediaType.APPLICATION_JSON).body(body)
-                    .exchangeForRequiredValue((request, clientResponse) -> {
-                        int statusCode = clientResponse.getStatusCode().value();
-                        BoundedResponseBodyCapture.Capture capture =
-                                BoundedResponseBodyCapture.captureAndClose(clientResponse.getBody());
-                        return new DeliveryHttpResponse(statusCode, capture.body());
-                    });
+            WebhookHttpResponse response = webhookHttpTransport.post(endpoint.getUrl(), body,
+                    new WebhookHeaders(relayId, timestamp, signature));
             long latencyMs = System.currentTimeMillis() - startedAt;
             
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
@@ -98,9 +91,9 @@ public class DeliveryWorker {
             } else {
                 handleFailure(attempt, response.statusCode(), response.responseBody(), null, latencyMs);
             }
-        } catch (RestClientException ex) {
+        } catch (WebhookDeliveryException ex) {
             long latencyMs = System.currentTimeMillis() - startedAt;
-            handleFailure(attempt, null, null, ex.getMessage(), latencyMs);
+            handleFailure(attempt, null, null, ex.failureCode() + ": " + ex.boundedDiagnostic(), latencyMs);
         }
     }
 
@@ -121,6 +114,4 @@ public class DeliveryWorker {
         }
     }
 
-    private record DeliveryHttpResponse(int statusCode, String responseBody) {
-    }
 }
