@@ -1,9 +1,7 @@
 package com.example.relay.endpoint.api.dto;
 
+import com.example.relay.endpoint.api.validation.ValidWebhookUrl;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
-import org.hibernate.validator.constraints.URL;
 
-public record EndpointCreateDto(@NotBlank String name, @NotBlank @URL(message = "URL must be a valid URL")
-@Pattern(regexp = "^https?://.*$", message = "URL must use HTTP or HTTPS") String url) {
+public record EndpointCreateDto(@NotBlank String name, @NotBlank @ValidWebhookUrl String url) {
 }
