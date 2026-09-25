@@ -356,15 +356,20 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
                 assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
                 assertEquals(200, reloaded.getResponseCode());
-                assertTrue(reloaded.getResponseBody().length() <= 10_240);
-                assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+                assertEquals(WorkerBoundedResponseFixture.EXPECTED_TRUNCATED_BODY, reloaded.getResponseBody());
             });
 
             assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
             assertEquals(10_241, fixture.firstBodyBytesWritten.get());
-            fixture.probeClientAbort();
+            assertEquals(10_241, fixture.producerBodyBytesWritten.get(),
+                    "the gated producer must not make the unread tail available before worker completion");
+            assertTrue(!fixture.firstProducerFinished.get());
+            fixture.releaseTail();
+            assertTrue(fixture.tailStarted.await(5, TimeUnit.SECONDS));
             assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
             assertTrue(!fixture.firstProducerFinished.get());
+            assertTrue(fixture.producerBodyBytesWritten.get() < WorkerBoundedResponseFixture.BODY_LENGTH,
+                    "the aborted endpoint must not drain the gated response tail");
 
             Attempt replacementAttempt = persistAttempt(fixture.url("/replacement"), 1);
             attemptPublisher.publish(replacementAttempt.getId());
@@ -391,8 +396,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
                 assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
                 assertEquals(500, parent.getResponseCode());
-                assertTrue(parent.getResponseBody().length() <= 10_240);
-                assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+                assertEquals(WorkerBoundedResponseFixture.EXPECTED_TRUNCATED_BODY, parent.getResponseBody());
 
                 List<Attempt> attempts = attemptRepository.findAll();
                 assertEquals(2, attempts.size());
@@ -406,9 +410,13 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
             assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
             assertEquals(10_241, fixture.firstBodyBytesWritten.get());
-            fixture.probeClientAbort();
+            assertEquals(10_241, fixture.producerBodyBytesWritten.get());
+            assertTrue(!fixture.firstProducerFinished.get());
+            fixture.releaseTail();
+            assertTrue(fixture.tailStarted.await(5, TimeUnit.SECONDS));
             assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
             assertTrue(!fixture.firstProducerFinished.get());
+            assertTrue(fixture.producerBodyBytesWritten.get() < WorkerBoundedResponseFixture.BODY_LENGTH);
             Attempt replacementAttempt = persistAttempt(fixture.url("/replacement"), 1);
             attemptPublisher.publish(replacementAttempt.getId());
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
@@ -430,14 +438,17 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
                 Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
                 assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
-                assertTrue(reloaded.getResponseBody().length() <= 10_240);
-                assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+                assertEquals(WorkerBoundedResponseFixture.EXPECTED_TRUNCATED_BODY, reloaded.getResponseBody());
             });
             assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
             assertEquals(10_241, fixture.firstBodyBytesWritten.get());
-            fixture.probeClientAbort();
+            assertEquals(10_241, fixture.producerBodyBytesWritten.get());
+            assertTrue(!fixture.firstProducerFinished.get());
+            fixture.releaseTail();
+            assertTrue(fixture.tailStarted.await(5, TimeUnit.SECONDS));
             assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
             assertTrue(!fixture.firstProducerFinished.get());
+            assertTrue(fixture.producerBodyBytesWritten.get() < WorkerBoundedResponseFixture.BODY_LENGTH);
 
             Attempt secondAttempt = persistAttempt(fixture.url("/second"), 1);
             attemptPublisher.publish(secondAttempt.getId());
@@ -463,15 +474,18 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
                 assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
                 assertEquals(500, parent.getResponseCode());
-                assertTrue(parent.getResponseBody().length() <= 10_240);
-                assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+                assertEquals(WorkerBoundedResponseFixture.EXPECTED_TRUNCATED_BODY, parent.getResponseBody());
                 assertEquals(2, attemptRepository.findAll().size());
             });
             assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
             assertEquals(10_241, fixture.firstBodyBytesWritten.get());
-            fixture.probeClientAbort();
+            assertEquals(10_241, fixture.producerBodyBytesWritten.get());
+            assertTrue(!fixture.firstProducerFinished.get());
+            fixture.releaseTail();
+            assertTrue(fixture.tailStarted.await(5, TimeUnit.SECONDS));
             assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
             assertTrue(!fixture.firstProducerFinished.get());
+            assertTrue(fixture.producerBodyBytesWritten.get() < WorkerBoundedResponseFixture.BODY_LENGTH);
 
             Attempt replacementAttempt = persistAttempt(fixture.url("/replacement"), 1);
             attemptPublisher.publish(replacementAttempt.getId());
@@ -947,18 +961,24 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
         private static final int BODY_LIMIT = 10_240;
         private static final int READ_SENTINEL = BODY_LIMIT + 1;
-        private static final int BODY_LENGTH = 65_536;
+        private static final int BODY_LENGTH = 16 * 1024 * 1024;
+        private static final int TAIL_CHUNK_SIZE = 16 * 1024;
+        private static final String TRUNCATION_MARKER = "\n[relay response truncated at 10240 bytes]";
+        private static final String EXPECTED_TRUNCATED_BODY =
+                "x".repeat(BODY_LIMIT - TRUNCATION_MARKER.length()) + TRUNCATION_MARKER;
 
         private final boolean chunked;
         private final int firstStatus;
         private final ServerSocket server;
         private final CountDownLatch firstLimitReached = new CountDownLatch(1);
+        private final CountDownLatch allowTail = new CountDownLatch(1);
+        private final CountDownLatch tailStarted = new CountDownLatch(1);
         private final CountDownLatch firstClientClosed = new CountDownLatch(1);
         private final CountDownLatch secondServed = new CountDownLatch(1);
         private final AtomicInteger acceptedConnections = new AtomicInteger();
         private final AtomicInteger firstBodyBytesWritten = new AtomicInteger();
+        private final AtomicInteger producerBodyBytesWritten = new AtomicInteger();
         private final AtomicBoolean firstProducerFinished = new AtomicBoolean();
-        private final AtomicReference<OutputStream> firstOutput = new AtomicReference<>();
 
         private WorkerBoundedResponseFixture(boolean chunked, int firstStatus) throws IOException {
             this.chunked = chunked;
@@ -974,16 +994,16 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         private void serve() {
             try (Socket first = server.accept()) {
                 acceptedConnections.incrementAndGet();
+                first.setSendBufferSize(1_024);
                 InputStream requestInput = first.getInputStream();
                 readHeaders(requestInput);
                 OutputStream output = first.getOutputStream();
-                firstOutput.set(output);
                 writeHeaders(output, firstStatus, chunked ? null : BODY_LENGTH);
-                writeLimitedBody(output);
-                Thread.startVirtualThread(() -> observeClientClosure(first, requestInput));
+                writeGatedBody(output);
                 serveReplacement();
             } catch (IOException ignored) {
-                // Fixture teardown or the expected client abort.
+                firstClientClosed.countDown();
+                serveReplacement();
             }
         }
 
@@ -1002,8 +1022,38 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             }
         }
 
-        private void writeLimitedBody(OutputStream output) throws IOException {
+        private void writeGatedBody(OutputStream output) throws IOException {
             byte[] body = "x".repeat(READ_SENTINEL).getBytes(StandardCharsets.US_ASCII);
+            writeApplicationBody(output, body);
+            firstBodyBytesWritten.set(body.length);
+            producerBodyBytesWritten.set(body.length);
+            firstLimitReached.countDown();
+
+            try {
+                allowTail.await();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            tailStarted.countDown();
+            byte[] tailChunk = "y".repeat(TAIL_CHUNK_SIZE).getBytes(StandardCharsets.US_ASCII);
+            int written = body.length;
+            while (written < BODY_LENGTH) {
+                int count = Math.min(tailChunk.length, BODY_LENGTH - written);
+                byte[] next = count == tailChunk.length ? tailChunk : java.util.Arrays.copyOf(tailChunk, count);
+                writeApplicationBody(output, next);
+                written += count;
+                producerBodyBytesWritten.set(written);
+            }
+            if (chunked) {
+                output.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                output.flush();
+            }
+            firstProducerFinished.set(true);
+        }
+
+        private void writeApplicationBody(OutputStream output, byte[] body) throws IOException {
             if (chunked) {
                 output.write(Integer.toHexString(body.length).getBytes(StandardCharsets.US_ASCII));
                 output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
@@ -1013,38 +1063,10 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
             }
             output.flush();
-            firstBodyBytesWritten.set(body.length);
-            firstLimitReached.countDown();
         }
 
-        private void probeClientAbort() {
-            OutputStream output = firstOutput.get();
-            if (output == null) {
-                return;
-            }
-            try {
-                output.write('p');
-                output.flush();
-            } catch (IOException exception) {
-                firstClientClosed.countDown();
-            }
-        }
-
-        private void observeClientClosure(Socket socket, InputStream requestInput) {
-            try {
-                socket.setSoTimeout(2_000);
-                while (true) {
-                    // Consume the request body and wait for the client-side close after the response abort.
-                    if (requestInput.read() == -1) {
-                        firstClientClosed.countDown();
-                        return;
-                    }
-                }
-            } catch (SocketTimeoutException ignored) {
-                // The test assertion records a missing abort as a failure.
-            } catch (IOException exception) {
-                firstClientClosed.countDown();
-            }
+        private void releaseTail() {
+            allowTail.countDown();
         }
 
         private static void readHeaders(InputStream input) throws IOException {
@@ -1075,6 +1097,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
         @Override
         public void close() {
+            allowTail.countDown();
             try {
                 server.close();
             } catch (IOException ignored) {
