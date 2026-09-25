@@ -14,6 +14,7 @@ import com.example.relay.delivery.domain.DeliveryStatus;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.DeliveryHttpClientConfig;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.destination.DnsResolutionException;
 import com.example.relay.deliveryengine.destination.HostAddressLookup;
 import com.example.relay.deliveryengine.destination.PolicyEnforcingDnsResolver;
 import com.example.relay.deliveryengine.destination.PublicDestinationAddressPolicy;
@@ -39,12 +40,17 @@ import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.ByteArrayInputStream;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
@@ -271,11 +277,18 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     @TestConfiguration(proxyBeanMethods = false)
     static class LoopbackWebhookTransportConfiguration {
 
+        private static final Set<String> FIXTURE_HOSTS = Set.of("webhook.test.");
+
         @Bean(name = "replayDeliveryConnectionManager", destroyMethod = "close")
         @Primary
         PoolingHttpClientConnectionManager replayDeliveryConnectionManager() {
             DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
-            HostAddressLookup lookup = (absoluteHostname, deadline) -> List.of(InetAddress.getLoopbackAddress());
+            HostAddressLookup lookup = (absoluteHostname, deadline) -> {
+                if (!FIXTURE_HOSTS.contains(absoluteHostname)) {
+                    throw new DnsResolutionException("unexpected test fixture hostname: " + absoluteHostname);
+                }
+                return List.of(InetAddress.getLoopbackAddress());
+            };
             PolicyEnforcingDnsResolver resolver = new PolicyEnforcingDnsResolver(lookup,
                     loopbackPermittingPolicy());
             return config.deliveryConnectionManager(resolver);
@@ -296,10 +309,21 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         }
 
         private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {
-            byte[] sentinelCatalog = "0.0.0.0/32|TEST_SENTINEL\n::/128|TEST_SENTINEL\n"
-                    .getBytes(StandardCharsets.UTF_8);
-            return new PublicDestinationAddressPolicy(
-                    new SpecialPurposeAddressCatalog(new ByteArrayInputStream(sentinelCatalog)));
+            try (InputStream resource = SpecialPurposeAddressCatalog.class
+                    .getResourceAsStream(SpecialPurposeAddressCatalog.RESOURCE)) {
+                if (resource == null) {
+                    throw new IllegalStateException("missing pinned policy resource");
+                }
+                String fixtureCatalog = new BufferedReader(new InputStreamReader(resource, StandardCharsets.UTF_8))
+                        .lines()
+                        .filter(line -> !line.startsWith("127.0.0.0/8|LOOPBACK")
+                                && !line.startsWith("::1/128|LOOPBACK"))
+                        .collect(Collectors.joining("\n"));
+                return new PublicDestinationAddressPolicy(new SpecialPurposeAddressCatalog(
+                        new ByteArrayInputStream(fixtureCatalog.getBytes(StandardCharsets.UTF_8))));
+            } catch (IOException exception) {
+                throw new IllegalStateException("unable to read pinned policy resource", exception);
+            }
         }
     }
 }

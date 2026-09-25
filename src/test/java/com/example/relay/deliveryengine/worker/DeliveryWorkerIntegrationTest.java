@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -22,6 +23,7 @@ import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
+import com.example.relay.deliveryengine.destination.DnsResolutionException;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import com.example.relay.deliveryengine.retry.RetryJitterSource;
 import com.example.relay.endpoint.domain.Endpoint;
@@ -41,7 +43,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.io.ByteArrayInputStream;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
@@ -51,9 +60,13 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -288,13 +301,31 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                             new MediaType(contentType.getType(), contentType.getSubtype()),
                             fixtureName + " must declare JSON content type");
                 },
-                () -> assertEquals(
-                        v1SignatureOverRawBody(
-                                request.getHeader("relay-id"),
-                                request.getHeader("relay-timestamp"),
-                                rawBody),
-                        request.getHeader("relay-signature"),
-                        fixtureName + " relay-signature must cover the exact received body bytes"));
+                () -> assertEquals(attempt.getMessage().getId().toString(), request.getHeader("relay-id"),
+                        fixtureName + " relay-id must identify the persisted message"),
+                () -> {
+                    String timestamp = request.getHeader("relay-timestamp");
+                    assertNotNull(timestamp, fixtureName + " relay-timestamp is required");
+                    long timestampSeconds = Long.parseLong(timestamp);
+                    assertTrue(timestampSeconds > 0, fixtureName + " relay-timestamp must be a positive epoch second");
+                    long now = Instant.now().getEpochSecond();
+                    assertTrue(Math.abs(now - timestampSeconds) <= 30,
+                            fixtureName + " relay-timestamp must be current");
+                },
+                () -> assertEquals("application/json", request.getHeader("Content-Type"),
+                        fixtureName + " must use the established content type without charset rewriting"),
+                () -> {
+                    String signature = request.getHeader("relay-signature");
+                    assertTrue(signature.matches("v1,[A-Za-z0-9+/]{43}={0,2}"),
+                            fixtureName + " relay-signature must use the v1 base64 format");
+                    assertEquals(
+                            v1SignatureOverRawBody(
+                                    request.getHeader("relay-id"),
+                                    request.getHeader("relay-timestamp"),
+                                    rawBody),
+                            signature,
+                            fixtureName + " relay-signature must cover the exact received body bytes");
+                });
     }
 
     @Test
@@ -315,148 +346,142 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     }
 
     @Test
-    void largeSuccessfulResponse_isBoundedAndStillCommitsSuccess() throws InterruptedException {
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("x".repeat(11_000)));
-        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
+    void largeSuccessfulResponse_isBoundedAndStillCommitsSuccess() throws IOException, InterruptedException {
+        try (WorkerBoundedResponseFixture fixture = new WorkerBoundedResponseFixture(false, 200)) {
+            Attempt attempt = persistAttempt(fixture.url("/webhook"), 1);
 
-        attemptPublisher.publish(attempt.getId());
+            attemptPublisher.publish(attempt.getId());
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
-            assertEquals(200, reloaded.getResponseCode());
-            assertTrue(reloaded.getResponseBody().length() <= 10_240);
-            assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
-        });
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+                assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+                assertEquals(200, reloaded.getResponseCode());
+                assertTrue(reloaded.getResponseBody().length() <= 10_240);
+                assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+            });
 
-        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(firstRequest);
-        assertEquals(0, firstRequest.getSequenceNumber());
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("replacement response"));
-        Attempt replacementAttempt = persistAttempt(webhookUrl("/replacement"), 1);
-        attemptPublisher.publish(replacementAttempt.getId());
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertEquals(AttemptStatus.SUCCEEDED,
-                        attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
-        RecordedRequest replacementRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(replacementRequest);
-        assertEquals(0, replacementRequest.getSequenceNumber(),
-                "truncating a fixed-length response must discard its connection");
-        assertEquals(0, attemptService.resetStuck(
-                attempt.getId(), Instant.now().plusSeconds(1), Instant.now()),
-                "a successfully completed attempt must not become executable through IN_FLIGHT recovery");
+            assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
+            assertEquals(10_241, fixture.firstBodyBytesWritten.get());
+            fixture.probeClientAbort();
+            assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
+            assertTrue(!fixture.firstProducerFinished.get());
+
+            Attempt replacementAttempt = persistAttempt(fixture.url("/replacement"), 1);
+            attemptPublisher.publish(replacementAttempt.getId());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertEquals(AttemptStatus.SUCCEEDED,
+                            attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
+            assertTrue(fixture.secondServed.await(5, TimeUnit.SECONDS));
+            assertEquals(2, fixture.acceptedConnections.get(),
+                    "truncating a fixed-length response must use a replacement socket");
+            assertEquals(0, attemptService.resetStuck(
+                    attempt.getId(), Instant.now().plusSeconds(1), Instant.now()),
+                    "a successfully completed attempt must not become executable through IN_FLIGHT recovery");
+        }
     }
 
     @Test
-    void largeNon2xxResponse_isBoundedAndParentAndRetryCommitAtomically() throws InterruptedException {
-        mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("x".repeat(50_000)));
-        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
+    void largeNon2xxResponse_isBoundedAndParentAndRetryCommitAtomically() throws IOException, InterruptedException {
+        try (WorkerBoundedResponseFixture fixture = new WorkerBoundedResponseFixture(false, 500)) {
+            Attempt attempt = persistAttempt(fixture.url("/webhook"), 1);
 
-        attemptPublisher.publish(attempt.getId());
+            attemptPublisher.publish(attempt.getId());
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
-            assertEquals(500, parent.getResponseCode());
-            assertTrue(parent.getResponseBody().length() <= 10_240);
-            assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
+                assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
+                assertEquals(500, parent.getResponseCode());
+                assertTrue(parent.getResponseBody().length() <= 10_240);
+                assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
 
-            List<Attempt> attempts = attemptRepository.findAll();
-            assertEquals(2, attempts.size());
-            Attempt retry = attempts.stream()
-                    .filter(candidate -> !candidate.getId().equals(attempt.getId()))
-                    .findFirst()
-                    .orElseThrow();
-            assertEquals(2, retry.getAttemptNo());
-            assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
-        });
+                List<Attempt> attempts = attemptRepository.findAll();
+                assertEquals(2, attempts.size());
+                Attempt retry = attempts.stream()
+                        .filter(candidate -> !candidate.getId().equals(attempt.getId()))
+                        .findFirst()
+                        .orElseThrow();
+                assertEquals(2, retry.getAttemptNo());
+                assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
+            });
 
-        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(firstRequest);
-        assertEquals(0, firstRequest.getSequenceNumber());
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("replacement response"));
-        Attempt replacementAttempt = persistAttempt(webhookUrl("/replacement"), 1);
-        attemptPublisher.publish(replacementAttempt.getId());
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertEquals(AttemptStatus.SUCCEEDED,
-                        attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
-        RecordedRequest replacementRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(replacementRequest);
-        assertEquals(0, replacementRequest.getSequenceNumber(),
-                "truncating a non-2xx fixed-length response must discard its connection");
+            assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
+            assertEquals(10_241, fixture.firstBodyBytesWritten.get());
+            fixture.probeClientAbort();
+            assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
+            assertTrue(!fixture.firstProducerFinished.get());
+            Attempt replacementAttempt = persistAttempt(fixture.url("/replacement"), 1);
+            attemptPublisher.publish(replacementAttempt.getId());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertEquals(AttemptStatus.SUCCEEDED,
+                            attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
+            assertTrue(fixture.secondServed.await(5, TimeUnit.SECONDS));
+            assertEquals(2, fixture.acceptedConnections.get(),
+                    "truncating a non-2xx fixed-length response must use a replacement socket");
+        }
     }
 
     @Test
-    void chunkedResponseWithoutContentLength_abortsUnreadRemainderAndReleasesTheExchange() throws InterruptedException {
-        // The real Apache transport must finish after the bounded diagnostic prefix, not after a
-        // caller buffers the full response. At this rate the complete body takes roughly 24 seconds,
-        // while the 10,241 bytes Relay reads arrive in well under one second.
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setChunkedBody("x".repeat(1_000_000), 257)
-                .throttleBody(1_024, 25, TimeUnit.MILLISECONDS));
-        Attempt attempt = persistAttempt(webhookUrl("/webhook"), 1);
+    void chunkedResponseWithoutContentLength_abortsUnreadRemainderAndReleasesTheExchange()
+            throws IOException, InterruptedException {
+        try (WorkerBoundedResponseFixture fixture = new WorkerBoundedResponseFixture(true, 200)) {
+            Attempt attempt = persistAttempt(fixture.url("/webhook"), 1);
+            attemptPublisher.publish(attempt.getId());
 
-        attemptPublisher.publish(attempt.getId());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+                assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+                assertTrue(reloaded.getResponseBody().length() <= 10_240);
+                assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+            });
+            assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
+            assertEquals(10_241, fixture.firstBodyBytesWritten.get());
+            fixture.probeClientAbort();
+            assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
+            assertTrue(!fixture.firstProducerFinished.get());
 
-        await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
-            assertTrue(reloaded.getResponseBody().length() <= 10_240);
-            assertTrue(reloaded.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
-        });
-
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("second response"));
-        Attempt secondAttempt = persistAttempt(webhookUrl("/webhook"), 1);
-        attemptPublisher.publish(secondAttempt.getId());
-
-        await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
-            Attempt reloaded = attemptRepository.findById(secondAttempt.getId()).orElseThrow();
-            assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
-            assertEquals("second response", reloaded.getResponseBody());
-        });
-        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        RecordedRequest secondRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(firstRequest);
-        assertNotNull(secondRequest);
-        assertEquals(0, firstRequest.getSequenceNumber());
-        assertEquals(0, secondRequest.getSequenceNumber(),
-                "truncating a chunked response must discard its connection");
-        assertEquals(2, mockWebServer.getRequestCount());
+            Attempt secondAttempt = persistAttempt(fixture.url("/second"), 1);
+            attemptPublisher.publish(secondAttempt.getId());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                Attempt reloaded = attemptRepository.findById(secondAttempt.getId()).orElseThrow();
+                assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
+                assertEquals("second response", reloaded.getResponseBody());
+            });
+            assertTrue(fixture.secondServed.await(5, TimeUnit.SECONDS));
+            assertEquals(2, fixture.acceptedConnections.get(),
+                    "truncating a chunked response must use a replacement socket");
+        }
     }
 
     @Test
-    void oversizedChunkedNon2xxResponse_isBoundedAndReplacesTheConnection() throws InterruptedException {
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(500)
-                .setChunkedBody("x".repeat(1_000_000), 257)
-                .throttleBody(1_024, 25, TimeUnit.MILLISECONDS));
-        Attempt attempt = persistAttempt(webhookUrl("/chunked-failure"), 1);
+    void oversizedChunkedNon2xxResponse_isBoundedAndReplacesTheConnection()
+            throws IOException, InterruptedException {
+        try (WorkerBoundedResponseFixture fixture = new WorkerBoundedResponseFixture(true, 500)) {
+            Attempt attempt = persistAttempt(fixture.url("/chunked-failure"), 1);
+            attemptPublisher.publish(attempt.getId());
 
-        attemptPublisher.publish(attempt.getId());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
+                assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
+                assertEquals(500, parent.getResponseCode());
+                assertTrue(parent.getResponseBody().length() <= 10_240);
+                assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
+                assertEquals(2, attemptRepository.findAll().size());
+            });
+            assertTrue(fixture.firstLimitReached.await(5, TimeUnit.SECONDS));
+            assertEquals(10_241, fixture.firstBodyBytesWritten.get());
+            fixture.probeClientAbort();
+            assertTrue(fixture.firstClientClosed.await(5, TimeUnit.SECONDS));
+            assertTrue(!fixture.firstProducerFinished.get());
 
-        await().atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
-            Attempt parent = attemptRepository.findById(attempt.getId()).orElseThrow();
-            assertEquals(AttemptStatus.FAILED_RETRYING, parent.getStatus());
-            assertEquals(500, parent.getResponseCode());
-            assertTrue(parent.getResponseBody().length() <= 10_240);
-            assertTrue(parent.getResponseBody().endsWith("[relay response truncated at 10240 bytes]"));
-            assertEquals(2, attemptRepository.findAll().size());
-        });
-
-        RecordedRequest firstRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(firstRequest);
-        assertEquals(0, firstRequest.getSequenceNumber());
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("replacement response"));
-        Attempt replacementAttempt = persistAttempt(webhookUrl("/replacement"), 1);
-        attemptPublisher.publish(replacementAttempt.getId());
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertEquals(AttemptStatus.SUCCEEDED,
-                        attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
-        RecordedRequest replacementRequest = mockWebServer.takeRequest(5, TimeUnit.SECONDS);
-        assertNotNull(replacementRequest);
-        assertEquals(0, replacementRequest.getSequenceNumber(),
-                "truncating a chunked non-2xx response must discard its connection");
+            Attempt replacementAttempt = persistAttempt(fixture.url("/replacement"), 1);
+            attemptPublisher.publish(replacementAttempt.getId());
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertEquals(AttemptStatus.SUCCEEDED,
+                            attemptRepository.findById(replacementAttempt.getId()).orElseThrow().getStatus()));
+            assertTrue(fixture.secondServed.await(5, TimeUnit.SECONDS));
+            assertEquals(2, fixture.acceptedConnections.get(),
+                    "truncating a chunked non-2xx response must use a replacement socket");
+        }
     }
 
     @Test
@@ -716,9 +741,29 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     private static Stream<Arguments> protectedDestinationFixtures() {
         return Stream.of(
-                Arguments.of("protected literal", "0.0.0.0", 0),
                 Arguments.of("protected DNS", "blocked.webhook.test", 1),
                 Arguments.of("mixed DNS answers", "mixed.webhook.test", 1));
+    }
+
+    @Test
+    void protectedLiteral_isRejectedBeforeConnectingToAProtectedListener() throws Exception {
+        try (ServerSocket protectedTrap = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            protectedTrap.setSoTimeout(500);
+            Attempt attempt = persistAttempt("http://0.0.0.0:" + protectedTrap.getLocalPort() + "/literal", 1);
+
+            attemptPublisher.publish(attempt.getId());
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+                assertEquals(AttemptStatus.FAILED_RETRYING, reloaded.getStatus());
+                assertTrue(reloaded.getLastError().startsWith("DESTINATION_POLICY_BLOCKED: "));
+                assertEquals(2, attemptRepository.findAll().size());
+            });
+
+            assertEquals(0, resolverInvocations.get(), "protected literals must not invoke DNS");
+            assertThrows(SocketTimeoutException.class, protectedTrap::accept,
+                    "policy rejection must open no connection to the protected listener");
+        }
     }
 
     @Test
@@ -898,8 +943,154 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         }
     }
 
+    private static final class WorkerBoundedResponseFixture implements AutoCloseable {
+
+        private static final int BODY_LIMIT = 10_240;
+        private static final int READ_SENTINEL = BODY_LIMIT + 1;
+        private static final int BODY_LENGTH = 65_536;
+
+        private final boolean chunked;
+        private final int firstStatus;
+        private final ServerSocket server;
+        private final CountDownLatch firstLimitReached = new CountDownLatch(1);
+        private final CountDownLatch firstClientClosed = new CountDownLatch(1);
+        private final CountDownLatch secondServed = new CountDownLatch(1);
+        private final AtomicInteger acceptedConnections = new AtomicInteger();
+        private final AtomicInteger firstBodyBytesWritten = new AtomicInteger();
+        private final AtomicBoolean firstProducerFinished = new AtomicBoolean();
+        private final AtomicReference<OutputStream> firstOutput = new AtomicReference<>();
+
+        private WorkerBoundedResponseFixture(boolean chunked, int firstStatus) throws IOException {
+            this.chunked = chunked;
+            this.firstStatus = firstStatus;
+            this.server = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+            Thread.startVirtualThread(this::serve);
+        }
+
+        private String url(String path) {
+            return "http://bounded.webhook.test:" + server.getLocalPort() + path;
+        }
+
+        private void serve() {
+            try (Socket first = server.accept()) {
+                acceptedConnections.incrementAndGet();
+                InputStream requestInput = first.getInputStream();
+                readHeaders(requestInput);
+                OutputStream output = first.getOutputStream();
+                firstOutput.set(output);
+                writeHeaders(output, firstStatus, chunked ? null : BODY_LENGTH);
+                writeLimitedBody(output);
+                Thread.startVirtualThread(() -> observeClientClosure(first, requestInput));
+                serveReplacement();
+            } catch (IOException ignored) {
+                // Fixture teardown or the expected client abort.
+            }
+        }
+
+        private void serveReplacement() {
+            try (Socket second = server.accept();
+                    InputStream requestInput = second.getInputStream();
+                    OutputStream output = second.getOutputStream()) {
+                acceptedConnections.incrementAndGet();
+                readHeaders(requestInput);
+                writeHeaders(output, 200, "second response".getBytes(StandardCharsets.UTF_8).length);
+                output.write("second response".getBytes(StandardCharsets.UTF_8));
+                output.flush();
+                secondServed.countDown();
+            } catch (IOException ignored) {
+                // Fixture teardown.
+            }
+        }
+
+        private void writeLimitedBody(OutputStream output) throws IOException {
+            byte[] body = "x".repeat(READ_SENTINEL).getBytes(StandardCharsets.US_ASCII);
+            if (chunked) {
+                output.write(Integer.toHexString(body.length).getBytes(StandardCharsets.US_ASCII));
+                output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            }
+            output.write(body);
+            if (chunked) {
+                output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            }
+            output.flush();
+            firstBodyBytesWritten.set(body.length);
+            firstLimitReached.countDown();
+        }
+
+        private void probeClientAbort() {
+            OutputStream output = firstOutput.get();
+            if (output == null) {
+                return;
+            }
+            try {
+                output.write('p');
+                output.flush();
+            } catch (IOException exception) {
+                firstClientClosed.countDown();
+            }
+        }
+
+        private void observeClientClosure(Socket socket, InputStream requestInput) {
+            try {
+                socket.setSoTimeout(2_000);
+                while (true) {
+                    // Consume the request body and wait for the client-side close after the response abort.
+                    if (requestInput.read() == -1) {
+                        firstClientClosed.countDown();
+                        return;
+                    }
+                }
+            } catch (SocketTimeoutException ignored) {
+                // The test assertion records a missing abort as a failure.
+            } catch (IOException exception) {
+                firstClientClosed.countDown();
+            }
+        }
+
+        private static void readHeaders(InputStream input) throws IOException {
+            int matched = 0;
+            while (matched < 4) {
+                int next = input.read();
+                if (next == -1) {
+                    return;
+                }
+                matched = switch (matched) {
+                    case 0 -> next == '\r' ? 1 : 0;
+                    case 1 -> next == '\n' ? 2 : next == '\r' ? 1 : 0;
+                    case 2 -> next == '\r' ? 3 : 0;
+                    case 3 -> next == '\n' ? 4 : 0;
+                    default -> 4;
+                };
+            }
+        }
+
+        private static void writeHeaders(OutputStream output, int status, Integer contentLength) throws IOException {
+            String reason = status >= 500 ? "Internal Server Error" : "OK";
+            output.write(("HTTP/1.1 " + status + " " + reason + "\r\n"
+                    + (contentLength == null ? "Transfer-Encoding: chunked\r\n"
+                            : "Content-Length: " + contentLength + "\r\n")
+                    + "Connection: keep-alive\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            output.flush();
+        }
+
+        @Override
+        public void close() {
+            try {
+                server.close();
+            } catch (IOException ignored) {
+                // Fixture teardown is best effort after the worker has closed its exchange.
+            }
+        }
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class LoopbackWebhookTransportConfiguration {
+
+        private static final Set<String> FIXTURE_HOSTS = Set.of(
+                "webhook.test.",
+                "blocked.webhook.test.",
+                "mixed.webhook.test.",
+                "bounded.webhook.test.");
 
         @Bean(name = "loopbackDeliveryConnectionManager", destroyMethod = "close")
         @Primary
@@ -907,6 +1098,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             DeliveryHttpClientConfig config = new DeliveryHttpClientConfig();
             HostAddressLookup lookup = (absoluteHostname, deadline) -> {
                 resolverInvocations.incrementAndGet();
+                if (!FIXTURE_HOSTS.contains(absoluteHostname)) {
+                    throw new DnsResolutionException("unexpected test fixture hostname: " + absoluteHostname);
+                }
                 if ("blocked.webhook.test.".equals(absoluteHostname)) {
                     return List.of(protectedZeroAddress());
                 }
@@ -935,10 +1129,21 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         }
 
         private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {
-            byte[] sentinelCatalog = "0.0.0.0/32|TEST_SENTINEL\n::/128|TEST_SENTINEL\n"
-                    .getBytes(StandardCharsets.UTF_8);
-            return new PublicDestinationAddressPolicy(
-                    new SpecialPurposeAddressCatalog(new ByteArrayInputStream(sentinelCatalog)));
+            try (InputStream resource = SpecialPurposeAddressCatalog.class
+                    .getResourceAsStream(SpecialPurposeAddressCatalog.RESOURCE)) {
+                if (resource == null) {
+                    throw new IllegalStateException("missing pinned policy resource");
+                }
+                String fixtureCatalog = new BufferedReader(new InputStreamReader(resource, StandardCharsets.UTF_8))
+                        .lines()
+                        .filter(line -> !line.startsWith("127.0.0.0/8|LOOPBACK")
+                                && !line.startsWith("::1/128|LOOPBACK"))
+                        .collect(Collectors.joining("\n"));
+                return new PublicDestinationAddressPolicy(new SpecialPurposeAddressCatalog(
+                        new ByteArrayInputStream(fixtureCatalog.getBytes(StandardCharsets.UTF_8))));
+            } catch (IOException exception) {
+                throw new IllegalStateException("unable to read pinned policy resource", exception);
+            }
         }
 
         private static InetAddress protectedZeroAddress() {
