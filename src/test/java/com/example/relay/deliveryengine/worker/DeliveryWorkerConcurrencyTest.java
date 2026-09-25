@@ -43,6 +43,7 @@ import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -51,6 +52,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @Testcontainers
 @org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@Import(LoopbackWebhookTransportTestConfiguration.class)
 class DeliveryWorkerConcurrencyTest implements SharedPostgresContainer {
 
     @Container
@@ -137,7 +139,7 @@ class DeliveryWorkerConcurrencyTest implements SharedPostgresContainer {
         });
 
         for (int i = 0; i < 4; i++) {
-            Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString());
+            Attempt attempt = persistAttempt(webhookUrl("/webhook"));
             attemptPublisher.publish(attempt.getId());
         }
 
@@ -166,5 +168,10 @@ class DeliveryWorkerConcurrencyTest implements SharedPostgresContainer {
     void deliveryWorkerListenerContainer_isRegisteredUnderExplicitId() {
         assertTrue(rabbitListenerEndpointRegistry.getListenerContainer("deliveryWorker") != null,
                 "expected a listener container registered under id 'deliveryWorker'");
+    }
+
+    private String webhookUrl(String path) {
+        return "http://" + LoopbackWebhookTransportTestConfiguration.FIXTURE_HOST + ":"
+                + mockWebServer.getPort() + path;
     }
 }
