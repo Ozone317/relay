@@ -154,7 +154,7 @@ abstract class AbstractDeliveryWorkerAggregateCapacityTest implements SharedPost
 
         // Steps 1-2: arrange and publish `ceiling` blocked deliveries.
         for (int i = 0; i < ceiling; i++) {
-            Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString());
+            Attempt attempt = persistAttempt(webhookUrl("/webhook"));
             attemptPublisher.publish(attempt.getId());
         }
 
@@ -162,7 +162,7 @@ abstract class AbstractDeliveryWorkerAggregateCapacityTest implements SharedPost
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertEquals(ceiling, arrived.get()));
 
         // Step 4: publish one more.
-        Attempt extra = persistAttempt(mockWebServer.url("/webhook").toString());
+        Attempt extra = persistAttempt(webhookUrl("/webhook"));
         attemptPublisher.publish(extra.getId());
 
         // Step 5: while the first `ceiling` remain blocked, confirm the extra one has NOT reached
@@ -208,7 +208,7 @@ abstract class AbstractDeliveryWorkerAggregateCapacityTest implements SharedPost
 
         Instant started = Instant.now();
         for (int i = 0; i < totalMessages; i++) {
-            Attempt attempt = persistAttempt(mockWebServer.url("/webhook").toString());
+            Attempt attempt = persistAttempt(webhookUrl("/webhook"));
             attemptPublisher.publish(attempt.getId());
         }
 
@@ -229,5 +229,10 @@ abstract class AbstractDeliveryWorkerAggregateCapacityTest implements SharedPost
         assertTrue(elapsed.toMillis() < expectedWavesMs * 4,
                 "expected roughly " + expectedWavesMs + "ms (2 waves at the ceiling) with generous slack; took "
                         + elapsed.toMillis() + "ms");
+    }
+
+    private String webhookUrl(String path) {
+        return "http://" + LoopbackWebhookTransportTestConfiguration.FIXTURE_HOST + ":"
+                + mockWebServer.getPort() + path;
     }
 }
