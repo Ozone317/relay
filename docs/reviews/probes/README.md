@@ -2,7 +2,7 @@
 
 Companion to [Readiness Verification & Engineering Projects](../2026-09-23-readiness-verification-and-projects.md).
 
-`ReadinessProbe.java` is a standalone review harness, outside application sources and the default test suite. Its P01 transport assertions verify the corrected UTF-8 JSON/signature invariant, while later assertions intentionally characterize current defects. A successful run confirms the P01 invariant and reproduces the remaining characterized defects; it is **not a claim that Relay is safe or that all fixes passed**. Keep invariant-preserving checks in the appropriate project regression tests; do not add this harness unchanged to CI. The dated readiness reports preserve their pre-implementation findings and current-at-review evidence; this harness now mixes the repaired P01 invariant with remaining defect characterizations.
+`ReadinessProbe.java` is a standalone review harness, outside application sources and the default test suite. This harness and its output below are a **pre-P03 historical snapshot**: its SSRF result records the vulnerability before P03, and Task H removed the JDK delivery client API the harness constructs. It is no longer a current or runnable verification command. Keep invariant-preserving checks in the project regression tests; do not add this harness unchanged to CI. The dated readiness reports preserve their pre-implementation findings and evidence as of their review dates.
 
 ## Scope and safety
 
@@ -12,38 +12,21 @@ The harness does write synthetic data to its isolated database and compile class
 
 Concurrency uses latches and committed operations. The stale-worker case simulates an expired claim through timestamps, rather than inducing a real 90-second pause. The replay gate surrounds the real service's creation call. The reset gate wraps the real candidate query, then runs real token transactions. Email dispatch confirmation is written through the production repository method and checked before recovery resumes; actual provider delivery is not tested.
 
-## Reproduce
+## Historical pre-P03 reproduction
 
-Run from `/home/daksh/Personal/relay`. First compile and run the selected existing regressions; this also creates a fresh Surefire classpath record:
+The commands and outcomes in this section document how the pre-P03 harness was originally run. The standalone harness no longer compiles against the Task H production transport, so use the current Task J verification in `.superpowers/sdd/2026-09-24-p03-outbound-destination-safety/task-J-report.md` for P03 evidence.
 
-```bash
-./mvnw -q \
-  -Dtest=HmacSignerTest,DeliveryWorkerAckLifecycleTest,DeliveryHttpClientPinningTest,DeliveryHttpClientConnectTimeoutTest,AttemptServiceMarkFailedAndCreateRetryAtomicityTest,DeliveryReplayConcurrencyPostgresTest,DeliveryReplayLifecycleIntegrationTest,PasswordResetEmailRecoverySweeperTest,PasswordResetConcurrentRequestPostgresTest,ScheduledLoopGatingTest \
-  -Drelay.retry.scheduling-enabled=false test
-```
-
-Then compile/run the standalone harness. Node is used only to extract the resolved local test classpath, not to generate or change application code:
+The historical regression selection was superseded by this current Apache transport selection, which retains the P01/P02 and lifecycle controls while exercising the production P03 transport:
 
 ```bash
-relay_review_cp=$(node -e '
-  const fs = require("fs");
-  const xml = fs.readFileSync(
-    "target/surefire-reports/TEST-com.example.relay.attempt.application.AttemptServiceMarkFailedAndCreateRetryAtomicityTest.xml", "utf8");
-  console.log(xml.match(/name="java.class.path" value="([^"]+)"/)[1].replaceAll("&amp;", "&"));
-')
-mkdir -p target/readiness-review
-javac -proc:none -cp "$relay_review_cp" \
-  -d target/readiness-review docs/reviews/probes/ReadinessProbe.java
-java -Dspring.devtools.restart.enabled=false -Ddebug=false \
-  -Dlogging.level.org.springframework=ERROR \
-  -cp "target/readiness-review:$relay_review_cp" ReadinessProbe
+./mvnw test -Dtest=HmacSignerTest,DeliveryWorkerAckLifecycleTest,DeliveryHttpClientSecurityConfigTest,ApacheDnsSocketBindingIntegrationTest,ApacheWebhookHttpTransportTest,ApacheWebhookHttpTransportDeadlineTest,BoundedApacheResponseBodyConsumerTest,ApacheResponseConsumptionIntegrationTest,AttemptServiceMarkFailedAndCreateRetryAtomicityTest,DeliveryReplayConcurrencyPostgresTest,DeliveryReplayLifecycleIntegrationTest,PasswordResetEmailRecoverySweeperTest,PasswordResetConcurrentRequestPostgresTest,ScheduledLoopGatingTest
 ```
 
-Disabling DevTools restart matters for a standalone main on the test classpath. The first exploratory invocation allowed restart and exited nonzero despite reaching the final marker. Two subsequent invocations with restart disabled exited zero, including the final version with the explicit reset-confirmation assertion. Only the clean runs are counted as successful evidence.
+Task J ran this selection on 2026-09-29: **87 tests, zero failures, zero errors, zero skipped**.
 
-For concise output, pipe the `java` command through `awk '/PROBE |Exception in thread|Caused by:|AssertionError|APPLICATION FAILED/ {print}'` with Bash `set -o pipefail`; retain the Java exit status. Expected PostgreSQL length violations occur deliberately inside the probe.
+The old standalone Java invocation is omitted because `ReadinessProbe.java` still constructs the removed JDK delivery client and cannot compile against the post-Task-H code.
 
-## Observed final output
+## Observed pre-P03 output (historical)
 
 ```text
 PROBE unicode contentType=application/json utf8Matches=true receiverSignatureMatches=true
@@ -59,9 +42,9 @@ PROBE scheduler unqualifiedThread=relay-retry-1 qualifiedTickBlockedUntilRelease
 PROBE COMPLETE allExpectedOutcomesObserved=true productionFilesModified=false
 ```
 
-## Existing regressions run in this pass
+## Existing regressions run in the historical pass
 
-Maven exited zero. Fresh Surefire reports contained **23 tests, zero failures, zero errors, zero skipped**, across these ten classes:
+Maven exited zero. Fresh Surefire reports from the historical pre-P03 pass contained **23 tests, zero failures, zero errors, zero skipped**, across these ten classes:
 
 | Class | Tests |
 |---|---:|
