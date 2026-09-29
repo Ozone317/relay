@@ -12,19 +12,57 @@ The harness does write synthetic data to its isolated database and compile class
 
 Concurrency uses latches and committed operations. The stale-worker case simulates an expired claim through timestamps, rather than inducing a real 90-second pause. The replay gate surrounds the real service's creation call. The reset gate wraps the real candidate query, then runs real token transactions. Email dispatch confirmation is written through the production repository method and checked before recovery resumes; actual provider delivery is not tested.
 
-## Historical pre-P03 reproduction
+## Current post-P03 verification
 
-The commands and outcomes in this section document how the pre-P03 harness was originally run. The standalone harness no longer compiles against the Task H production transport, so use the current Task J verification in `.superpowers/sdd/2026-09-24-p03-outbound-destination-safety/task-J-report.md` for P03 evidence.
+Run date: 2026-09-29. P03 focused checks and the current Apache transport regressions passed. The one full-suite run
+reported four unattributed lifecycle timing errors; scheduler activity is a plausible mechanism, but causality is
+unproven and P03 contribution is not excluded.
 
-The historical regression selection was superseded by this current Apache transport selection, which retains the P01/P02 and lifecycle controls while exercising the production P03 transport:
+Focused P03 command and result after the interruption-test correction: **140 tests, 0 failures, 0 errors, 0 skipped**.
+The exact interruption test also passed six consecutive runs.
+
+```bash
+./mvnw test -Dtest=WebhookUriParserTest,WebhookUrlValidatorTest,PublicDestinationAddressPolicyTest,SpecialPurposeAddressCatalogTest,DeliveryDnsPropertiesBindingTest,DeliveryDnsPropertiesValidationTest,DeliveryDnsPropertiesConfigurationKeysTest,DeliveryDeadlineContextTest,SystemHostAddressLookupTest,PolicyEnforcingDnsResolverTest,DeliveryHttpClientSecurityConfigTest,ApacheDnsSocketBindingIntegrationTest,ApacheWebhookHttpTransportTest,ApacheWebhookHttpTransportDeadlineTest,BoundedApacheResponseBodyConsumerTest,ApacheResponseConsumptionIntegrationTest,WebhookDestinationAdversarialIntegrationTest,WebhookTlsIdentityIntegrationTest
+```
+
+The adapted post-P01/P02 lifecycle command and result: **87 tests, 0 failures, 0 errors, 0 skipped**. The two JDK
+transport tests in the earlier probe command were removed with that transport in Task H; the Apache security, binding,
+deadline, and response suites below cover the active production transport.
 
 ```bash
 ./mvnw test -Dtest=HmacSignerTest,DeliveryWorkerAckLifecycleTest,DeliveryHttpClientSecurityConfigTest,ApacheDnsSocketBindingIntegrationTest,ApacheWebhookHttpTransportTest,ApacheWebhookHttpTransportDeadlineTest,BoundedApacheResponseBodyConsumerTest,ApacheResponseConsumptionIntegrationTest,AttemptServiceMarkFailedAndCreateRetryAtomicityTest,DeliveryReplayConcurrencyPostgresTest,DeliveryReplayLifecycleIntegrationTest,PasswordResetEmailRecoverySweeperTest,PasswordResetConcurrentRequestPostgresTest,ScheduledLoopGatingTest
 ```
 
-Task J ran this selection on 2026-09-29: **87 tests, zero failures, zero errors, zero skipped**.
+The single full-suite command was `./mvnw test`: **768 tests, 0 assertion failures, 4 errors, 0 skipped**. The errors
+were:
 
-The old standalone Java invocation is omitted because `ReadinessProbe.java` still constructs the removed JDK delivery client and cannot compile against the post-Task-H code.
+- `ReconciliationSweeperIntegrationTest.staleInFlightAttempt_isResetWithoutDirectPublication`: the ready-publication
+  marker was expected to remain null but was set during the 5-second assertion window.
+- `DeliveryWorkerIntegrationTest.exception_beforeFinalAttempt_marksAttemptFailedAndCreatesRetry`: the retry child was
+  expected to remain `SCHEDULED`, but was observed as `CREATED`.
+- `DeliveryWorkerIntegrationTest.protectedDestination_isRejectedThroughWorkerLifecycleWithoutOpeningListener`:
+  the protected-DNS and mixed-DNS cases each expected a `SCHEDULED` retry child but observed `CREATED`.
+
+These are full-suite lifecycle timing errors. The run showed scheduler activity, a plausible mechanism, but did not tie
+the relevant scheduled operations to the failing rows; causality is unproven, and P03 contribution is not excluded.
+No P03 policy, transport, P01, or P02 assertions failed.
+
+The forbidden-configuration audit used:
+
+```bash
+rg -n "allow-private|NoopHostnameVerifier|TrustAll|useSystemProperties|setProxy\(|setProxySelector|SocksProxy|followRedirect|disableHostnameVerification|dnsjava" src pom.xml
+```
+
+Matches were explicit no-SOCKS configuration, negative proxy/SOCKS test assertions, and comments documenting forbidden
+system-property behavior. No private-address bypass, permissive TLS, proxy route, redirect following, or dnsjava
+dependency was found. The branch scope audit found no schema/migration, Attempt-state, retry-policy, URL-snapshot, or
+scheduler production changes. See the tracked P03 security invariants in
+[`docs/superpowers/specs/2026-09-24-p03-outbound-destination-safety-design.md`](../../superpowers/specs/2026-09-24-p03-outbound-destination-safety-design.md#19-security-invariants-checklist).
+
+## Historical pre-P03 reproduction
+
+The following output records pre-P03 behavior only. `ReadinessProbe.java` depends on the JDK delivery client removed
+in Task H and is no longer a current or runnable verification harness.
 
 ## Observed pre-P03 output (historical)
 
