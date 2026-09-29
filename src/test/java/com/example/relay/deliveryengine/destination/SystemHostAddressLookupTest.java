@@ -2,7 +2,9 @@ package com.example.relay.deliveryengine.destination;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -13,6 +15,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -92,22 +95,35 @@ class SystemHostAddressLookupTest {
         DeliveryDnsProperties properties = properties(1, 1, Duration.ofSeconds(1));
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch callerCompleted = new CountDownLatch(1);
+        AtomicReference<Throwable> callerOutcome = new AtomicReference<>();
+        AtomicBoolean callerInterruptRestored = new AtomicBoolean();
         try (SystemHostAddressLookup lookup = new SystemHostAddressLookup(properties, ignored -> {
             started.countDown();
             await(release);
             return new InetAddress[] { addressUnchecked("93.184.216.34") };
         })) {
             Thread thread = new Thread(() -> {
-                assertThrows(DnsResolutionException.class,
-                        () -> lookup.lookup("hooks.example.test.", deadline(1)));
-                assertEquals(true, Thread.currentThread().isInterrupted());
+                try {
+                    lookup.lookup("hooks.example.test.", deadline(1));
+                    callerOutcome.set(new AssertionError("interrupted lookup unexpectedly returned addresses"));
+                } catch (Throwable outcome) {
+                    callerOutcome.set(outcome);
+                } finally {
+                    callerInterruptRestored.set(Thread.currentThread().isInterrupted());
+                    callerCompleted.countDown();
+                }
             });
             thread.start();
             assertEquals(true, started.await(1, TimeUnit.SECONDS));
             thread.interrupt();
+            assertTrue(callerCompleted.await(1, TimeUnit.SECONDS), "interrupted caller should finish before release");
             release.countDown();
             thread.join(1_000L);
             assertFalse(thread.isAlive());
+            DnsResolutionException failure = assertInstanceOf(DnsResolutionException.class, callerOutcome.get());
+            assertInstanceOf(InterruptedException.class, failure.getCause());
+            assertTrue(callerInterruptRestored.get());
         }
     }
 
