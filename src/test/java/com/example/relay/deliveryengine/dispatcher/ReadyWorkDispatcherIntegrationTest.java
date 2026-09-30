@@ -57,7 +57,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -65,11 +64,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Tag("integration")
 @SpringBootTest
-@TestPropertySource(properties = {
-        "spring.task.scheduling.enabled=false",
-        "spring.rabbitmq.listener.simple.auto-startup=false",
-        "relay.retry.scheduling-enabled=false"
-})
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {

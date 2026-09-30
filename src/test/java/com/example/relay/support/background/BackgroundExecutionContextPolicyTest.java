@@ -8,9 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-import com.example.relay.deliveryengine.deadletter.DeadLetterNotifier;
-import com.example.relay.deliveryengine.worker.DeliveryWorker;
-import com.example.relay.email.EmailDispatchConsumer;
 import com.example.relay.support.SharedPostgresContainer;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -19,7 +16,8 @@ import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -31,9 +29,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.scheduling.config.TaskManagementConfigUtils;
+import org.springframework.util.ClassUtils;
+import org.springframework.util.ReflectionUtils;
 import org.springframework.test.context.ContextConfigurationAttributes;
 import org.springframework.test.context.ContextCustomizer;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -46,10 +48,19 @@ class BackgroundExecutionContextPolicyTest {
 
     private static final RabbitMQContainer RABBIT = startRabbit();
 
-    private static final Map<String, ListenerDescriptor> PRODUCTION_LISTENERS = Map.of("deliveryWorker",
-            new ListenerDescriptor(DeliveryWorker.class, "deliveryListenerContainerFactory"), "deadLetterNotifier",
-            new ListenerDescriptor(DeadLetterNotifier.class, "rabbitListenerContainerFactory"), "emailDispatchConsumer",
-            new ListenerDescriptor(EmailDispatchConsumer.class, "rabbitListenerContainerFactory"));
+    private static final Set<ScheduledDescriptor> PRODUCTION_SCHEDULED_METHODS = Set.of(
+            new ScheduledDescriptor("RetryScheduler", "scheduledReleaseDueRetries"),
+            new ScheduledDescriptor("ReadyWorkDispatcher", "scheduledDispatch"),
+            new ScheduledDescriptor("ReconciliationSweeper", "scheduledSweep"),
+            new ScheduledDescriptor("PasswordResetTokenCleanupTask", "cleanup"),
+            new ScheduledDescriptor("PasswordResetEmailRecoverySweeper", "sweep"));
+
+    private static final Set<ListenerDescriptor> PRODUCTION_LISTENERS = Set.of(
+            new ListenerDescriptor("DeliveryWorker", "onMessage", "deliveryWorker", "deliveryListenerContainerFactory"),
+            new ListenerDescriptor("DeadLetterNotifier", "onMessage", "deadLetterNotifier",
+                    "rabbitListenerContainerFactory"),
+            new ListenerDescriptor("EmailDispatchConsumer", "onMessage", "emailDispatchConsumer",
+                    "rabbitListenerContainerFactory"));
 
     @Nested
     @SpringBootTest
@@ -64,19 +75,26 @@ class BackgroundExecutionContextPolicyTest {
 
         @Test
         void ordinaryContextRegistersNoAutonomousScheduledCallbacks() {
+            assertEquals(PRODUCTION_SCHEDULED_METHODS, scheduledInventory(applicationContext),
+                    "production @Scheduled inventory changed; classify the new callback under P00");
             assertFalse(applicationContext
                     .containsBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
+            long registeredTasks = applicationContext.getBeansOfType(ScheduledTaskHolder.class).values().stream()
+                    .mapToLong(holder -> holder.getScheduledTasks().size())
+                    .sum();
+            assertEquals(0, registeredTasks, "ordinary context registered autonomous scheduled tasks");
         }
 
         @Test
         void ordinaryContextHasNoRunningProductionRabbitListenerContainers() {
-            PRODUCTION_LISTENERS.forEach((listenerId, descriptor) -> {
-                assertEquals(descriptor.containerFactory(), actualContainerFactory(descriptor.component()),
-                        () -> "listener factory inventory changed for " + listenerId);
-                MessageListenerContainer container = listenerRegistry.getListenerContainer(listenerId);
-                assertNotNull(container, () -> "missing production listener container " + listenerId);
-                assertFalse(container.isRunning(), () -> "ordinary context started production listener " + listenerId
-                        + " via " + descriptor.containerFactory());
+            assertEquals(PRODUCTION_LISTENERS, rabbitListenerInventory(applicationContext),
+                    "production @RabbitListener inventory changed; verify its factory obeys P00 suppression");
+            PRODUCTION_LISTENERS.forEach(descriptor -> {
+                MessageListenerContainer container = listenerRegistry.getListenerContainer(descriptor.listenerId());
+                assertNotNull(container, () -> "missing production listener container " + descriptor.listenerId());
+                assertFalse(container.isRunning(),
+                        () -> "ordinary context started production listener " + descriptor.listenerId() + " via "
+                                + descriptor.containerFactory());
             });
         }
     }
@@ -119,7 +137,7 @@ class BackgroundExecutionContextPolicyTest {
 
         @Test
         void rabbitListenerOptInStartsEveryProductionListenerButNotScheduling() {
-            assertProductionListenersRunning(listenerRegistry);
+            assertProductionListenersRunning(applicationContext, listenerRegistry);
             assertFalse(applicationContext
                     .containsBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
         }
@@ -143,7 +161,7 @@ class BackgroundExecutionContextPolicyTest {
 
         @Test
         void combinedOptInKeepsBothProductionActivationPaths() {
-            assertProductionListenersRunning(listenerRegistry);
+            assertProductionListenersRunning(applicationContext, listenerRegistry);
             assertTrue(applicationContext
                     .containsBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
         }
@@ -174,17 +192,6 @@ class BackgroundExecutionContextPolicyTest {
         assertEquals(scheduling, composed);
     }
 
-    private static String actualContainerFactory(Class<?> component) {
-        for (Method method : component.getDeclaredMethods()) {
-            RabbitListener listener = method.getAnnotation(RabbitListener.class);
-            if (listener != null) {
-                return listener.containerFactory().isBlank() ? "rabbitListenerContainerFactory"
-                        : listener.containerFactory();
-            }
-        }
-        throw new AssertionError("No @RabbitListener found on " + component.getName());
-    }
-
     private static RabbitMQContainer startRabbit() {
         RabbitMQContainer rabbit = new RabbitMQContainer("rabbitmq:4.3.6-management");
         rabbit.start();
@@ -198,15 +205,49 @@ class BackgroundExecutionContextPolicyTest {
         registry.add("spring.rabbitmq.password", RABBIT::getAdminPassword);
     }
 
-    private static void assertProductionListenersRunning(RabbitListenerEndpointRegistry registry) {
-        PRODUCTION_LISTENERS.forEach((listenerId, descriptor) -> {
-            MessageListenerContainer container = registry.getListenerContainer(listenerId);
-            assertNotNull(container, () -> "missing production listener container " + listenerId);
+    private static void assertProductionListenersRunning(
+            ApplicationContext applicationContext, RabbitListenerEndpointRegistry registry) {
+        assertEquals(PRODUCTION_LISTENERS, rabbitListenerInventory(applicationContext),
+                "production @RabbitListener inventory changed; classify the new listener under P00");
+        PRODUCTION_LISTENERS.forEach(descriptor -> {
+            MessageListenerContainer container = registry.getListenerContainer(descriptor.listenerId());
+            assertNotNull(container, () -> "missing production listener container " + descriptor.listenerId());
             if (!container.isRunning()) {
-                fail("opt-in did not start production listener " + listenerId + " via "
+                fail("opt-in did not start production listener " + descriptor.listenerId() + " via "
                         + descriptor.containerFactory());
             }
         });
+    }
+
+    private static Set<ScheduledDescriptor> scheduledInventory(ApplicationContext applicationContext) {
+        return applicationMethods(applicationContext).stream()
+                .filter(method -> AnnotatedElementUtils.findMergedAnnotation(method, Scheduled.class) != null)
+                .map(method -> new ScheduledDescriptor(method.getDeclaringClass().getSimpleName(), method.getName()))
+                .collect(Collectors.toSet());
+    }
+
+    private static Set<ListenerDescriptor> rabbitListenerInventory(ApplicationContext applicationContext) {
+        return applicationMethods(applicationContext).stream()
+                .filter(method -> AnnotatedElementUtils.findMergedAnnotation(method, RabbitListener.class) != null)
+                .map(method -> {
+                    RabbitListener listener =
+                            AnnotatedElementUtils.findMergedAnnotation(method, RabbitListener.class);
+                    String containerFactory = listener.containerFactory().isBlank()
+                            ? "rabbitListenerContainerFactory"
+                            : listener.containerFactory();
+                    return new ListenerDescriptor(method.getDeclaringClass().getSimpleName(), method.getName(),
+                            listener.id(), containerFactory);
+                })
+                .collect(Collectors.toSet());
+    }
+
+    private static Set<Method> applicationMethods(ApplicationContext applicationContext) {
+        return List.of(applicationContext.getBeanDefinitionNames()).stream()
+                .map(applicationContext::getType)
+                .filter(type -> type != null && type.getPackageName().startsWith("com.example.relay"))
+                .map(ClassUtils::getUserClass)
+                .flatMap(type -> List.of(ReflectionUtils.getAllDeclaredMethods(type)).stream())
+                .collect(Collectors.toSet());
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -266,6 +307,8 @@ class BackgroundExecutionContextPolicyTest {
     private @interface SchedulingEnabledTest {
     }
 
-    private record ListenerDescriptor(Class<?> component, String containerFactory) {
-    }
+    private record ScheduledDescriptor(String component, String method) {}
+
+    private record ListenerDescriptor(
+            String component, String method, String listenerId, String containerFactory) {}
 }

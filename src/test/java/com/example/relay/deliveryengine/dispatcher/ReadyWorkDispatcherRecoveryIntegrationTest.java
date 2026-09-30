@@ -53,10 +53,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @TestPropertySource(properties = {
-        "spring.task.scheduling.enabled=false",
-        "spring.rabbitmq.listener.simple.auto-startup=false",
-        "relay.retry.scheduling-enabled=false",
-        "relay.reconciliation.scheduling-enabled=false",
         "relay.reconciliation.batch-size=10",
         "relay.reconciliation.interval=1h",
         "relay.reconciliation.dead-letter-grace=1h",

@@ -70,7 +70,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
-import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -88,7 +87,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @EnableTestBackgroundExecution(TestBackgroundComponent.RABBIT_LISTENERS)
 @Import(DeliveryReplayLifecycleIntegrationTest.LoopbackWebhookTransportConfiguration.class)
-@TestPropertySource(properties = "relay.retry.scheduling-enabled=false")
 public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresContainer {
 
     @Container

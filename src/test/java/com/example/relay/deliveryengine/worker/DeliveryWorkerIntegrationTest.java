@@ -93,7 +93,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -115,10 +114,6 @@ import com.example.relay.deliveryengine.http.WebhookHttpTransport;
 @Testcontainers
 @EnableTestBackgroundExecution(TestBackgroundComponent.RABBIT_LISTENERS)
 @Import(DeliveryWorkerIntegrationTest.LoopbackWebhookTransportConfiguration.class)
-@TestPropertySource(properties = {
-        "relay.retry.scheduling-enabled=false",
-        "relay.reconciliation.scheduling-enabled=false"
-})
 public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     private static final Instant FIXED_RETRY_NOW = Instant.parse("2026-09-20T12:00:00Z");

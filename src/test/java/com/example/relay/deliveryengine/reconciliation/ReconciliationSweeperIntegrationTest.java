@@ -57,13 +57,6 @@ import jakarta.persistence.PersistenceContext;
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @TestPropertySource(properties = {
-        // The real @Scheduled loop and the real DeliveryWorker listener would otherwise race
-        // this test's own calls to sweep() and its own queue reads - same reasoning as
-        // AttemptPublisherIntegrationTest disabling the listener for its own queue reads.
-        "spring.task.scheduling.enabled=false",
-        "spring.rabbitmq.listener.simple.auto-startup=false",
-        "relay.retry.scheduling-enabled=false",
-        "relay.reconciliation.scheduling-enabled=false",
         "relay.reconciliation.batch-size=2",
         "relay.reconciliation.interval=1h",
         "relay.reconciliation.dead-letter-grace=1h",
