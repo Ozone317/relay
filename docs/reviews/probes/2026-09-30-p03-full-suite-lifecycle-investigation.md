@@ -1,7 +1,9 @@
 # P03 full-suite lifecycle-error investigation
 
-Date: 2026-09-30  
-P03 revision investigated: `6605869` on `feature/p03-outbound-destination-safety`  
+Date: 2026-09-30
+
+P03 revision investigated: `6605869` on `feature/p03-outbound-destination-safety`
+
 Pre-P03 control revision: `9044e47`
 
 ## Purpose
