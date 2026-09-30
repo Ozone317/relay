@@ -31,6 +31,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -68,6 +69,7 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
 
     private final JdbcTemplate jdbcTemplate;
     private final ReconciliationSweeper reconciliationSweeper;
+    private final List<UUID> victimUserIds = new ArrayList<>();
 
     @Autowired
     BackgroundExecutionCrossContextRegressionTest(
@@ -90,6 +92,37 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
     @BeforeEach
     void removeVictimRows() {
         jdbcTemplate.update("DELETE FROM attempts");
+    }
+
+    @AfterEach
+    void removeCommittedVictimGraph() {
+        victimUserIds.forEach(userId -> {
+            jdbcTemplate.update(
+                    "DELETE FROM attempts WHERE app_id IN (SELECT id FROM apps WHERE environment_id IN "
+                            + "(SELECT id FROM environments WHERE user_id = ?))",
+                    userId);
+            jdbcTemplate.update(
+                    "DELETE FROM deliveries WHERE app_id IN (SELECT id FROM apps WHERE environment_id IN "
+                            + "(SELECT id FROM environments WHERE user_id = ?))",
+                    userId);
+            jdbcTemplate.update(
+                    "DELETE FROM messages WHERE app_id IN (SELECT id FROM apps WHERE environment_id IN "
+                            + "(SELECT id FROM environments WHERE user_id = ?))",
+                    userId);
+            jdbcTemplate.update(
+                    "DELETE FROM endpoints WHERE app_id IN (SELECT id FROM apps WHERE environment_id IN "
+                            + "(SELECT id FROM environments WHERE user_id = ?))",
+                    userId);
+            jdbcTemplate.update(
+                    "DELETE FROM events WHERE app_id IN (SELECT id FROM apps WHERE environment_id IN "
+                            + "(SELECT id FROM environments WHERE user_id = ?))",
+                    userId);
+            jdbcTemplate.update("DELETE FROM apps WHERE environment_id IN "
+                    + "(SELECT id FROM environments WHERE user_id = ?)", userId);
+            jdbcTemplate.update("DELETE FROM environments WHERE user_id = ?", userId);
+            jdbcTemplate.update("DELETE FROM users WHERE id = ?", userId);
+        });
+        victimUserIds.clear();
     }
 
     @Test
@@ -200,6 +233,7 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
         Instant now = Instant.now();
         Timestamp nowTimestamp = Timestamp.from(now);
         Timestamp updatedTimestamp = Timestamp.from(updatedAt);
+        victimUserIds.add(userId);
 
         jdbcTemplate.update(
                 "INSERT INTO users (id, email, password, email_verified, version) VALUES (?, ?, ?, false, 0)",

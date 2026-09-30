@@ -146,3 +146,39 @@ No URI-policy, DNS-to-socket, proxy, TLS, exact-request-byte, bounded-response, 
 - Resolve the shared-context/shared-database scheduler isolation under P00, not P03.
 - Until P00 is resolved, interpret uncapped full-suite lifecycle timing failures using their concrete database writer and transition rather than attributing them from the final observed state alone.
 - No diagnostic instrumentation or production changes from this investigation remain in the worktree.
+
+## P00 resolution — deterministic background test isolation
+
+P00 implemented the test-infrastructure fix described by the
+[P00 design](../2026-09-30-p00-deterministic-background-test-isolation-design.md) and
+[implementation plan](../../superpowers/plans/2026-09-30-p00-deterministic-background-test-isolation.md).
+Ordinary Spring test contexts now register no autonomous production scheduled callbacks and keep every production
+Rabbit listener container present but stopped. Tests that genuinely exercise those framework paths opt in through
+`@EnableTestBackgroundExecution(SCHEDULING)`, `RABBIT_LISTENERS`, or both; the same annotation evicts and closes the
+enabled context after its class.
+
+The deterministic causal regression retains both sides of the historical evidence:
+
+- policy-bypassed source contexts capture and run the real `RetryScheduler` and `ReadyWorkDispatcher` callbacks
+  against the real `ReadyWorkRepositoryImpl` PostgreSQL SQL, reproducing `SCHEDULED → CREATED` promotion and the
+  foreign ready-dispatch claim;
+- equivalent ordinary P00-governed source contexts capture zero callbacks and leave both committed victim rows
+  unchanged;
+- an opt-in lifecycle contract observes scheduler disposal, datasource shutdown, and context close after the class.
+
+Verification on 2026-09-30 produced:
+
+| Gate | Result |
+|---|---|
+| Focused P00 policy/causal/scheduling contracts | 12 passed; 0 failures/errors/skips |
+| Integration tier | 284 passed; 0 failures/errors/skips |
+| Full suite | 779 passed; 0 failures/errors/skips; 8m22s |
+| Ordered retry-promotion sequence | 3/3 passed |
+| Ordered reset-then-claim sequence | 3/3 passed |
+| Production-scope audit | no `src/main` changes |
+| `git diff --check` | passed |
+
+The repository-wide `spotless:check` remains red on 169 pre-existing files (including unchanged `src/main` files).
+Every P00-touched Java file was formatted with Spotless, but fixing that global baseline would violate P00's explicit
+production-scope boundary. This formatting debt is independent of the now-green functional verification gate and is
+retained as an explicit release-check exception rather than hidden by reformatting production code in P00.
