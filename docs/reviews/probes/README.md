@@ -15,8 +15,8 @@ Concurrency uses latches and committed operations. The stale-worker case simulat
 ## Current post-P03 verification
 
 Run date: 2026-09-29. P03 focused checks and the current Apache transport regressions passed. The one full-suite run
-reported four unattributed lifecycle timing errors; scheduler activity is a plausible mechanism, but causality is
-unproven and P03 contribution is not excluded.
+reported four lifecycle timing errors. The subsequent bounded causal investigation is preserved in
+[P03 full-suite lifecycle-error investigation](2026-09-30-p03-full-suite-lifecycle-investigation.md).
 
 Focused P03 command and result after the interruption-test correction: **140 tests, 0 failures, 0 errors, 0 skipped**.
 The exact interruption test also passed six consecutive runs.
@@ -36,16 +36,19 @@ deadline, and response suites below cover the active production transport.
 The single full-suite command was `./mvnw test`: **768 tests, 0 assertion failures, 4 errors, 0 skipped**. The errors
 were:
 
-- `ReconciliationSweeperIntegrationTest.staleInFlightAttempt_isResetWithoutDirectPublication`: the ready-publication
-  marker was expected to remain null but was set during the 5-second assertion window.
+- `ReconciliationSweeperIntegrationTest.staleInFlightAttempt_isResetWithoutDirectPublication`: the reset row was
+  expected to have no ready-dispatch lease, but `ready_dispatch_claim_id` was populated during the assertion window.
 - `DeliveryWorkerIntegrationTest.exception_beforeFinalAttempt_marksAttemptFailedAndCreatesRetry`: the retry child was
   expected to remain `SCHEDULED`, but was observed as `CREATED`.
 - `DeliveryWorkerIntegrationTest.protectedDestination_isRejectedThroughWorkerLifecycleWithoutOpeningListener`:
   the protected-DNS and mixed-DNS cases each expected a `SCHEDULED` retry child but observed `CREATED`.
 
-These are full-suite lifecycle timing errors. The run showed scheduler activity, a plausible mechanism, but did not tie
-the relevant scheduled operations to the failing rows; causality is unproven, and P03 contribution is not excluded.
-No P03 policy, transport, P01, or P02 assertions failed.
+The causal follow-up identified the exact writers as background scheduler/dispatcher components in other cached Spring
+contexts sharing the same PostgreSQL database. Both transition families reproduced through the same mechanism on
+pre-P03 revision `9044e47`. The existing exception-path error is a pre-existing test-isolation race; the two P03-only
+DNS cases are timing exposure of that same race rather than P03 transport regressions. No P03 policy, transport, P01,
+or P02 assertion failed, and no P03 production change is required. The separately tracked P00 isolation issue can
+still make the uncapped full suite nondeterministic.
 
 The forbidden-configuration audit used:
 
