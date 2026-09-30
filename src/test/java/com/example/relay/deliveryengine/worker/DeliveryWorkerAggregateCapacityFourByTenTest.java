@@ -1,12 +1,13 @@
 package com.example.relay.deliveryengine.worker;
 
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import org.junit.jupiter.api.Tag;
 
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -15,7 +16,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution(TestBackgroundComponent.RABBIT_LISTENERS)
 @Import(LoopbackWebhookTransportTestConfiguration.class)
 class DeliveryWorkerAggregateCapacityFourByTenTest extends AbstractDeliveryWorkerAggregateCapacityTest {
 

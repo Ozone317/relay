@@ -12,6 +12,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
@@ -49,7 +51,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
-@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution(TestBackgroundComponent.RABBIT_LISTENERS)
 class EmailDispatchFailureLoggingIntegrationTest implements SharedPostgresContainer {
 
     @Container

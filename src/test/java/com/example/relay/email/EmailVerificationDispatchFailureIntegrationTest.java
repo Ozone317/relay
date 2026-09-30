@@ -10,6 +10,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import com.example.relay.user.application.EmailVerificationService;
 import com.example.relay.user.application.EmailVerificationTokenService;
 import com.example.relay.user.application.EmailVerificationTokenService.IssuedVerificationToken;
@@ -48,7 +50,7 @@ import org.testcontainers.utility.DockerImageName;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
-@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution(TestBackgroundComponent.RABBIT_LISTENERS)
 class EmailVerificationDispatchFailureIntegrationTest implements SharedPostgresContainer {
 
     @Container

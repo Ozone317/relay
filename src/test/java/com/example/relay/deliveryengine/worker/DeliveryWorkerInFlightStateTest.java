@@ -27,6 +27,8 @@ import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
@@ -58,7 +60,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
-@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution(TestBackgroundComponent.RABBIT_LISTENERS)
 class DeliveryWorkerInFlightStateTest implements SharedPostgresContainer {
 
     @Container
