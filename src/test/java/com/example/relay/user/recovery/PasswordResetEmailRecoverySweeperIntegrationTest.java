@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Logger;
@@ -16,13 +17,17 @@ import ch.qos.logback.core.read.ListAppender;
 import com.example.relay.email.EmailSendResult;
 import com.example.relay.email.EmailService;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
-import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,9 +37,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -44,16 +49,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @TestPropertySource(properties = {"relay.password-reset.email-recovery.interval=2s",
         "relay.password-reset.email-recovery.grace=2s", "relay.password-reset.email-recovery.max-recovery-window=1h"})
-// This class's fast 2s-interval sweeper runs in a dedicated Spring context (distinct properties from
-// every other @SpringBootTest class), which Spring's test-context cache would otherwise keep alive -
-// and its @Scheduled thread running - for the rest of the suite once cached. Left uncontained, that
-// stray sweeper sees the ENTIRE shared Postgres database (see SharedPostgresContainer) and recovers
-// any stale password_reset_tokens row left behind by unrelated tests, inserting a fresh token that
-// then blocks those tests' own user cleanup via password_reset_tokens_user_id_fkey. AFTER_CLASS
-// forces this context (and its scheduler) to close once this class's tests finish - the same fix
-// AttemptServiceMarkFailedAndCreateRetryAtomicityTest/AuthServiceRegisterAtomicityTest/
-// UnhandledExceptionIntegrationTest already apply for their own non-default contexts.
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution({TestBackgroundComponent.SCHEDULING, TestBackgroundComponent.RABBIT_LISTENERS})
 class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgresContainer {
 
     @Container
@@ -66,28 +62,35 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
     @Autowired
     private PasswordResetTokenRepository passwordResetTokenRepository;
 
-    @Autowired
-    private EmailVerificationTokenRepository emailVerificationTokenRepository;
-
     @MockitoBean
     private EmailService emailService;
+
+    @MockitoSpyBean
+    private PasswordResetEmailRecoverySweeper sweeper;
 
     private User user;
     private PasswordResetToken staleToken;
     private ListAppender<ILoggingEvent> sweeperLogAppender;
+    private CountDownLatch completedSweep;
 
     @BeforeEach
     void setUp() {
         passwordResetTokenRepository.deleteAll();
-        emailVerificationTokenRepository.deleteAll();
-        userRepository.deleteAll();
 
-        user = userRepository.save(new User("recovery-sweeper-test@example.com", "hash"));
-        Instant longAgo = Instant.now().minusSeconds(120);
-        staleToken = passwordResetTokenRepository
-                .save(new PasswordResetToken(user, "stale-hash", longAgo.plusSeconds(1800), longAgo));
+        user = userRepository.save(new User("recovery-sweeper-" + UUID.randomUUID() + "@example.com", "hash"));
 
         when(emailService.send(any(), anyMap(), anyString(), anyString())).thenReturn(EmailSendResult.SENT);
+
+        completedSweep = new CountDownLatch(1);
+        doAnswer(invocation -> {
+                    try {
+                        return invocation.callRealMethod();
+                    } finally {
+                        completedSweep.countDown();
+                    }
+                })
+                .when(sweeper)
+                .sweep();
 
         sweeperLogAppender = new ListAppender<>();
         sweeperLogAppender.start();
@@ -105,6 +108,10 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
 
     @Test
     void undispatchedToken_isRecovered_byIssuingAFreshTokenAndInvalidatingTheStaleOne() {
+        Instant longAgo = Instant.now().minusSeconds(120);
+        staleToken = passwordResetTokenRepository.save(
+                new PasswordResetToken(user, "stale-" + UUID.randomUUID(), longAgo.plusSeconds(1800), longAgo));
+
         AtomicInteger sendCount = new AtomicInteger(0);
         when(emailService.send(any(), anyMap(), anyString(), anyString())).thenAnswer(invocation -> {
             sendCount.incrementAndGet();
@@ -116,6 +123,14 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
             assertNotNull(reloadedStale.getUsedAt(), "the stale row must be invalidated by the recovery issuance");
             assertNull(reloadedStale.getResetEmailDispatchedAt(),
                     "the stale row itself was never dispatched - only a NEW row's email gets sent");
+
+            List<PasswordResetToken> successors = passwordResetTokenRepository.findAll().stream()
+                    .filter(token -> !token.getId().equals(staleToken.getId()))
+                    .toList();
+            assertEquals(1, successors.size(), "recovery must issue exactly one successor token");
+            assertNotNull(successors.getFirst().getResetEmailDispatchedAt(),
+                    "the Rabbit consumer must confirm dispatch for the successor token");
+            assertEquals(1, sendCount.get(), "recovery must send exactly one reset email");
         });
     }
 
@@ -139,13 +154,14 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
     }
 
     @Test
-    void aTokenPastExpiry_isNeverPickedUpBySweep() throws InterruptedException {
+    void aTokenPastExpiry_isNeverPickedUpBySweep() {
         passwordResetTokenRepository.deleteAll();
         Instant longAgo = Instant.now().minusSeconds(300);
         PasswordResetToken expired =
                 passwordResetTokenRepository.save(new PasswordResetToken(user, "expired-hash", longAgo, longAgo));
 
-        Thread.sleep(5000);
+        completedSweep = new CountDownLatch(1);
+        await().atMost(Duration.ofSeconds(15)).until(() -> completedSweep.getCount() == 0);
 
         PasswordResetToken reloaded = passwordResetTokenRepository.findById(expired.getId()).orElseThrow();
         assertNull(reloaded.getUsedAt(), "an already-expired token must never be touched by recovery");

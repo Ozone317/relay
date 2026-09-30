@@ -18,7 +18,6 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.RabbitMQContainer;
@@ -45,6 +44,8 @@ import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
@@ -56,7 +57,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @SpringBootTest
 @Testcontainers
 @TestPropertySource(properties = {"relay.reconciliation.interval=2s", "relay.reconciliation.dead-letter-grace=2s"})
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution({TestBackgroundComponent.SCHEDULING, TestBackgroundComponent.RABBIT_LISTENERS})
 class DeadLetterNotifierRecoveryIntegrationTest implements SharedPostgresContainer {
 
     @Container

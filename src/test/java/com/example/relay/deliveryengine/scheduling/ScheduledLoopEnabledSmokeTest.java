@@ -15,6 +15,8 @@ import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
 import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.retry.RetryScheduler;
+import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.support.background.TestBackgroundComponent;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,7 +29,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
-import org.springframework.test.annotation.DirtiesContext;
 
 @SpringJUnitConfig(ScheduledLoopEnabledSmokeTest.TestConfig.class)
 @TestPropertySource(properties = {
@@ -37,7 +38,7 @@ import org.springframework.test.annotation.DirtiesContext;
         "relay.retry.scheduler-batch-size=100",
         "relay.retry.dispatcher-batch-size=100"
 })
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@EnableTestBackgroundExecution(TestBackgroundComponent.SCHEDULING)
 class ScheduledLoopEnabledSmokeTest {
 
     @Autowired
