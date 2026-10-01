@@ -1,6 +1,7 @@
 package com.example.relay.attempt.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doThrow;
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
@@ -74,6 +76,9 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
 
     @Autowired
     private DeliveryRepository deliveryRepository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     private Endpoint endpoint;
     private Message message;
@@ -123,6 +128,11 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
         // exactly like this one - this is the regression this method exists to prevent.
         Attempt reloaded = attemptRepository.findById(attemptId).orElseThrow();
         assertEquals(AttemptStatus.IN_FLIGHT, reloaded.getStatus());
+        var persistedParent = jdbc.queryForMap(
+                "SELECT status, execution_generation, execution_claimed_at FROM attempts WHERE id = ?", attemptId);
+        assertEquals("IN_FLIGHT", persistedParent.get("status"));
+        assertEquals(1L, ((Number) persistedParent.get("execution_generation")).longValue());
+        assertNotNull(persistedParent.get("execution_claimed_at"));
         assertEquals(1, attemptRepository.findAll().size());
     }
 }

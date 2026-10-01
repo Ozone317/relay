@@ -158,6 +158,104 @@ class AttemptExecutionFencingIntegrationTest implements SharedPostgresContainer 
         assertRow(attempt.getId(), "DEAD", 1L, 500, "final response", "final error", null, 15L);
     }
 
+    @Test
+    void staleFailureAfterNewerSuccess_createsNoRetry() {
+        Attempt attempt = createAttempt();
+        AttemptExecution stale = claim(attempt.getId());
+        reset(stale);
+        AttemptExecution current = claim(attempt.getId());
+
+        assertEquals(AttemptMutationOutcome.APPLIED, attemptService.markSucceeded(current, 204, "new success", 9L));
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+                attemptService.markFailedAndCreateRetry(stale, Instant.now().plusSeconds(30), 503, "old failure",
+                        "old error", 2L));
+
+        assertEquals(1, attemptRepository.findAll().size());
+        assertRow(attempt.getId(), "SUCCEEDED", 2L, 204, "new success", null, null, 9L);
+    }
+
+    @Test
+    void staleSuccessAfterNewerFailureAndRetry_preservesParentAndChild() {
+        Attempt attempt = createAttempt();
+        AttemptExecution stale = claim(attempt.getId());
+        reset(stale);
+        AttemptExecution current = claim(attempt.getId());
+
+        assertEquals(AttemptMutationOutcome.APPLIED,
+                attemptService.markFailedAndCreateRetry(current, Instant.now().plusSeconds(30), 503, "new failure",
+                        "new error", 12L));
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+                attemptService.markSucceeded(stale, 200, "old success", 1L));
+
+        assertEquals(2, attemptRepository.findAll().size());
+        assertRow(attempt.getId(), "FAILED_RETRYING", 2L, 503, "new failure", "new error", null, 12L);
+        assertAttempt(attempt.getDelivery().getId(), 2, "SCHEDULED");
+    }
+
+    @Test
+    void staleFailureAfterNewerRetry_createsNoDuplicateChild() {
+        Attempt attempt = createAttempt();
+        AttemptExecution stale = claim(attempt.getId());
+        reset(stale);
+        AttemptExecution current = claim(attempt.getId());
+
+        assertEquals(AttemptMutationOutcome.APPLIED,
+                attemptService.markFailedAndCreateRetry(current, Instant.now().plusSeconds(30), 503, "new failure",
+                        "new error", 12L));
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+                attemptService.markFailedAndCreateRetry(stale, Instant.now().plusSeconds(60), 504, "old failure",
+                        "old error", 1L));
+
+        assertEquals(2, attemptRepository.findAll().size());
+        assertAttempt(attempt.getDelivery().getId(), 2, "SCHEDULED");
+        assertRow(attempt.getId(), "FAILED_RETRYING", 2L, 503, "new failure", "new error", null, 12L);
+    }
+
+    @Test
+    void staleFailureAfterFirstChildTerminates_createsNoSecondAttemptNumber() {
+        Attempt attempt = createAttempt();
+        AttemptExecution stale = claim(attempt.getId());
+        reset(stale);
+        AttemptExecution current = claim(attempt.getId());
+
+        assertEquals(AttemptMutationOutcome.APPLIED,
+                attemptService.markFailedAndCreateRetry(current, Instant.now().plusSeconds(30), 503, "new failure",
+                        "new error", 12L));
+        Attempt retry = attemptRepository.findAll().stream()
+                .filter(candidate -> candidate.getAttemptNo() == 2)
+                .findFirst().orElseThrow();
+        jdbc.update("UPDATE attempts SET status = 'CREATED', next_retry_at = NULL WHERE id = ?", retry.getId());
+        AttemptExecution retryExecution = claim(retry.getId());
+        assertEquals(AttemptMutationOutcome.APPLIED,
+                attemptService.markSucceeded(retryExecution, 204, "retry success", 8L));
+
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+                attemptService.markFailedAndCreateRetry(stale, Instant.now().plusSeconds(60), 504, "old failure",
+                        "old error", 1L));
+
+        assertEquals(1, countAttempts(attempt.getDelivery().getId(), 2));
+        assertEquals(2, attemptRepository.findAll().size());
+        assertAttempt(attempt.getDelivery().getId(), 2, "SUCCEEDED");
+        assertRow(attempt.getId(), "FAILED_RETRYING", 2L, 503, "new failure", "new error", null, 12L);
+    }
+
+    @Test
+    void activeOwner_createsExactlyOneRetry() {
+        Attempt attempt = createAttempt();
+        AttemptExecution owner = claim(attempt.getId());
+
+        assertEquals(AttemptMutationOutcome.APPLIED,
+                attemptService.markFailedAndCreateRetry(owner, Instant.now().plusSeconds(30), 503, "failure",
+                        "error", 12L));
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+                attemptService.markFailedAndCreateRetry(owner, Instant.now().plusSeconds(60), 504, "duplicate",
+                        "duplicate", 1L));
+
+        assertEquals(2, attemptRepository.findAll().size());
+        assertAttempt(attempt.getDelivery().getId(), 2, "SCHEDULED");
+        assertRow(attempt.getId(), "FAILED_RETRYING", 1L, 503, "failure", "error", null, 12L);
+    }
+
     private AttemptExecution claim(UUID attemptId) {
         return attemptService.claim(attemptId).orElseThrow();
     }
@@ -184,7 +282,23 @@ class AttemptExecutionFencingIntegrationTest implements SharedPostgresContainer 
             assertNotNull(row.get("execution_claimed_at"));
         }
         assertEquals(latencyMs, row.get("latency_ms") == null ? null : ((Number) row.get("latency_ms")).longValue());
-        assertNull(row.get("next_retry_at"));
+        if ("FAILED_RETRYING".equals(status)) {
+            assertNotNull(row.get("next_retry_at"));
+        } else {
+            assertNull(row.get("next_retry_at"));
+        }
+    }
+
+    private void assertAttempt(UUID deliveryId, int attemptNo, String status) {
+        var rows = jdbc.queryForList("SELECT status FROM attempts WHERE delivery_id = ? AND attempt_no = ?",
+                deliveryId, attemptNo);
+        assertEquals(1, rows.size());
+        assertEquals(status, rows.get(0).get("status"));
+    }
+
+    private int countAttempts(UUID deliveryId, int attemptNo) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM attempts WHERE delivery_id = ? AND attempt_no = ?",
+                Integer.class, deliveryId, attemptNo);
     }
 
     private Attempt createAttempt() {

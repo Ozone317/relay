@@ -105,18 +105,17 @@ public class AttemptService {
     @Transactional
     public AttemptMutationOutcome markFailedAndCreateRetry(AttemptExecution execution, Instant nextRetryAt,
             Integer responseCode, String responseBody, String lastError, Long latencyMs) {
-        AttemptMutationOutcome outcome = markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, responseCode,
-                responseBody, lastError, latencyMs);
-        if (outcome == AttemptMutationOutcome.OWNERSHIP_LOST) {
-            return outcome;
+        int updated = executionRepository.markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt,
+                responseCode, truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT),
+                truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT), latencyMs);
+        if (updated == 0) {
+            return AttemptMutationOutcome.OWNERSHIP_LOST;
         }
-        // Explicit flush: Hibernate's default flush ordering runs every queued INSERT before any
-        // queued UPDATE in the same flush, regardless of Java call order. Without this, the new
-        // retry row's INSERT would hit idx_attempts_one_active_per_message_endpoint while the row
-        // above is still (from the DB's perspective) active, since its UPDATE hasn't executed yet.
-        attemptRepository.flush();
+        if (updated != 1) {
+            throw new IllegalStateException("unexpected parent update count: " + updated);
+        }
         createRetry(execution.attempt(), nextRetryAt);
-        return outcome;
+        return AttemptMutationOutcome.APPLIED;
     }
 
     @Transactional
