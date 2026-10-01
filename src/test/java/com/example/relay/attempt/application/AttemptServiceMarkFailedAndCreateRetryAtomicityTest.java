@@ -5,19 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doThrow;
 
-import java.time.Instant;
-import java.util.UUID;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-
 import com.example.relay.app.domain.App;
-import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
@@ -32,12 +20,22 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.time.Instant;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @Tag("integration")
 @SpringBootTest
@@ -106,22 +104,18 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
     void aFailureWhileCreatingTheRetry_rollsBackTheMarkFailedWriteToo() {
         // Arrange - a claimed (IN_FLIGHT) attempt, matching what DeliveryWorker always passes in
         Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
-        UUID attemptId = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 1))
-                .getId();
-        attemptService.claim(attemptId, Instant.now());
+        UUID attemptId = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 1)).getId();
+        AttemptExecution execution = attemptService.claim(attemptId).orElseThrow();
 
         // The retry row is the only save() call that sets status=SCHEDULED - target only that
         // one, simulating a crash specifically during the createRetry half of the merged method.
-        doThrow(new RuntimeException("simulated crash during createRetry"))
-                .when(attemptRepository)
+        doThrow(new RuntimeException("simulated crash during createRetry")).when(attemptRepository)
                 .save(argThat(a -> a != null && a.getStatus() == AttemptStatus.SCHEDULED));
 
         Instant dueAt = Instant.now().plusSeconds(30);
-        Attempt attempt = attemptRepository.findById(attemptId).orElseThrow();
-
         // Act & Assert
-        assertThrows(RuntimeException.class, () -> attemptService.markFailedAndCreateRetry(
-                attempt, dueAt, 500, "internal error", null, 120L));
+        assertThrows(RuntimeException.class,
+                () -> attemptService.markFailedAndCreateRetry(execution, dueAt, 500, "internal error", null, 120L));
 
         // Assert - the whole transaction rolled back: the parent is still IN_FLIGHT (its
         // pre-call state), NOT FAILED_RETRYING, and no retry row was ever persisted. Before this

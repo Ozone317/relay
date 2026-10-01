@@ -69,6 +69,11 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
 
     @BeforeEach
     void setUp() throws Exception {
+        // claimSkipsRowsLockedByIndependentTransaction commits its fixture so the worker
+        // transactions can observe it. Clear those rows before every test to keep the other
+        // batch-claim assertions independent of method execution order.
+        attemptRepository.deleteAll();
+
         User user = new User("ready-work-" + UUID.randomUUID() + "@mail.com", "hash");
         Environment environment = new Environment("Environment", "Description", user);
         app = new App("App", environment);

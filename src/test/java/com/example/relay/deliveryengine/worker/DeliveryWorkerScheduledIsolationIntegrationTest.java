@@ -2,7 +2,6 @@ package com.example.relay.deliveryengine.worker;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -116,7 +115,7 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
         rabbitTemplate.convertAndSend(RabbitMqConfig.DELIVERY_EXCHANGE, RabbitMqConfig.TASKS_ROUTING_KEY,
                 attempt.getId().toString());
 
-        verify(attemptService, timeout(5000)).claim(eq(attempt.getId()), any(Instant.class));
+        verify(attemptService, timeout(5000)).claim(eq(attempt.getId()));
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             assertEquals(AttemptStatus.SCHEDULED,
                     attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
@@ -129,8 +128,8 @@ class DeliveryWorkerScheduledIsolationIntegrationTest implements SharedPostgresC
         Environment environment = environmentRepository.save(new Environment("Env", "Desc", user));
         App app = appRepository.save(new App("App", environment));
         Event event = eventRepository.save(new Event("payment.completed", app));
-        Endpoint endpoint = endpointRepository.save(
-                new Endpoint("Endpoint", mockWebServer.url("/webhook").toString(), "secret", app));
+        Endpoint endpoint = endpointRepository
+                .save(new Endpoint("Endpoint", mockWebServer.url("/webhook").toString(), "secret", app));
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 1);
         Message message = messageRepository.save(new Message(app, event, body));
         Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));

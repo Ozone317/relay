@@ -2,6 +2,8 @@ package com.example.relay.attempt.application;
 
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.attempt.infrastructure.AttemptExecutionClaim;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
@@ -11,6 +13,7 @@ import com.example.relay.subscription.domain.Subscription;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -22,10 +25,13 @@ public class AttemptService {
     private static final int DIAGNOSTIC_CHARACTER_LIMIT = 10_240;
 
     private final AttemptRepository attemptRepository;
+    private final AttemptExecutionRepository executionRepository;
     private final DeliveryRepository deliveryRepository;
 
-    public AttemptService(AttemptRepository attemptRepository, DeliveryRepository deliveryRepository) {
+    public AttemptService(AttemptRepository attemptRepository, AttemptExecutionRepository executionRepository,
+            DeliveryRepository deliveryRepository) {
         this.attemptRepository = attemptRepository;
+        this.executionRepository = executionRepository;
         this.deliveryRepository = deliveryRepository;
     }
 
@@ -53,8 +59,14 @@ public class AttemptService {
     }
 
     @Transactional
-    public boolean claim(UUID attemptId, Instant now) {
-        return attemptRepository.claim(attemptId, now) == 1;
+    public Optional<AttemptExecution> claim(UUID attemptId) {
+        Optional<AttemptExecutionClaim> claim = executionRepository.claim(attemptId);
+        if (claim.isEmpty()) {
+            return Optional.empty();
+        }
+        Attempt attempt = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new IllegalStateException("Claimed attempt " + attemptId + " not found"));
+        return Optional.of(new AttemptExecution(attempt, claim.get().generation(), claim.get().claimedAt()));
     }
 
     @Transactional
@@ -74,39 +86,37 @@ public class AttemptService {
     }
 
     @Transactional
-    public Attempt markSucceeded(Attempt attempt, Integer responseCode, String responseBody, Long latencyMs) {
-        attempt.setResponseCode(responseCode);
-        attempt.setResponseBody(truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT));
-        attempt.setLatencyMs(latencyMs);
-        attempt.setStatus(AttemptStatus.SUCCEEDED);
-
-        return attemptRepository.save(attempt);
+    public AttemptMutationOutcome markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody,
+            Long latencyMs) {
+        AttemptMutationOutcome outcome = executionRepository.markSucceeded(execution, responseCode,
+                truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT), latencyMs);
+        return checkedOutcome(outcome);
     }
 
     @Transactional
-    public Attempt markFailed(Attempt attempt, AttemptStatus status, Instant nextRetryAt, Integer responseCode,
-            String responseBody, String lastError, Long latencyMs) {
-        attempt.setStatus(status);
-        attempt.setNextRetryAt(nextRetryAt);
-        attempt.setResponseCode(responseCode);
-        attempt.setResponseBody(truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT));
-        attempt.setLastError(truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT));
-        attempt.setLatencyMs(latencyMs);
-
-        return attemptRepository.save(attempt);
-    }
-
-    @Transactional
-    public Attempt markFailedAndCreateRetry(Attempt attempt, Instant nextRetryAt, Integer responseCode,
-            String responseBody, String lastError, Long latencyMs) {
-        markFailed(attempt, AttemptStatus.FAILED_RETRYING, nextRetryAt, responseCode, responseBody, lastError,
+    public AttemptMutationOutcome markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt,
+            Integer responseCode, String responseBody, String lastError, Long latencyMs) {
+        AttemptMutationOutcome outcome = executionRepository.markFailed(execution, status, nextRetryAt, responseCode,
+                truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT), truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT),
                 latencyMs);
+        return checkedOutcome(outcome);
+    }
+
+    @Transactional
+    public AttemptMutationOutcome markFailedAndCreateRetry(AttemptExecution execution, Instant nextRetryAt,
+            Integer responseCode, String responseBody, String lastError, Long latencyMs) {
+        AttemptMutationOutcome outcome = markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, responseCode,
+                responseBody, lastError, latencyMs);
+        if (outcome == AttemptMutationOutcome.OWNERSHIP_LOST) {
+            return outcome;
+        }
         // Explicit flush: Hibernate's default flush ordering runs every queued INSERT before any
         // queued UPDATE in the same flush, regardless of Java call order. Without this, the new
         // retry row's INSERT would hit idx_attempts_one_active_per_message_endpoint while the row
         // above is still (from the DB's perspective) active, since its UPDATE hasn't executed yet.
         attemptRepository.flush();
-        return createRetry(attempt, nextRetryAt);
+        createRetry(execution.attempt(), nextRetryAt);
+        return outcome;
     }
 
     @Transactional
@@ -138,5 +148,12 @@ public class AttemptService {
             end--;
         }
         return value.substring(0, end);
+    }
+
+    private AttemptMutationOutcome checkedOutcome(AttemptMutationOutcome outcome) {
+        if (outcome == null) {
+            throw new IllegalStateException("Attempt execution repository returned no mutation outcome");
+        }
+        return outcome;
     }
 }

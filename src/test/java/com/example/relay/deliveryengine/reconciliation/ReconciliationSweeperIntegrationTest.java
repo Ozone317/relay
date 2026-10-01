@@ -5,27 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.util.UUID;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.TestPropertySource;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.RabbitMQContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-
 import com.example.relay.app.domain.App;
-import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
@@ -42,27 +22,40 @@ import com.example.relay.environment.infrastructure.EnvironmentRepository;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.infrastructure.MessageRepository;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.RabbitMQContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-@TestPropertySource(properties = {
-        "relay.reconciliation.batch-size=2",
-        "relay.reconciliation.interval=1h",
-        "relay.reconciliation.dead-letter-grace=1h",
-        "relay.retry.scheduler-interval=1h",
-        "relay.retry.dispatcher-interval=1h"
-})
+@TestPropertySource(properties = {"relay.reconciliation.batch-size=2", "relay.reconciliation.interval=1h",
+        "relay.reconciliation.dead-letter-grace=1h", "relay.retry.scheduler-interval=1h",
+        "relay.retry.dispatcher-interval=1h"})
 public class ReconciliationSweeperIntegrationTest implements SharedPostgresContainer {
 
     @Container
@@ -158,10 +151,9 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
 
     private Attempt persistAttemptWithUpdatedAt(AttemptStatus status, Instant updatedAt) {
         Delivery delivery = deliveryRepository.save(new Delivery(endpoint.getApp(), message, endpoint));
-        Attempt attempt = attemptRepository.save(new Attempt(
-                endpoint.getApp(), message, endpoint, delivery, 1));
+        Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 1));
         if (status == AttemptStatus.IN_FLIGHT) {
-            attemptService.claim(attempt.getId(), Instant.now());
+            attemptService.claim(attempt.getId());
         }
         backdateUpdatedAt(attempt.getId(), updatedAt);
         return attempt;
@@ -180,20 +172,16 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     private void backdateUpdatedAt(UUID id, Instant timestamp) {
         transactionTemplate.executeWithoutResult(status -> {
             entityManager.createQuery("""
-                UPDATE Attempt a
-                SET a.updatedAt = :updatedAt
-                WHERE a.id = :id
-            """)
-            .setParameter("updatedAt", timestamp)
-            .setParameter("id", id)
-            .executeUpdate();
+                        UPDATE Attempt a
+                        SET a.updatedAt = :updatedAt
+                        WHERE a.id = :id
+                    """).setParameter("updatedAt", timestamp).setParameter("id", id).executeUpdate();
         });
     }
 
     @Test
     void staleInFlightAttempt_isResetWithoutDirectPublication() {
-        Attempt attempt = persistAttemptWithUpdatedAt(
-                AttemptStatus.IN_FLIGHT, Instant.now().minusSeconds(3600));
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.IN_FLIGHT, Instant.now().minusSeconds(3600));
 
         sweeper.sweep();
 
@@ -232,11 +220,10 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         // resetStuck's own WHERE clause re-evaluates it, it's already SUCCEEDED with a fresh
         // updated_at. Proven the same way RELAY_HANDOFF.md documents proving the poison-message
         // fix: by directly asserting the guarded outcome, not by racing real threads.
-        Attempt attempt = persistAttemptWithUpdatedAt(
-                AttemptStatus.IN_FLIGHT, Instant.now().minusSeconds(3600));
-
-        attempt.setStatus(AttemptStatus.SUCCEEDED);
-        attemptRepository.save(attempt); // bumps updated_at to "now" via @UpdateTimestamp
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now().minusSeconds(3600));
+        var execution = attemptService.claim(attempt.getId()).orElseThrow();
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+        attemptService.markSucceeded(execution, 204, "completed", 9L);
 
         sweeper.sweep();
 
@@ -256,7 +243,7 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         Attempt attempt = attemptRepository.save(new Attempt(endpoint.getApp(), message, endpoint, delivery, 1));
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600)); // 6 hours, pre-claim
 
-        attemptService.claim(attempt.getId(), Instant.now()); // should stamp updated_at to ~now (Task 2's fix)
+        attemptService.claim(attempt.getId()); // should stamp updated_at to ~now (Task 2's fix)
 
         sweeper.sweep();
 

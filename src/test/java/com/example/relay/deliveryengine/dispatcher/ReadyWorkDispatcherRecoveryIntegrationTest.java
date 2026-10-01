@@ -1,9 +1,8 @@
 package com.example.relay.deliveryengine.dispatcher;
 
-import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -32,7 +31,6 @@ import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -40,10 +38,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -52,13 +50,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-@TestPropertySource(properties = {
-        "relay.reconciliation.batch-size=10",
-        "relay.reconciliation.interval=1h",
-        "relay.reconciliation.dead-letter-grace=1h",
-        "relay.retry.scheduler-interval=1h",
-        "relay.retry.dispatcher-interval=1h"
-})
+@TestPropertySource(properties = {"relay.reconciliation.batch-size=10", "relay.reconciliation.interval=1h",
+        "relay.reconciliation.dead-letter-grace=1h", "relay.retry.scheduler-interval=1h",
+        "relay.retry.dispatcher-interval=1h"})
 class ReadyWorkDispatcherRecoveryIntegrationTest implements SharedPostgresContainer {
 
     @Container
@@ -118,7 +112,7 @@ class ReadyWorkDispatcherRecoveryIntegrationTest implements SharedPostgresContai
     @Test
     void recoveredInFlightAttemptIsRepublishedOnlyByDispatcher() {
         Attempt attempt = persistCreatedAttempt();
-        assertEquals(true, attemptService.claim(attempt.getId(), Instant.now()));
+        assertEquals(true, attemptService.claim(attempt.getId()).isPresent());
         backdateAttempt(attempt.getId());
 
         sweeper.sweep();
@@ -160,7 +154,8 @@ class ReadyWorkDispatcherRecoveryIntegrationTest implements SharedPostgresContai
         Environment environment = environmentRepository.save(new Environment("Env", "Desc", user));
         App app = appRepository.save(new App("App", environment));
         Event event = eventRepository.save(new Event("payment.completed", app));
-        Endpoint endpoint = endpointRepository.save(new Endpoint("Endpoint", "https://example.com/webhook", "secret", app));
+        Endpoint endpoint =
+                endpointRepository.save(new Endpoint("Endpoint", "https://example.com/webhook", "secret", app));
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 1);
         Message message = messageRepository.save(new Message(app, event, body));
         Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));

@@ -265,9 +265,12 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
                 deliveryId, appId, messageId, endpointId, nowTimestamp);
         jdbcTemplate.update(
                 "INSERT INTO attempts (id, app_id, message_id, endpoint_id, delivery_id, attempt_no, status, "
-                        + "next_retry_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                        + "next_retry_at, created_at, updated_at, execution_generation, execution_claimed_at) "
+                        + "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, CASE WHEN ? = 'IN_FLIGHT' THEN 1 ELSE 0 END, "
+                        + "CASE WHEN ? = 'IN_FLIGHT' THEN CAST(? AS timestamptz) ELSE NULL END)",
                 attemptId, appId, messageId, endpointId, deliveryId, status,
-                "SCHEDULED".equals(status) ? updatedTimestamp : null, nowTimestamp, updatedTimestamp);
+                "SCHEDULED".equals(status) ? updatedTimestamp : null, nowTimestamp, updatedTimestamp,
+                status, status, "IN_FLIGHT".equals(status) ? updatedTimestamp : null);
         return attemptId;
     }
 

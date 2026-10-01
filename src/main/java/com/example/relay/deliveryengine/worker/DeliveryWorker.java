@@ -1,9 +1,10 @@
 package com.example.relay.deliveryengine.worker;
 
+import com.example.relay.attempt.application.AttemptExecution;
+import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
-import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.http.WebhookDeliveryException;
 import com.example.relay.deliveryengine.http.WebhookHeaders;
@@ -33,18 +34,16 @@ public class DeliveryWorker {
 
     private static final Logger log = LoggerFactory.getLogger(DeliveryWorker.class);
 
-    private final AttemptRepository attemptRepository;
     private final AttemptService attemptService;
     private final HmacSigner hmacSigner;
     private final WebhookHttpTransport webhookHttpTransport;
     private final ExecutorService virtualThreadExecutor;
     private final RetryDelayCalculator retryDelayCalculator;
 
-    public DeliveryWorker(AttemptRepository attemptRepository, AttemptService attemptService, HmacSigner hmacSigner,
+    public DeliveryWorker(AttemptService attemptService, HmacSigner hmacSigner,
             WebhookHttpTransport webhookHttpTransport, AttemptPublisher attemptPublisher,
             ExecutorService virtualThreadExecutor, Clock clock, RetryProperties retryProperties,
             RetryJitterSource retryJitterSource) {
-        this.attemptRepository = attemptRepository;
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;
         this.webhookHttpTransport = webhookHttpTransport;
@@ -62,18 +61,16 @@ public class DeliveryWorker {
     private void processMessage(String attemptIdRaw) {
         UUID attemptId = UUID.fromString(attemptIdRaw);
 
-        if (!attemptService.claim(attemptId, Instant.now())) {
+        AttemptExecution execution = attemptService.claim(attemptId).orElse(null);
+        if (execution == null) {
             log.warn("Attempt {} was already claimed, skipping", attemptId);
             return;
         }
-
-        Attempt attempt = attemptRepository.findById(attemptId)
-                .orElseThrow(() -> new IllegalStateException("Claimed attempt " + attemptId + " not found"));
-
-        deliver(attempt);
+        deliver(execution);
     }
 
-    private void deliver(Attempt attempt) {
+    private void deliver(AttemptExecution execution) {
+        Attempt attempt = execution.attempt();
         Endpoint endpoint = attempt.getEndpoint();
         String relayId = attempt.getMessage().getId().toString();
         long timestamp = Instant.now().getEpochSecond();
@@ -85,32 +82,36 @@ public class DeliveryWorker {
             WebhookHttpResponse response = webhookHttpTransport.post(endpoint.getUrl(), body,
                     new WebhookHeaders(relayId, timestamp, signature));
             long latencyMs = System.currentTimeMillis() - startedAt;
-            
+
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                attemptService.markSucceeded(attempt, response.statusCode(), response.responseBody(), latencyMs);
+                attemptService.markSucceeded(execution, response.statusCode(), response.responseBody(), latencyMs);
             } else {
-                handleFailure(attempt, response.statusCode(), response.responseBody(), null, latencyMs);
+                handleFailure(execution, response.statusCode(), response.responseBody(), null, latencyMs);
             }
         } catch (WebhookDeliveryException ex) {
             long latencyMs = System.currentTimeMillis() - startedAt;
-            handleFailure(attempt, null, null, ex.failureCode() + ": " + ex.boundedDiagnostic(), latencyMs);
+            handleFailure(execution, null, null, ex.failureCode() + ": " + ex.boundedDiagnostic(), latencyMs);
         }
     }
 
-    private void handleFailure(Attempt attempt, Integer responseCode, String responseBody, String lastError, Long latencyMs) {
+    private void handleFailure(AttemptExecution execution, Integer responseCode, String responseBody, String lastError,
+            Long latencyMs) {
+        Attempt attempt = execution.attempt();
         boolean isFinal = attempt.getAttemptNo() >= RetryTier.MAX_ATTEMPTS;
         AttemptStatus finalStatus = isFinal ? AttemptStatus.DEAD : AttemptStatus.FAILED_RETRYING;
-        
+
         if (isFinal) {
-            attemptService.markFailed(attempt, finalStatus, null, responseCode, responseBody, lastError, latencyMs);
-            attemptPublisher.publishToRoutingKey(attempt.getId(), RabbitMqConfig.DEADLETTER_ROUTING_KEY);
+            AttemptMutationOutcome outcome = attemptService.markFailed(execution, finalStatus, null, responseCode,
+                    responseBody, lastError, latencyMs);
+            if (outcome == AttemptMutationOutcome.APPLIED) {
+                attemptPublisher.publishToRoutingKey(attempt.getId(), RabbitMqConfig.DEADLETTER_ROUTING_KEY);
+            }
         } else {
             int nextAttemptNo = attempt.getAttemptNo() + 1;
             RetryTier tier = RetryTier.forAttemptNo(nextAttemptNo);
             Instant dueAt = retryDelayCalculator.nextRetryAt(tier.getDelay());
 
-            attemptService.markFailedAndCreateRetry(attempt, dueAt, responseCode, responseBody,
-                    lastError, latencyMs);
+            attemptService.markFailedAndCreateRetry(execution, dueAt, responseCode, responseBody, lastError, latencyMs);
         }
     }
 

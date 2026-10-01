@@ -4,13 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.times;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.attempt.infrastructure.AttemptExecutionClaim;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
@@ -24,6 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,6 +40,9 @@ public class AttemptServiceTest {
 
     @Mock
     private AttemptRepository attemptRepository;
+
+    @Mock
+    private AttemptExecutionRepository executionRepository;
 
     @Mock
     private DeliveryRepository deliveryRepository;
@@ -99,35 +106,27 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void claim_returnsTrue_whenTheAttemptIsClaimedSuccessfully() {
-        // Arrange
+    void claim_returnsExecutionCapabilityWhenTheAttemptIsClaimed() {
         UUID attemptId = UUID.randomUUID();
-        Instant now = Instant.now();
+        Instant claimedAt = Instant.now();
+        Attempt attempt = new Attempt(null, null, null, null, 1);
+        when(executionRepository.claim(attemptId)).thenReturn(Optional.of(new AttemptExecutionClaim(4L, claimedAt)));
+        when(attemptRepository.findById(attemptId)).thenReturn(Optional.of(attempt));
 
-        // Stub
-        when(attemptRepository.claim(attemptId, now)).thenReturn(1);
+        AttemptExecution result = underTest.claim(attemptId).orElseThrow();
 
-        // Act
-        boolean result = underTest.claim(attemptId, now);
-
-        // Assert
-        assertEquals(true, result);
+        assertEquals(attempt, result.attempt());
+        assertEquals(4L, result.generation());
+        assertEquals(claimedAt, result.claimedAt());
     }
 
     @Test
-    void claim_returnsFalse_whenTheAttemptIsNotClaimedSuccessfully() {
-        // Arrange
+    void claim_doesNotLoadAttemptWhenOwnershipIsLost() {
         UUID attemptId = UUID.randomUUID();
-        Instant now = Instant.now();
+        when(executionRepository.claim(attemptId)).thenReturn(Optional.empty());
 
-        // Stub
-        when(attemptRepository.claim(attemptId, now)).thenReturn(0);
-
-        // Act
-        boolean result = underTest.claim(attemptId, now);
-
-        // Assert
-        assertEquals(false, result);
+        assertTrue(underTest.claim(attemptId).isEmpty());
+        verify(attemptRepository, never()).findById(attemptId);
     }
 
     @Test
@@ -157,180 +156,50 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void markSucceeded_marksTheAttemptAsSuccessfulSetsRequiredFilesAndReturnsTheAttempt() {
-        // Arrange
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
-        Message message = new Message(app, event, body);
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-        int responseCode = 200;
-        String responseBody = "{\"success\": \"true\"}";
-        Long latencyMs = 153L;
-
-        // Stub
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
-        // Act
-        Attempt result = underTest.markSucceeded(attempt, responseCode, responseBody, latencyMs);
-
-        // Assert
-        assertEquals(AttemptStatus.SUCCEEDED, result.getStatus());
-        assertEquals(responseCode, result.getResponseCode());
-        assertEquals(responseBody, result.getResponseBody());
-        assertEquals(latencyMs, result.getLatencyMs());
-
-        // Verify
-        verify(attemptRepository).save(any());
-    }
-
-    @Test
-    void markSucceeded_defensivelyFitsResponseBodyToThePersistenceContract() {
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        Message message = new Message(app, event, new ObjectMapper().createObjectNode().put("amount", 4999));
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, new Delivery(app, message, endpoint), 1);
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
-        Attempt result = underTest.markSucceeded(attempt, 200, "x".repeat(20_000), 10L);
-
-        assertEquals(10_240, result.getResponseBody().length());
-    }
-
-    @Test
-    void markSucceeded_defensiveTruncationDoesNotLeaveAnUnpairedSurrogate() {
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        Message message = new Message(app, event, new ObjectMapper().createObjectNode().put("amount", 4999));
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Attempt attempt = new Attempt(app, message, endpoint, new Delivery(app, message, endpoint), 1);
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
+    void markSucceededTruncatesDiagnosticsAndUsesFencedRepositoryWithoutSavingDetachedAttempt() {
+        Attempt attempt = new Attempt(null, null, null, null, 1);
+        AttemptExecution execution = new AttemptExecution(attempt, 9L, Instant.now());
         String responseBody = "x".repeat(10_239) + "\uD83D\uDE00";
-        Attempt result = underTest.markSucceeded(attempt, 200, responseBody, 10L);
+        when(executionRepository.markSucceeded(any(), eq(200), any(), eq(10L)))
+                .thenReturn(AttemptMutationOutcome.APPLIED);
 
-        assertEquals(10_239, result.getResponseBody().length());
-        assertEquals("x".repeat(10_239), result.getResponseBody());
+        AttemptMutationOutcome result = underTest.markSucceeded(execution, 200, responseBody, 10L);
+
+        assertEquals(AttemptMutationOutcome.APPLIED, result);
+        verify(executionRepository).markSucceeded(execution, 200, "x".repeat(10_239), 10L);
+        verify(attemptRepository, never()).save(any());
+        assertEquals(AttemptStatus.CREATED, attempt.getStatus());
     }
 
     @Test
-    void markFailed_setsLastErrorAndLeavesResponseBodyNull_whenNoHttpResponseWasReceived() {
-        // Arrange - simulates a timeout/connection error: no response ever came back, so there's
-        // nothing to put in responseBody, but there is a network-level error to record.
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
-        Message message = new Message(app, event, body);
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-        AttemptStatus status = AttemptStatus.FAILED_RETRYING;
-        Instant nextRetryAt = Instant.now();
-        String lastError = "x".repeat(20_000);
-        Long latencyMs = 15000L;
-
-        // Stub
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
-        // Act
-        Attempt result = underTest.markFailed(attempt, status, nextRetryAt, null, null, lastError, latencyMs);
-
-        // Assert
-        assertEquals(status, result.getStatus());
-        assertEquals(nextRetryAt, result.getNextRetryAt());
-        assertEquals(null, result.getResponseCode());
-        assertEquals(null, result.getResponseBody());
-        assertEquals(10240, result.getLastError().length());
-        assertEquals(latencyMs, result.getLatencyMs());
-
-        // Verify
-        verify(attemptRepository).save(any());
-    }
-
-    @Test
-    void markFailed_setsResponseBodyAndLeavesLastErrorNull_whenAnHttpResponseWasReceived() {
-        // Arrange - simulates a non-2xx HTTP response (e.g. 500): a real response came back, so
-        // it belongs in responseBody, and there's no network-level error to record.
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
-        Message message = new Message(app, event, body);
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-        AttemptStatus status = AttemptStatus.DEAD;
-        int responseCode = 500;
-        String responseBody = "x".repeat(20_000);
-        Long latencyMs = 200L;
-
-        // Stub
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-
-        // Act
-        Attempt result = underTest.markFailed(attempt, status, null, responseCode, responseBody, null, latencyMs);
-
-        // Assert
-        assertEquals(status, result.getStatus());
-        assertEquals(null, result.getNextRetryAt());
-        assertEquals(responseCode, result.getResponseCode());
-        assertEquals(10240, result.getResponseBody().length());
-        assertEquals(null, result.getLastError());
-        assertEquals(latencyMs, result.getLatencyMs());
-
-        // Verify
-        verify(attemptRepository).save(any());
-    }
-
-    @Test
-    void markFailedAndCreateRetry_marksParentFailedAndCreatesScheduledRetry() {
-        // Arrange
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
-        Message message = new Message(app, event, body);
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
+    void markFailedTruncatesResponseAndErrorBeforeFencedRepositoryCall() {
+        AttemptExecution execution = new AttemptExecution(new Attempt(null, null, null, null, 1), 2L, Instant.now());
         Instant nextRetryAt = Instant.now().plusSeconds(30);
-        int responseCode = 500;
-        String responseBody = "internal error";
-        Long latencyMs = 120L;
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(AttemptMutationOutcome.OWNERSHIP_LOST);
 
-        // Stub
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        AttemptMutationOutcome result = underTest.markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, 503,
+                "r".repeat(20_000), "e".repeat(20_000), 25L);
 
-        // Act
-        Attempt retry = underTest.markFailedAndCreateRetry(attempt, nextRetryAt, responseCode, responseBody, null,
-                latencyMs);
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, result);
+        verify(executionRepository).markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, 503,
+                "r".repeat(10_240), "e".repeat(10_240), 25L);
+        verify(attemptRepository, never()).save(any());
+    }
 
-        // Assert - the parent attempt object passed in was mutated to FAILED_RETRYING
-        assertEquals(AttemptStatus.FAILED_RETRYING, attempt.getStatus());
-        assertEquals(nextRetryAt, attempt.getNextRetryAt());
-        assertEquals(responseCode, attempt.getResponseCode());
-        assertEquals(responseBody, attempt.getResponseBody());
+    @Test
+    void markFailedAndCreateRetryDoesNotCreateRetryWhenExecutionOwnershipIsLost() {
+        Attempt attempt = new Attempt(null, null, null, null, 1);
+        AttemptExecution execution = new AttemptExecution(attempt, 2L, Instant.now());
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(AttemptMutationOutcome.OWNERSHIP_LOST);
 
-        // Assert - the returned retry is a fresh SCHEDULED row for the next attempt number
-        assertEquals(attempt.getAttemptNo() + 1, retry.getAttemptNo());
-        assertEquals(AttemptStatus.SCHEDULED, retry.getStatus());
-        assertEquals(nextRetryAt, retry.getNextRetryAt());
+        AttemptMutationOutcome outcome =
+                underTest.markFailedAndCreateRetry(execution, Instant.now().plusSeconds(30), 503, "failure", null, 10L);
 
-        // Verify - both writes happened
-        verify(attemptRepository, times(2)).save(any());
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, outcome);
+        verify(attemptRepository, never()).save(any());
+        verify(attemptRepository, never()).flush();
     }
 
     @Test

@@ -56,8 +56,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -163,8 +163,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
         org.springframework.amqp.core.Message received = rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000);
         assertThat(received).isNotNull();
         assertThat(new String(received.getBody())).isEqualTo(attempt.getId().toString());
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(
-                () -> assertThat(reload(attempt).getReadyPublishedAt()).isNotNull());
+        await().atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> assertThat(reload(attempt).getReadyPublishedAt()).isNotNull());
     }
 
     @Test
@@ -174,8 +174,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
 
         dispatcher.dispatchOnce();
         assertThat(rabbitTemplate.receive(RabbitMqConfig.TASKS_QUEUE, 5000)).isNotNull();
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(
-                () -> assertThat(reload(attempt).getReadyPublishedAt()).isNotNull());
+        await().atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> assertThat(reload(attempt).getReadyPublishedAt()).isNotNull());
 
         dispatcher.dispatchOnce();
 
@@ -185,8 +185,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
     @Test
     void definiteFailureKeepsMarkerNullAndLeaseUntilGrace() {
         Attempt attempt = createCreatedAttempt();
-        RecordingPublisher publisher = new RecordingPublisher(
-                CompletableFuture.completedFuture(ReadyPublishOutcome.DEFINITE_FAILURE));
+        RecordingPublisher publisher =
+                new RecordingPublisher(CompletableFuture.completedFuture(ReadyPublishOutcome.DEFINITE_FAILURE));
         ReadyWorkDispatcher dispatcher = dispatcher(publisher);
 
         dispatcher.dispatchOnce();
@@ -207,13 +207,13 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
     @Test
     void ambiguousFailureKeepsMarkerNullAndRecoversAfterGrace() {
         Attempt attempt = createCreatedAttempt();
-        RecordingPublisher publisher = new RecordingPublisher(
-                CompletableFuture.completedFuture(ReadyPublishOutcome.AMBIGUOUS));
+        RecordingPublisher publisher =
+                new RecordingPublisher(CompletableFuture.completedFuture(ReadyPublishOutcome.AMBIGUOUS));
         ReadyWorkDispatcher dispatcher = dispatcher(publisher);
 
         dispatcher.dispatchOnce();
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(
-                () -> assertThat(reload(attempt).getReadyPublishedAt()).isNull());
+        await().atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> assertThat(reload(attempt).getReadyPublishedAt()).isNull());
         backdateLease(attempt);
 
         dispatcher.dispatchOnce();
@@ -250,13 +250,13 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
         CompletableFuture<ReadyPublishOutcome> unresolved = new CompletableFuture<>();
         RecordingPublisher publisher = new RecordingPublisher(unresolved);
         ConfirmationTrackingExecutor executor = new ConfirmationTrackingExecutor(confirmationExecutor);
-        ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(
-                readyWorkRepository, publisher, executor, retryProperties);
+        ReadyWorkDispatcher dispatcher =
+                new ReadyWorkDispatcher(readyWorkRepository, publisher, executor, retryProperties);
 
         dispatcher.dispatchOnce();
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(
-                () -> assertThat(publisher.ids()).containsExactly(attempt.getId()));
-        assertThat(attemptService.claim(attempt.getId(), Instant.now())).isTrue();
+        await().atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> assertThat(publisher.ids()).containsExactly(attempt.getId()));
+        assertThat(attemptService.claim(attempt.getId())).isPresent();
 
         unresolved.complete(ReadyPublishOutcome.CONFIRMED);
         assertThat(executor.completed.await(5, TimeUnit.SECONDS)).isTrue();
@@ -285,13 +285,13 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
     @Test
     void confirmationExecutorRejectionLeavesMarkerNullAndLeaseIntact() {
         Attempt attempt = createCreatedAttempt();
-        RecordingPublisher publisher = new RecordingPublisher(
-                CompletableFuture.completedFuture(ReadyPublishOutcome.CONFIRMED));
+        RecordingPublisher publisher =
+                new RecordingPublisher(CompletableFuture.completedFuture(ReadyPublishOutcome.CONFIRMED));
         Executor rejectingExecutor = command -> {
             throw new RejectedExecutionException("confirmation executor is closed");
         };
-        ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(
-                readyWorkRepository, publisher, rejectingExecutor, retryProperties);
+        ReadyWorkDispatcher dispatcher =
+                new ReadyWorkDispatcher(readyWorkRepository, publisher, rejectingExecutor, retryProperties);
 
         dispatcher.dispatchOnce();
 
@@ -305,8 +305,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
     @Test
     void ambiguousRepublishStillAllowsOnlyOneWorkerClaim() {
         Attempt attempt = createCreatedAttempt();
-        RecordingPublisher publisher = new RecordingPublisher(
-                CompletableFuture.completedFuture(ReadyPublishOutcome.AMBIGUOUS));
+        RecordingPublisher publisher =
+                new RecordingPublisher(CompletableFuture.completedFuture(ReadyPublishOutcome.AMBIGUOUS));
         ReadyWorkDispatcher dispatcher = dispatcher(publisher);
 
         dispatcher.dispatchOnce();
@@ -314,8 +314,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
         dispatcher.dispatchOnce();
 
         assertThat(publisher.ids()).containsExactly(attempt.getId(), attempt.getId());
-        assertThat(attemptService.claim(attempt.getId(), Instant.now())).isTrue();
-        assertThat(attemptService.claim(attempt.getId(), Instant.now())).isFalse();
+        assertThat(attemptService.claim(attempt.getId())).isPresent();
+        assertThat(attemptService.claim(attempt.getId())).isEmpty();
     }
 
     private ReadyWorkDispatcher dispatcher(ReadyTaskPublisher publisher) {
@@ -338,11 +338,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
     }
 
     private Endpoint newEndpoint() {
-        return endpointRepository.save(new Endpoint(
-                "Endpoint-" + UUID.randomUUID(),
-                "https://example.com/webhook/" + UUID.randomUUID(),
-                "secret-" + UUID.randomUUID(),
-                endpoint.getApp()));
+        return endpointRepository.save(new Endpoint("Endpoint-" + UUID.randomUUID(),
+                "https://example.com/webhook/" + UUID.randomUUID(), "secret-" + UUID.randomUUID(), endpoint.getApp()));
     }
 
     private Attempt reload(Attempt attempt) {
