@@ -26,6 +26,10 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.test.context.transaction.TestTransaction;
+import org.springframework.dao.DataAccessException;
 
 @Tag("integration")
 @DataJpaTest
@@ -35,6 +39,7 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
     @Autowired AttemptExecutionRepository repository;
     @Autowired TestEntityManager em;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PlatformTransactionManager transactionManager;
 
     @Test
     void createdAttemptStartsAtGenerationZeroAndClaimIncrementsWithDatabaseTime() throws Exception {
@@ -61,6 +66,49 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
         var reset = jdbc.queryForMap("SELECT status, execution_claimed_at FROM attempts WHERE id = ?", attempt.getId());
         assertEquals("CREATED", reset.get("status"));
         assertNull(reset.get("execution_claimed_at"));
+    }
+
+    @Test
+    void staleSelectionOrdersByClaimTimeThenIdAndHonorsTheBatchLimit() throws Exception {
+        Attempt firstByTime = createAttempt();
+        Attempt tiedA = createAttempt();
+        Attempt tiedB = createAttempt();
+        em.flush();
+        repository.claim(firstByTime.getId()).orElseThrow();
+        repository.claim(tiedA.getId()).orElseThrow();
+        repository.claim(tiedB.getId()).orElseThrow();
+        jdbc.update("UPDATE attempts SET execution_claimed_at = CASE id "
+                + "WHEN ? THEN CURRENT_TIMESTAMP - INTERVAL '3 hours' "
+                + "ELSE CURRENT_TIMESTAMP - INTERVAL '2 hours' END WHERE id IN (?, ?, ?)",
+                firstByTime.getId(), firstByTime.getId(), tiedA.getId(), tiedB.getId());
+
+        List<AttemptExecutionCandidate> all = repository.findStaleInFlight(Duration.ofMinutes(1), 10);
+        List<AttemptExecutionCandidate> expected = all.stream()
+                .sorted(java.util.Comparator.comparing(AttemptExecutionCandidate::claimedAt)
+                        .thenComparing(candidate -> candidate.id().toString()))
+                .toList();
+        assertEquals(expected, all, "stale candidates must be ordered by claim timestamp and then ID");
+        assertEquals(3, all.size());
+        assertEquals(expected.subList(0, 2), repository.findStaleInFlight(Duration.ofMinutes(1), 2));
+    }
+
+    @Test
+    void claimOverflowAtLongMax_rollsBackAndPreservesTheCreatedRow() throws Exception {
+        Attempt attempt = createAttempt();
+        em.flush();
+        jdbc.update("UPDATE attempts SET execution_generation = ? WHERE id = ?", Long.MAX_VALUE, attempt.getId());
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        assertThrows(DataAccessException.class,
+                () -> transactions.execute(status -> repository.claim(attempt.getId())));
+        var unchanged = transactions.execute(status -> jdbc.queryForMap(
+                "SELECT status, execution_generation, execution_claimed_at FROM attempts WHERE id = ?",
+                attempt.getId()));
+        assertEquals("CREATED", unchanged.get("status"));
+        assertEquals(Long.MAX_VALUE, ((Number) unchanged.get("execution_generation")).longValue());
+        assertNull(unchanged.get("execution_claimed_at"));
     }
 
     @Test
