@@ -184,17 +184,22 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
     void schedulingOptIn_closesItsSchedulerDatasourceAndDestroyCallbackAfterClassLifecycle() throws Exception {
         TestContextManager manager = new TestContextManager(OptInSourceFixture.class);
         manager.beforeTestClass();
-        ConfigurableApplicationContext context =
-                (ConfigurableApplicationContext) manager.getTestContext().getApplicationContext();
-        ControllableTaskScheduler scheduler = context.getBean(ControllableTaskScheduler.class);
-        HikariDataSource dataSource = context.getBean(HikariDataSource.class);
-        CloseSignal closeSignal = context.getBean(CloseSignal.class);
+        ConfigurableApplicationContext context;
+        ControllableTaskScheduler scheduler;
+        HikariDataSource dataSource;
+        CloseSignal closeSignal;
+        try {
+            context = (ConfigurableApplicationContext) manager.getTestContext().getApplicationContext();
+            scheduler = context.getBean(ControllableTaskScheduler.class);
+            dataSource = context.getBean(HikariDataSource.class);
+            closeSignal = context.getBean(CloseSignal.class);
 
-        assertEquals(2, scheduler.capturedTaskCount());
-        assertFalse(scheduler.isClosed());
-        assertFalse(dataSource.isClosed());
-
-        manager.afterTestClass();
+            assertEquals(2, scheduler.capturedTaskCount());
+            assertFalse(scheduler.isClosed());
+            assertFalse(dataSource.isClosed());
+        } finally {
+            manager.afterTestClass();
+        }
 
         await().atMost(Duration.ofSeconds(5)).until(() -> closeSignal.latch().getCount() == 0);
         assertTrue(scheduler.isClosed());

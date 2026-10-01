@@ -17,8 +17,10 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.concurrent.CountDownLatch;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -62,10 +64,19 @@ class BackgroundExecutionContextPolicyTest {
             new ListenerDescriptor("EmailDispatchConsumer", "onMessage", "emailDispatchConsumer",
                     "rabbitListenerContainerFactory"));
 
+    @AfterAll
+    static void stopRabbit() {
+        RABBIT.stop();
+    }
+
     @Nested
     @SpringBootTest
-    @TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=true")
     class OrdinaryContext implements SharedPostgresContainer {
+
+        @DynamicPropertySource
+        static void attemptToEnableRabbitListeners(DynamicPropertyRegistry registry) {
+            registry.add("spring.rabbitmq.listener.simple.auto-startup", () -> true);
+        }
 
         @Autowired
         private ApplicationContext applicationContext;
@@ -89,6 +100,8 @@ class BackgroundExecutionContextPolicyTest {
         void ordinaryContextHasNoRunningProductionRabbitListenerContainers() {
             assertEquals(PRODUCTION_LISTENERS, rabbitListenerInventory(applicationContext),
                     "production @RabbitListener inventory changed; verify its factory obeys P00 suppression");
+            assertEquals(productionListenerIds(), listenerRegistry.getListenerContainerIds(),
+                    "Rabbit registry contains an unexpected production listener endpoint");
             PRODUCTION_LISTENERS.forEach(descriptor -> {
                 MessageListenerContainer container = listenerRegistry.getListenerContainer(descriptor.listenerId());
                 assertNotNull(container, () -> "missing production listener container " + descriptor.listenerId());
@@ -209,6 +222,8 @@ class BackgroundExecutionContextPolicyTest {
             ApplicationContext applicationContext, RabbitListenerEndpointRegistry registry) {
         assertEquals(PRODUCTION_LISTENERS, rabbitListenerInventory(applicationContext),
                 "production @RabbitListener inventory changed; classify the new listener under P00");
+        assertEquals(productionListenerIds(), registry.getListenerContainerIds(),
+                "Rabbit registry contains an unexpected production listener endpoint");
         PRODUCTION_LISTENERS.forEach(descriptor -> {
             MessageListenerContainer container = registry.getListenerContainer(descriptor.listenerId());
             assertNotNull(container, () -> "missing production listener container " + descriptor.listenerId());
@@ -221,31 +236,47 @@ class BackgroundExecutionContextPolicyTest {
 
     private static Set<ScheduledDescriptor> scheduledInventory(ApplicationContext applicationContext) {
         return applicationMethods(applicationContext).stream()
-                .filter(method -> AnnotatedElementUtils.findMergedAnnotation(method, Scheduled.class) != null)
+                .filter(method -> !AnnotatedElementUtils.getMergedRepeatableAnnotations(method, Scheduled.class)
+                        .isEmpty())
                 .map(method -> new ScheduledDescriptor(method.getDeclaringClass().getSimpleName(), method.getName()))
                 .collect(Collectors.toSet());
     }
 
     private static Set<ListenerDescriptor> rabbitListenerInventory(ApplicationContext applicationContext) {
-        return applicationMethods(applicationContext).stream()
-                .filter(method -> AnnotatedElementUtils.findMergedAnnotation(method, RabbitListener.class) != null)
-                .map(method -> {
-                    RabbitListener listener =
-                            AnnotatedElementUtils.findMergedAnnotation(method, RabbitListener.class);
-                    String containerFactory = listener.containerFactory().isBlank()
-                            ? "rabbitListenerContainerFactory"
-                            : listener.containerFactory();
-                    return new ListenerDescriptor(method.getDeclaringClass().getSimpleName(), method.getName(),
-                            listener.id(), containerFactory);
-                })
+        return applicationTypes(applicationContext).stream()
+                .flatMap(type -> Stream.concat(
+                        AnnotatedElementUtils.getMergedRepeatableAnnotations(type, RabbitListener.class).stream()
+                                .map(listener -> listenerDescriptor(type, "<type>", listener)),
+                        List.of(ReflectionUtils.getAllDeclaredMethods(type)).stream()
+                                .flatMap(method -> AnnotatedElementUtils
+                                        .getMergedRepeatableAnnotations(method, RabbitListener.class)
+                                        .stream()
+                                        .map(listener -> listenerDescriptor(type, method.getName(), listener)))))
                 .collect(Collectors.toSet());
     }
 
-    private static Set<Method> applicationMethods(ApplicationContext applicationContext) {
+    private static ListenerDescriptor listenerDescriptor(
+            Class<?> component, String method, RabbitListener listener) {
+        String containerFactory = listener.containerFactory().isBlank()
+                ? "rabbitListenerContainerFactory"
+                : listener.containerFactory();
+        return new ListenerDescriptor(component.getSimpleName(), method, listener.id(), containerFactory);
+    }
+
+    private static Set<String> productionListenerIds() {
+        return PRODUCTION_LISTENERS.stream().map(ListenerDescriptor::listenerId).collect(Collectors.toSet());
+    }
+
+    private static Set<Class<?>> applicationTypes(ApplicationContext applicationContext) {
         return List.of(applicationContext.getBeanDefinitionNames()).stream()
                 .map(applicationContext::getType)
                 .filter(type -> type != null && type.getPackageName().startsWith("com.example.relay"))
                 .map(ClassUtils::getUserClass)
+                .collect(Collectors.toSet());
+    }
+
+    private static Set<Method> applicationMethods(ApplicationContext applicationContext) {
+        return applicationTypes(applicationContext).stream()
                 .flatMap(type -> List.of(ReflectionUtils.getAllDeclaredMethods(type)).stream())
                 .collect(Collectors.toSet());
     }

@@ -9,6 +9,7 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.scheduling.config.TaskManagementConfigUtils;
 import org.springframework.test.context.ContextConfigurationAttributes;
@@ -37,13 +38,20 @@ public final class BackgroundExecutionContextCustomizerFactory implements Contex
         @Override
         public void customizeContext(ConfigurableApplicationContext context, MergedContextConfiguration mergedConfig) {
             if (!rabbitListenersEnabled) {
-                context.getEnvironment().getPropertySources()
-                        .addFirst(new MapPropertySource(PROPERTY_SOURCE_NAME, Map.of(RABBIT_AUTO_STARTUP, false)));
+                suppressRabbitListenerStartup(context.getEnvironment());
+                context.addBeanFactoryPostProcessor(
+                        beanFactory -> suppressRabbitListenerStartup(context.getEnvironment()));
             }
             if (!schedulingEnabled) {
                 context.addBeanFactoryPostProcessor(new ScheduledRegistrationSuppressor());
             }
         }
+    }
+
+    private static void suppressRabbitListenerStartup(ConfigurableEnvironment environment) {
+        environment.getPropertySources().remove(PROPERTY_SOURCE_NAME);
+        environment.getPropertySources()
+                .addFirst(new MapPropertySource(PROPERTY_SOURCE_NAME, Map.of(RABBIT_AUTO_STARTUP, false)));
     }
 
     private static final class ScheduledRegistrationSuppressor implements BeanDefinitionRegistryPostProcessor {

@@ -27,7 +27,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -71,7 +70,8 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
     private User user;
     private PasswordResetToken staleToken;
     private ListAppender<ILoggingEvent> sweeperLogAppender;
-    private CountDownLatch completedSweep;
+    private AtomicInteger startedSweeps;
+    private AtomicInteger completedSweeps;
 
     @BeforeEach
     void setUp() {
@@ -81,12 +81,14 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
 
         when(emailService.send(any(), anyMap(), anyString(), anyString())).thenReturn(EmailSendResult.SENT);
 
-        completedSweep = new CountDownLatch(1);
+        startedSweeps = new AtomicInteger();
+        completedSweeps = new AtomicInteger();
         doAnswer(invocation -> {
+                    int invocationNumber = startedSweeps.incrementAndGet();
                     try {
                         return invocation.callRealMethod();
                     } finally {
-                        completedSweep.countDown();
+                        completedSweeps.accumulateAndGet(invocationNumber, Math::max);
                     }
                 })
                 .when(sweeper)
@@ -160,8 +162,9 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
         PasswordResetToken expired =
                 passwordResetTokenRepository.save(new PasswordResetToken(user, "expired-hash", longAgo, longAgo));
 
-        completedSweep = new CountDownLatch(1);
-        await().atMost(Duration.ofSeconds(15)).until(() -> completedSweep.getCount() == 0);
+        int requiredPostInsertSweep = startedSweeps.get() + 1;
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> completedSweeps.get() >= requiredPostInsertSweep);
 
         PasswordResetToken reloaded = passwordResetTokenRepository.findById(expired.getId()).orElseThrow();
         assertNull(reloaded.getUsedAt(), "an already-expired token must never be touched by recovery");
