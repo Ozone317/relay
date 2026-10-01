@@ -88,18 +88,18 @@ public class AttemptService {
     @Transactional
     public AttemptMutationOutcome markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody,
             Long latencyMs) {
-        AttemptMutationOutcome outcome = executionRepository.markSucceeded(execution, responseCode,
+        int rows = executionRepository.markSucceeded(execution, responseCode,
                 truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT), latencyMs);
-        return checkedOutcome(outcome);
+        return checkedOutcome(rows);
     }
 
     @Transactional
     public AttemptMutationOutcome markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt,
             Integer responseCode, String responseBody, String lastError, Long latencyMs) {
-        AttemptMutationOutcome outcome = executionRepository.markFailed(execution, status, nextRetryAt, responseCode,
+        int rows = executionRepository.markFailed(execution, status, nextRetryAt, responseCode,
                 truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT), truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT),
                 latencyMs);
-        return checkedOutcome(outcome);
+        return checkedOutcome(rows);
     }
 
     @Transactional
@@ -150,10 +150,13 @@ public class AttemptService {
         return value.substring(0, end);
     }
 
-    private AttemptMutationOutcome checkedOutcome(AttemptMutationOutcome outcome) {
-        if (outcome == null) {
-            throw new IllegalStateException("Attempt execution repository returned no mutation outcome");
+    private AttemptMutationOutcome checkedOutcome(int rows) {
+        if (rows == 1) {
+            return AttemptMutationOutcome.APPLIED;
         }
-        return outcome;
+        if (rows == 0) {
+            return AttemptMutationOutcome.OWNERSHIP_LOST;
+        }
+        throw new IllegalStateException("Attempt execution repository updated unexpected row count: " + rows);
     }
 }

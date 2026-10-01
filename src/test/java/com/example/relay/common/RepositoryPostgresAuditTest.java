@@ -11,7 +11,6 @@ import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.attempt.application.AttemptExecution;
-import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
@@ -144,7 +143,7 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
                 java.time.Duration.ofMinutes(1)));
 
         var failedClaim = attemptExecutionRepository.claim(attempt.getId()).orElseThrow();
-        assertEquals(AttemptMutationOutcome.APPLIED, attemptExecutionRepository.markFailed(
+        assertEquals(1, attemptExecutionRepository.markFailed(
                 new AttemptExecution(attempt, failedClaim.generation(), failedClaim.claimedAt()), AttemptStatus.DEAD,
                 null, 500, "failure", "failed", 3L));
 
@@ -155,7 +154,7 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
         Attempt secondAttempt = new Attempt(app, message, secondEndpoint, secondDelivery, 1);
         testEntityManager.persistAndFlush(secondAttempt);
         var succeededClaim = attemptExecutionRepository.claim(secondAttempt.getId()).orElseThrow();
-        assertEquals(AttemptMutationOutcome.APPLIED, attemptExecutionRepository.markSucceeded(
+        assertEquals(1, attemptExecutionRepository.markSucceeded(
                 new AttemptExecution(secondAttempt, succeededClaim.generation(), succeededClaim.claimedAt()), 204,
                 "ok", 2L));
     }

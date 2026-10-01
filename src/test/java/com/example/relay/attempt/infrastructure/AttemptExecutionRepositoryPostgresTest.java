@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.application.AttemptExecution;
-import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.delivery.domain.Delivery;
@@ -116,14 +115,14 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
         Attempt attempt = createAttempt();
         em.flush();
         var claim = repository.claim(attempt.getId()).orElseThrow();
-        assertEquals(AttemptMutationOutcome.APPLIED,
+        assertEquals(1,
                 repository.markSucceeded(new AttemptExecution(attempt, claim.generation(), claim.claimedAt()), 204, "ok", 4L));
         var completed = jdbc.queryForMap("SELECT status, response_code, response_body, last_error, execution_claimed_at FROM attempts WHERE id = ?", attempt.getId());
         assertEquals("SUCCEEDED", completed.get("status"));
         assertEquals(204, completed.get("response_code"));
         assertNull(completed.get("last_error"));
         assertNull(completed.get("execution_claimed_at"));
-        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+        assertEquals(0,
                 repository.markSucceeded(new AttemptExecution(attempt, 0L, claim.claimedAt()), 200, "stale", 1L));
     }
 
@@ -135,11 +134,11 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
         assertThrows(IllegalArgumentException.class, () -> repository.markFailed(
                 new AttemptExecution(attempt, claim.generation(), claim.claimedAt()), AttemptStatus.IN_FLIGHT,
                 null, 500, "bad", "error", 10L));
-        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+        assertEquals(0,
                 repository.markFailed(new AttemptExecution(attempt, 0L, claim.claimedAt()), AttemptStatus.DEAD,
                         null, 500, "bad", "error", 10L));
         Instant dueAt = Instant.now().plusSeconds(30);
-        assertEquals(AttemptMutationOutcome.APPLIED, repository.markFailed(
+        assertEquals(1, repository.markFailed(
                 new AttemptExecution(attempt, claim.generation(), claim.claimedAt()), AttemptStatus.FAILED_RETRYING,
                 dueAt, 503, "retry response", "temporary failure", 12L));
         var failed = jdbc.queryForMap("SELECT status, next_retry_at, response_code, response_body, last_error, latency_ms, execution_claimed_at FROM attempts WHERE id = ?", attempt.getId());
@@ -160,9 +159,9 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
         Instant legacyClaim = jdbc.queryForObject("SELECT execution_claimed_at FROM attempts WHERE id = ?",
                 Instant.class, attempt.getId());
         var legacyExecution = new AttemptExecution(attempt, 0L, legacyClaim);
-        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+        assertEquals(0,
                 repository.markSucceeded(legacyExecution, 200, "stale", 5L));
-        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+        assertEquals(0,
                 repository.markFailed(legacyExecution, AttemptStatus.FAILED_RETRYING, Instant.now(),
                         500, "stale", "stale", 5L));
         assertEquals(1, repository.resetStuck(attempt.getId(), 0L, Duration.ofMinutes(1)));
@@ -171,7 +170,7 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
         var nextClaim = repository.claim(attempt.getId()).orElseThrow();
         assertEquals(1L, nextClaim.generation());
         assertTrue(nextClaim.claimedAt().isAfter(legacyClaim));
-        assertEquals(AttemptMutationOutcome.APPLIED, repository.markSucceeded(
+        assertEquals(1, repository.markSucceeded(
                 new AttemptExecution(attempt, nextClaim.generation(), nextClaim.claimedAt()), 204, "ok", 7L));
         var completed = jdbc.queryForMap("SELECT status, response_code, response_body, last_error, latency_ms, execution_claimed_at FROM attempts WHERE id = ?", attempt.getId());
         assertEquals("SUCCEEDED", completed.get("status"));

@@ -1,7 +1,6 @@
 package com.example.relay.attempt.infrastructure;
 
 import com.example.relay.attempt.application.AttemptExecution;
-import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.domain.AttemptStatus;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -71,9 +70,9 @@ public class AttemptExecutionRepositoryImpl implements AttemptExecutionRepositor
     }
 
     @Override
-    public AttemptMutationOutcome markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody,
+    public int markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody,
             Long latencyMs) {
-        int rows = jdbc.update("""
+        return jdbc.update("""
                 UPDATE attempts
                 SET status = 'SUCCEEDED',
                     next_retry_at = NULL,
@@ -88,16 +87,15 @@ public class AttemptExecutionRepositoryImpl implements AttemptExecutionRepositor
                   AND execution_generation = :generation
                   AND execution_generation > 0
                 """, completionParameters(execution, responseCode, responseBody, latencyMs));
-        return rows == 1 ? AttemptMutationOutcome.APPLIED : AttemptMutationOutcome.OWNERSHIP_LOST;
     }
 
     @Override
-    public AttemptMutationOutcome markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt,
+    public int markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt,
             Integer responseCode, String responseBody, String lastError, Long latencyMs) {
         if (status != AttemptStatus.FAILED_RETRYING && status != AttemptStatus.DEAD) {
             throw new IllegalArgumentException("Failed Attempt status must be FAILED_RETRYING or DEAD");
         }
-        int rows = jdbc.update("""
+        return jdbc.update("""
                 UPDATE attempts
                 SET status = :status,
                     next_retry_at = :nextRetryAt,
@@ -117,7 +115,6 @@ public class AttemptExecutionRepositoryImpl implements AttemptExecutionRepositor
                         ? null
                         : Timestamp.from(nextRetryAt))
                 .addValue("lastError", lastError));
-        return rows == 1 ? AttemptMutationOutcome.APPLIED : AttemptMutationOutcome.OWNERSHIP_LOST;
     }
 
     private MapSqlParameterSource completionParameters(AttemptExecution execution, Integer responseCode,

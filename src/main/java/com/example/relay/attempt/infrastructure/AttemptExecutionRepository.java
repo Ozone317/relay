@@ -1,7 +1,6 @@
 package com.example.relay.attempt.infrastructure;
 
 import com.example.relay.attempt.application.AttemptExecution;
-import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.domain.AttemptStatus;
 import java.time.Duration;
 import java.time.Instant;
@@ -16,9 +15,8 @@ public interface AttemptExecutionRepository {
 
     int resetStuck(UUID attemptId, long observedGeneration, Duration grace);
 
-    AttemptMutationOutcome markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody,
-            Long latencyMs);
+    int markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody, Long latencyMs);
 
-    AttemptMutationOutcome markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt,
-            Integer responseCode, String responseBody, String lastError, Long latencyMs);
+    int markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt, Integer responseCode,
+            String responseBody, String lastError, Long latencyMs);
 }

@@ -1,6 +1,7 @@
 package com.example.relay.attempt.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -161,7 +162,7 @@ public class AttemptServiceTest {
         AttemptExecution execution = new AttemptExecution(attempt, 9L, Instant.now());
         String responseBody = "x".repeat(10_239) + "\uD83D\uDE00";
         when(executionRepository.markSucceeded(any(), eq(200), any(), eq(10L)))
-                .thenReturn(AttemptMutationOutcome.APPLIED);
+                .thenReturn(1);
 
         AttemptMutationOutcome result = underTest.markSucceeded(execution, 200, responseBody, 10L);
 
@@ -172,11 +173,24 @@ public class AttemptServiceTest {
     }
 
     @Test
+    void markSucceededRejectsUnexpectedRowCountAndPropagatesRepositoryExceptions() {
+        AttemptExecution execution = new AttemptExecution(new Attempt(null, null, null, null, 1), 9L, Instant.now());
+        when(executionRepository.markSucceeded(any(), eq(200), any(), eq(10L))).thenReturn(2);
+
+        assertThrows(IllegalStateException.class, () -> underTest.markSucceeded(execution, 200, "body", 10L));
+
+        RuntimeException databaseFailure = new RuntimeException("database unavailable");
+        when(executionRepository.markSucceeded(any(), eq(200), any(), eq(10L))).thenThrow(databaseFailure);
+        assertEquals(databaseFailure,
+                assertThrows(RuntimeException.class, () -> underTest.markSucceeded(execution, 200, "body", 10L)));
+    }
+
+    @Test
     void markFailedTruncatesResponseAndErrorBeforeFencedRepositoryCall() {
         AttemptExecution execution = new AttemptExecution(new Attempt(null, null, null, null, 1), 2L, Instant.now());
         Instant nextRetryAt = Instant.now().plusSeconds(30);
         when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(AttemptMutationOutcome.OWNERSHIP_LOST);
+                .thenReturn(0);
 
         AttemptMutationOutcome result = underTest.markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, 503,
                 "r".repeat(20_000), "e".repeat(20_000), 25L);
@@ -188,11 +202,26 @@ public class AttemptServiceTest {
     }
 
     @Test
+    void markFailedRejectsUnexpectedRowCountAndPropagatesRepositoryExceptions() {
+        AttemptExecution execution = new AttemptExecution(new Attempt(null, null, null, null, 1), 2L, Instant.now());
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(2);
+
+        assertThrows(IllegalStateException.class,
+                () -> underTest.markFailed(execution, AttemptStatus.DEAD, null, 503, "response", "error", 20L));
+
+        RuntimeException databaseFailure = new RuntimeException("database unavailable");
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(databaseFailure);
+        assertEquals(databaseFailure, assertThrows(RuntimeException.class,
+                () -> underTest.markFailed(execution, AttemptStatus.DEAD, null, 503, "response", "error", 20L)));
+    }
+
+    @Test
     void markFailedAndCreateRetryDoesNotCreateRetryWhenExecutionOwnershipIsLost() {
         Attempt attempt = new Attempt(null, null, null, null, 1);
         AttemptExecution execution = new AttemptExecution(attempt, 2L, Instant.now());
         when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(AttemptMutationOutcome.OWNERSHIP_LOST);
+                .thenReturn(0);
 
         AttemptMutationOutcome outcome =
                 underTest.markFailedAndCreateRetry(execution, Instant.now().plusSeconds(30), 503, "failure", null, 10L);

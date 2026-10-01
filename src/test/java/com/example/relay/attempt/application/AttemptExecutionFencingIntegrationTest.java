@@ -131,6 +131,8 @@ class AttemptExecutionFencingIntegrationTest implements SharedPostgresContainer 
 
         assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, attemptService.markSucceeded(first, 200, "stale", 1L));
         assertRow(attempt.getId(), "IN_FLIGHT", 3L, null, null, null, third.claimedAt(), null);
+        assertEquals(third.claimedAt(), jdbc.queryForObject(
+                "SELECT execution_claimed_at FROM attempts WHERE id = ?", Instant.class, attempt.getId()));
     }
 
     @Test

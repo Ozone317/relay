@@ -3,7 +3,6 @@ package com.example.relay.attempt.infrastructure;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.example.relay.attempt.application.AttemptExecution;
-import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.support.SharedPostgresContainer;
@@ -100,12 +99,12 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
         Attempt attempt = mock(Attempt.class);
         when(attempt.getId()).thenReturn(attemptId);
         AttemptExecution generationZero = new AttemptExecution(attempt, 0L, legacyClaimedAt);
-        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+        assertEquals(0,
                 repository.markSucceeded(generationZero, 200, "stale", 9L));
         int childrenBefore = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
                 Integer.class);
-        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+        assertEquals(0,
                 repository.markFailed(generationZero, AttemptStatus.FAILED_RETRYING, Instant.now(),
                         500, "stale", "stale", 9L));
         int childrenAfter = jdbc.queryForObject(
@@ -127,7 +126,7 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
         var replacement = repository.claim(attemptId).orElseThrow();
         assertEquals(1L, replacement.generation());
         assertTrue(replacement.claimedAt().isAfter(legacyClaimedAt));
-        assertEquals(AttemptMutationOutcome.APPLIED, repository.markFailed(
+        assertEquals(1, repository.markFailed(
                 new AttemptExecution(attempt, replacement.generation(), replacement.claimedAt()),
                 AttemptStatus.DEAD, Instant.now().plusSeconds(600), 410, "gone", "terminal", 11L));
         var terminal = jdbc.queryForMap("SELECT status, next_retry_at, response_code, response_body, last_error, "
