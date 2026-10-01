@@ -172,7 +172,7 @@ Verification on 2026-09-30 produced:
 |---|---|
 | Focused P00 policy/causal/scheduling contracts | 12 passed; 0 failures/errors/skips |
 | Integration tier | 284 passed; 0 failures/errors/skips |
-| Full suite | 779 passed; 0 failures/errors/skips; 8m22s |
+| Full suite | 779 passed; 0 failures/errors/skips; 8m26s on the reviewed implementation |
 | Ordered retry-promotion sequence | 3/3 passed |
 | Ordered reset-then-claim sequence | 3/3 passed |
 | Production-scope audit | no `src/main` changes |
