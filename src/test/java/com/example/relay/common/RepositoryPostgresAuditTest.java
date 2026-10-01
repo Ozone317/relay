@@ -9,6 +9,9 @@ import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
+import com.example.relay.attempt.application.AttemptExecution;
+import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.endpoint.infrastructure.EndpointRepository;
@@ -37,6 +40,8 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.data.domain.Limit;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
  * Executes every hand-written repository query against real PostgreSQL at least once.
@@ -56,6 +61,7 @@ import org.springframework.data.domain.Limit;
 @Tag("integration")
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import(com.example.relay.attempt.infrastructure.AttemptExecutionRepositoryImpl.class)
 class RepositoryPostgresAuditTest implements SharedPostgresContainer {
 
     @Autowired
@@ -63,6 +69,10 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository attemptRepository;
+    @Autowired
+    private AttemptExecutionRepository attemptExecutionRepository;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
     @Autowired
@@ -118,6 +128,36 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
         assertEquals(1, attemptRepository.resetStuck(attempt.getId(), future, now));
         assertDoesNotThrow(() -> attemptRepository.touchDeadLetterCandidate(attempt.getId(), future, now));
         assertDoesNotThrow(() -> attemptRepository.claimDeadLetterNotification(attempt.getId(), now));
+    }
+
+    @Test
+    void executionOwnershipStatementsExecuteOnPostgres() {
+        var claim = attemptExecutionRepository.claim(attempt.getId()).orElseThrow();
+        assertEquals(1L, claim.generation());
+        assertTrue(attemptExecutionRepository.findStaleInFlight(java.time.Duration.ofDays(1), 10).isEmpty());
+        jdbcTemplate.update("UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
+                attempt.getId());
+        assertEquals(1, attemptExecutionRepository.findStaleInFlight(java.time.Duration.ofMinutes(1), 10).size());
+        assertEquals(1, attemptExecutionRepository.resetStuck(attempt.getId(), claim.generation(),
+                java.time.Duration.ofMinutes(1)));
+        assertEquals(0, attemptExecutionRepository.resetStuck(attempt.getId(), claim.generation(),
+                java.time.Duration.ofMinutes(1)));
+
+        var failedClaim = attemptExecutionRepository.claim(attempt.getId()).orElseThrow();
+        assertEquals(AttemptMutationOutcome.APPLIED, attemptExecutionRepository.markFailed(
+                new AttemptExecution(attempt, failedClaim.generation(), failedClaim.claimedAt()), AttemptStatus.DEAD,
+                null, 500, "failure", "failed", 3L));
+
+        Endpoint secondEndpoint = new Endpoint("EP2", "https://example.com/second", "secret2", app);
+        testEntityManager.persistAndFlush(secondEndpoint);
+        Delivery secondDelivery = new Delivery(app, message, secondEndpoint);
+        testEntityManager.persistAndFlush(secondDelivery);
+        Attempt secondAttempt = new Attempt(app, message, secondEndpoint, secondDelivery, 1);
+        testEntityManager.persistAndFlush(secondAttempt);
+        var succeededClaim = attemptExecutionRepository.claim(secondAttempt.getId()).orElseThrow();
+        assertEquals(AttemptMutationOutcome.APPLIED, attemptExecutionRepository.markSucceeded(
+                new AttemptExecution(secondAttempt, succeededClaim.generation(), succeededClaim.claimedAt()), 204,
+                "ok", 2L));
     }
 
     @Test

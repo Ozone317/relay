@@ -2,6 +2,7 @@ package com.example.relay.attempt.infrastructure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
@@ -321,13 +322,14 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600));
 
         // Act
-        Instant now = Instant.now();
-        underTest.claim(attempt.getId(), now);
+        underTest.claim(attempt.getId(), Instant.now());
 
         // Assert
         Attempt reloaded = underTest.findById(attempt.getId()).get();
-        assertEquals(now.truncatedTo(ChronoUnit.MILLIS), reloaded.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS),
-                "claim() should stamp updated_at to the bound now parameter, not leave the old value");
+        assertEquals(1L, reloaded.getExecutionGeneration());
+        assertNotNull(reloaded.getExecutionClaimedAt());
+        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
+                "claim() should advance updated_at from the simulated old timestamp");
     }
 
     @Test

@@ -20,7 +20,8 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE attempts
-                SET status = 'IN_FLIGHT', updated_at = :now
+                SET status = 'IN_FLIGHT', execution_generation = execution_generation + 1,
+                    execution_claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE id = :attemptId
                 AND status = 'CREATED'
             """, nativeQuery = true)
@@ -32,6 +33,7 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
     @Query(value = """
                 UPDATE attempts
                 SET status = 'CREATED',
+                    execution_claimed_at = NULL,
                     ready_published_at = NULL,
                     ready_dispatch_claim_id = NULL,
                     ready_dispatch_claimed_at = NULL,

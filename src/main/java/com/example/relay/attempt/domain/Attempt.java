@@ -61,6 +61,14 @@ public class Attempt {
     @Setter
     private AttemptStatus status;
 
+    @Column(name = "execution_generation", nullable = false, updatable = false)
+    @Getter
+    private long executionGeneration;
+
+    @Column(name = "execution_claimed_at", nullable = true, updatable = false)
+    @Getter
+    private Instant executionClaimedAt;
+
     @Column(name = "next_retry_at", nullable = true, updatable = true)
     @Getter
     @Setter
