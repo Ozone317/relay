@@ -19,6 +19,7 @@ import com.example.relay.deliveryengine.signing.HmacSigner;
 import com.example.relay.endpoint.domain.Endpoint;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -92,7 +93,7 @@ public class DeliveryWorker {
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 AttemptMutationOutcome outcome = attemptService.markSucceeded(execution, response.statusCode(),
                         response.responseBody(), latencyMs);
-                handleCompletionOutcome(execution, "SUCCEEDED", outcome);
+                handleCompletionOutcome(execution, "success", outcome);
             } else {
                 handleFailure(execution, response.statusCode(), response.responseBody(), null, latencyMs);
             }
@@ -114,7 +115,7 @@ public class DeliveryWorker {
             if (outcome == AttemptMutationOutcome.APPLIED) {
                 attemptPublisher.publishToRoutingKey(attempt.getId(), RabbitMqConfig.DEADLETTER_ROUTING_KEY);
             } else {
-                handleCompletionOutcome(execution, "DEAD", outcome);
+                handleCompletionOutcome(execution, "dead_failure", outcome);
             }
         } else {
             int nextAttemptNo = attempt.getAttemptNo() + 1;
@@ -123,18 +124,31 @@ public class DeliveryWorker {
 
             AttemptMutationOutcome outcome = attemptService.markFailedAndCreateRetry(execution, dueAt, responseCode,
                     responseBody, lastError, latencyMs);
-            handleCompletionOutcome(execution, "FAILED_RETRYING", outcome);
+            handleCompletionOutcome(execution, "retrying_failure", outcome);
         }
     }
 
     private void handleCompletionOutcome(AttemptExecution execution, String completion,
             AttemptMutationOutcome outcome) {
         if (outcome == AttemptMutationOutcome.OWNERSHIP_LOST) {
-            AttemptStatus currentStatus = attemptRepository.findById(execution.attempt().getId())
-                    .map(Attempt::getStatus).orElse(null);
+            String currentStatus = "missing";
+            String currentGeneration = "missing";
+            try {
+                Attempt current = attemptRepository.findById(execution.attempt().getId()).orElse(null);
+                if (current != null) {
+                    currentStatus = current.getStatus().name();
+                    currentGeneration = Long.toString(current.getExecutionGeneration());
+                }
+            } catch (RuntimeException diagnosticFailure) {
+                currentStatus = "unknown";
+                currentGeneration = "unknown";
+            }
             ownershipMetrics.recordOwnershipLost(completion, currentStatus);
-            log.info("Attempt {} completion {} lost execution ownership; current status is {}",
-                    execution.attempt().getId(), completion, currentStatus == null ? "missing" : currentStatus);
+            long executionAgeMs = Math.max(0, Duration.between(execution.claimedAt(), Instant.now()).toMillis());
+            log.info("Attempt {} completion {} lost execution ownership; stale generation {}, current generation {}, "
+                            + "execution age {}ms, current status {}",
+                    execution.attempt().getId(), completion, execution.generation(), currentGeneration,
+                    executionAgeMs, currentStatus);
         }
     }
 

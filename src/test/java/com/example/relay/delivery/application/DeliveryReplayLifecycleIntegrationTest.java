@@ -4,6 +4,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -53,10 +54,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.Dispatcher;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -217,9 +221,17 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     }
 
     @Test
-    void replaySucceeds_marksTheNewAttemptSucceeded() {
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok")
-                .setBodyDelay(3, TimeUnit.SECONDS));
+    void replaySucceeds_marksTheNewAttemptSucceeded() throws Exception {
+        CountDownLatch requestArrived = new CountDownLatch(1);
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        mockWebServer.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) throws InterruptedException {
+                requestArrived.countDown();
+                releaseResponse.await();
+                return new MockResponse().setResponseCode(200).setBody("ok");
+            }
+        });
         Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
         Attempt dead =
                 attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
@@ -230,12 +242,16 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         assertEquals(0L, replay.getExecutionGeneration());
         assertNull(replay.getExecutionClaimedAt());
 
-        readyWorkDispatcher.dispatchOnce();
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(1, mockWebServer.getRequestCount()));
-
-        Attempt claimedReplay = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
-        assertEquals(1L, claimedReplay.getExecutionGeneration());
-        assertNotNull(claimedReplay.getExecutionClaimedAt());
+        try {
+            readyWorkDispatcher.dispatchOnce();
+            assertTrue(requestArrived.await(10, TimeUnit.SECONDS));
+            Attempt claimedReplay = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
+            assertEquals(AttemptStatus.IN_FLIGHT, claimedReplay.getStatus());
+            assertEquals(1L, claimedReplay.getExecutionGeneration());
+            assertNotNull(claimedReplay.getExecutionClaimedAt());
+        } finally {
+            releaseResponse.countDown();
+        }
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();

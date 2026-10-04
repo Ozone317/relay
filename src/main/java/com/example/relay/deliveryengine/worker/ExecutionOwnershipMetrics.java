@@ -1,6 +1,5 @@
 package com.example.relay.deliveryengine.worker;
 
-import com.example.relay.attempt.domain.AttemptStatus;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
@@ -16,10 +15,10 @@ public class ExecutionOwnershipMetrics {
         this.meterRegistry = meterRegistry;
     }
 
-    public void recordOwnershipLost(String completion, AttemptStatus currentStatus) {
+    public void recordOwnershipLost(String completion, String currentStatus) {
         meterRegistry.counter(OWNERSHIP_LOST_COUNTER,
                 "completion", completion,
-                "current_status", currentStatus == null ? "missing" : currentStatus.name()).increment();
+                "current_status", currentStatus).increment();
     }
 
     public void recordRevoked(String result) {

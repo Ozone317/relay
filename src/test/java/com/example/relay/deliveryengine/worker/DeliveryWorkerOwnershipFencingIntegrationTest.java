@@ -234,11 +234,15 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         assertNull(child.getReadyDispatchClaimId());
         assertNull(child.getReadyDispatchClaimedAt());
         assertEquals(1.0, meterRegistry.get("relay.delivery.execution.ownership.lost")
-                .tag("completion", "SUCCEEDED").tag("current_status", "FAILED_RETRYING").counter().count());
+                .tag("completion", "success").tag("current_status", "FAILED_RETRYING").counter().count());
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertTrue(ownershipLogAppender.list.stream()
                 .anyMatch(event -> event.getLevel() == Level.INFO
-                        && event.getFormattedMessage().contains("completion SUCCEEDED lost execution ownership")
-                        && event.getFormattedMessage().contains("current status is FAILED_RETRYING"))));
+                        && event.getFormattedMessage().contains(original.getId().toString())
+                        && event.getFormattedMessage().contains("completion success lost execution ownership")
+                        && event.getFormattedMessage().contains("stale generation 1")
+                        && event.getFormattedMessage().contains("current generation 2")
+                        && event.getFormattedMessage().contains("execution age ")
+                        && event.getFormattedMessage().contains("current status FAILED_RETRYING"))));
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertEquals(0, unacknowledgedCount(RabbitMqConfig.TASKS_QUEUE)));
         await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
@@ -273,7 +277,7 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertEquals(2, calls.get());
             assertEquals(1.0, meterRegistry.get("relay.delivery.execution.ownership.lost")
-                    .tag("completion", "FAILED_RETRYING").tag("current_status", "SUCCEEDED").counter().count());
+                    .tag("completion", "retrying_failure").tag("current_status", "SUCCEEDED").counter().count());
         });
         Attempt current = attemptRepository.findById(original.getId()).orElseThrow();
         assertEquals(200, current.getResponseCode());
@@ -364,7 +368,7 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertEquals(AttemptStatus.SUCCEEDED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
             assertEquals(1.0, meterRegistry.get("relay.delivery.execution.ownership.lost")
-                    .tag("completion", "DEAD").tag("current_status", "SUCCEEDED").counter().count());
+                    .tag("completion", "dead_failure").tag("current_status", "SUCCEEDED").counter().count());
         });
         assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM attempts WHERE id <> ?", Integer.class, attempt.getId()));
         await().during(Duration.ofSeconds(6)).atMost(Duration.ofSeconds(15)).untilAsserted(() ->

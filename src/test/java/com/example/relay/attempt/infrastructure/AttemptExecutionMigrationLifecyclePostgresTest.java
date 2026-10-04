@@ -3,15 +3,21 @@ package com.example.relay.attempt.infrastructure;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.example.relay.attempt.application.AttemptExecution;
+import com.example.relay.attempt.application.AttemptMutationOutcome;
+import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.support.SharedPostgresContainer;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Tag;
@@ -19,8 +25,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import org.springframework.data.jpa.repository.support.JpaRepositoryFactory;
+import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Tag("integration")
 class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresContainer {
@@ -96,47 +105,76 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
         assertEquals(AttemptStatus.IN_FLIGHT.name(), jdbc.queryForObject(
                 "SELECT status FROM attempts WHERE id = ?", String.class, attemptId));
 
-        Attempt attempt = mock(Attempt.class);
-        when(attempt.getId()).thenReturn(attemptId);
-        AttemptExecution generationZero = new AttemptExecution(attempt, 0L, legacyClaimedAt);
-        assertEquals(0,
-                repository.markSucceeded(generationZero, 200, "stale", 9L));
-        int childrenBefore = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
-                Integer.class);
-        assertEquals(0,
-                repository.markFailed(generationZero, AttemptStatus.FAILED_RETRYING, Instant.now(),
-                        500, "stale", "stale", 9L));
-        int childrenAfter = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
-                Integer.class);
-        assertEquals(childrenBefore, childrenAfter,
-                "the zero-row parent transition must not create a retry child");
-        assertEquals(AttemptStatus.IN_FLIGHT.name(), jdbc.queryForObject(
-                "SELECT status FROM attempts WHERE id = ?", String.class, attemptId));
+        LocalContainerEntityManagerFactoryBean entityManagerFactoryBean = new LocalContainerEntityManagerFactoryBean();
+        entityManagerFactoryBean.setDataSource(dataSource);
+        entityManagerFactoryBean.setPackagesToScan("com.example.relay");
+        entityManagerFactoryBean.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+        entityManagerFactoryBean.setJpaPropertyMap(Map.of("hibernate.hbm2ddl.auto", "none"));
+        entityManagerFactoryBean.afterPropertiesSet();
+        EntityManagerFactory entityManagerFactory = entityManagerFactoryBean.getObject();
+        try (EntityManager entityManager = entityManagerFactory.createEntityManager()) {
+            AttemptRepository attemptRepository = new JpaRepositoryFactory(entityManager)
+                    .getRepository(AttemptRepository.class);
+            DeliveryRepository deliveryRepository = new JpaRepositoryFactory(entityManager)
+                    .getRepository(DeliveryRepository.class);
+            AttemptService service = new AttemptService(attemptRepository, repository, deliveryRepository);
+            Attempt attempt = entityManager.find(Attempt.class, attemptId);
+            assertNotNull(attempt);
+            AttemptExecution generationZero = new AttemptExecution(attempt, 0L, legacyClaimedAt);
+            assertEquals(0, repository.markSucceeded(generationZero, 200, "stale", 9L));
+            int childrenBefore = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
+                    Integer.class);
+            assertEquals(1, childrenBefore);
+            JpaTransactionManager transactionManager = new JpaTransactionManager(entityManagerFactory);
+            assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
+                    new TransactionTemplate(transactionManager).execute(status ->
+                            service.markFailedAndCreateRetry(generationZero, Instant.now().plusSeconds(60),
+                                    500, "stale", "stale", 9L)));
+            int childrenAfter = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
+                    Integer.class);
+            assertEquals(childrenBefore, childrenAfter,
+                    "the zero-row parent transition must not create a retry child");
+            assertEquals(AttemptStatus.IN_FLIGHT.name(), jdbc.queryForObject(
+                    "SELECT status FROM attempts WHERE id = ?", String.class, attemptId));
+            var afterRejectedCompletion = jdbc.queryForMap("SELECT execution_generation, execution_claimed_at, "
+                    + "next_retry_at, response_code, response_body, last_error, latency_ms "
+                    + "FROM attempts WHERE id = ?", attemptId);
+            assertEquals(0L, ((Number) afterRejectedCompletion.get("execution_generation")).longValue());
+            assertEquals(legacyClaimedAt, ((java.sql.Timestamp) afterRejectedCompletion.get("execution_claimed_at"))
+                    .toInstant());
+            assertNull(afterRejectedCompletion.get("next_retry_at"));
+            assertNull(afterRejectedCompletion.get("response_code"));
+            assertNull(afterRejectedCompletion.get("response_body"));
+            assertNull(afterRejectedCompletion.get("last_error"));
+            assertNull(afterRejectedCompletion.get("latency_ms"));
 
-        assertTrue(repository.findStaleInFlight(Duration.ofSeconds(1), 10).stream()
-                .anyMatch(candidate -> candidate.id().equals(attemptId) && candidate.generation() == 0L));
-        assertEquals(1, repository.resetStuck(attemptId, 0L, Duration.ofSeconds(1)));
-        assertEquals("CREATED", jdbc.queryForObject(
-                "SELECT status FROM attempts WHERE id = ?", String.class, attemptId));
-        assertNull(jdbc.queryForObject(
-                "SELECT execution_claimed_at FROM attempts WHERE id = ?", Instant.class, attemptId));
+            assertTrue(repository.findStaleInFlight(Duration.ofSeconds(1), 10).stream()
+                    .anyMatch(candidate -> candidate.id().equals(attemptId) && candidate.generation() == 0L));
+            assertEquals(1, repository.resetStuck(attemptId, 0L, Duration.ofSeconds(1)));
+            assertEquals("CREATED", jdbc.queryForObject(
+                    "SELECT status FROM attempts WHERE id = ?", String.class, attemptId));
+            assertNull(jdbc.queryForObject(
+                    "SELECT execution_claimed_at FROM attempts WHERE id = ?", Instant.class, attemptId));
 
-        var replacement = repository.claim(attemptId).orElseThrow();
-        assertEquals(1L, replacement.generation());
-        assertTrue(replacement.claimedAt().isAfter(legacyClaimedAt));
-        assertEquals(1, repository.markFailed(
-                new AttemptExecution(attempt, replacement.generation(), replacement.claimedAt()),
-                AttemptStatus.DEAD, Instant.now().plusSeconds(600), 410, "gone", "terminal", 11L));
-        var terminal = jdbc.queryForMap("SELECT status, next_retry_at, response_code, response_body, last_error, "
-                + "latency_ms, execution_claimed_at FROM attempts WHERE id = ?", attemptId);
-        assertEquals("DEAD", terminal.get("status"));
-        assertNull(terminal.get("next_retry_at"));
-        assertEquals(410, terminal.get("response_code"));
-        assertEquals("gone", terminal.get("response_body"));
-        assertEquals("terminal", terminal.get("last_error"));
-        assertEquals(11L, ((Number) terminal.get("latency_ms")).longValue());
-        assertNull(terminal.get("execution_claimed_at"));
+            var replacement = repository.claim(attemptId).orElseThrow();
+            assertEquals(1L, replacement.generation());
+            assertTrue(replacement.claimedAt().isAfter(legacyClaimedAt));
+            assertEquals(1, repository.markFailed(
+                    new AttemptExecution(attempt, replacement.generation(), replacement.claimedAt()),
+                    AttemptStatus.DEAD, Instant.now().plusSeconds(600), 410, "gone", "terminal", 11L));
+            var terminal = jdbc.queryForMap("SELECT status, next_retry_at, response_code, response_body, last_error, "
+                    + "latency_ms, execution_claimed_at FROM attempts WHERE id = ?", attemptId);
+            assertEquals("DEAD", terminal.get("status"));
+            assertNull(terminal.get("next_retry_at"));
+            assertEquals(410, terminal.get("response_code"));
+            assertEquals("gone", terminal.get("response_body"));
+            assertEquals("terminal", terminal.get("last_error"));
+            assertEquals(11L, ((Number) terminal.get("latency_ms")).longValue());
+            assertNull(terminal.get("execution_claimed_at"));
+        } finally {
+            entityManagerFactoryBean.destroy();
+        }
     }
 }
