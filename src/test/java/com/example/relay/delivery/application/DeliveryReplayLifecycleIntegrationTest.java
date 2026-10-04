@@ -2,6 +2,7 @@ package com.example.relay.delivery.application;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.example.relay.app.domain.App;
@@ -52,6 +53,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -216,19 +218,30 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
 
     @Test
     void replaySucceeds_marksTheNewAttemptSucceeded() {
-        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
+        mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok")
+                .setBodyDelay(3, TimeUnit.SECONDS));
         Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
         Attempt dead =
                 attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
                         .getContent().get(0);
 
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        Attempt replay = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
+        assertEquals(0L, replay.getExecutionGeneration());
+        assertNull(replay.getExecutionClaimedAt());
+
         readyWorkDispatcher.dispatchOnce();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(1, mockWebServer.getRequestCount()));
+
+        Attempt claimedReplay = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
+        assertEquals(1L, claimedReplay.getExecutionGeneration());
+        assertNotNull(claimedReplay.getExecutionClaimedAt());
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
             assertEquals(dead.getAttemptNo() + 1, reloaded.getAttemptNo());
+            assertEquals(1L, reloaded.getExecutionGeneration());
         });
     }
 
