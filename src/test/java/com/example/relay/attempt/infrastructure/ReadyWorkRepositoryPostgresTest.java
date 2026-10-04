@@ -107,14 +107,6 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
     }
 
     @Test
-    void legacyTaskCannotClaimScheduledAttempt() {
-        Attempt attempt = scheduledAttempt(Instant.now().plusSeconds(60));
-
-        assertThat(attemptRepository.claim(attempt.getId(), Instant.now())).isZero();
-        assertThat(reload(attempt).getStatus()).isEqualTo(AttemptStatus.SCHEDULED);
-    }
-
-    @Test
     void freshCreatedAttemptIsImmediatelyLeaseableDespiteGrace() {
         Attempt attempt = createdAttempt();
         UUID claimId = UUID.randomUUID();

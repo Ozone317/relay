@@ -53,69 +53,6 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
     private TestEntityManager testEntityManager;
 
     @Test
-    void claim_returns1_whenRowMatchesTheConditions() throws Exception {
-        // Arrange
-        User user = new User("some_email@mail.com", "someHash");
-        Environment environment = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", environment);
-        Event event = new Event("some.event", app);
-        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
-        objectMapper = new ObjectMapper();
-        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-
-        testEntityManager.persistAndFlush(user);
-        testEntityManager.persistAndFlush(environment);
-        testEntityManager.persistAndFlush(app);
-        testEntityManager.persistAndFlush(event);
-        testEntityManager.persistAndFlush(endpoint);
-        testEntityManager.persistAndFlush(message);
-        testEntityManager.persistAndFlush(delivery);
-        testEntityManager.persistAndFlush(attempt);
-
-        // Act
-        int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
-
-        // Assert
-        assertEquals(1, rowsAffected);
-
-        Attempt fetchedAttempt = underTest.findById(attempt.getId()).get();
-        assertEquals(AttemptStatus.IN_FLIGHT, fetchedAttempt.getStatus());
-    }
-
-    @Test
-    void claim_returns0_whenRowMatchesButConditionsDont() throws Exception {
-        // Arrange
-        User user = new User("some_email@mail.com", "someHash");
-        Environment environment = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", environment);
-        Event event = new Event("some.event", app);
-        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
-        objectMapper = new ObjectMapper();
-        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-
-        testEntityManager.persistAndFlush(user);
-        testEntityManager.persistAndFlush(environment);
-        testEntityManager.persistAndFlush(app);
-        testEntityManager.persistAndFlush(event);
-        testEntityManager.persistAndFlush(endpoint);
-        testEntityManager.persistAndFlush(message);
-        testEntityManager.persistAndFlush(delivery);
-        testEntityManager.persistAndFlush(attempt);
-
-        underTest.claim(attempt.getId(), Instant.now());
-
-        // Act (claiming the already claimed row)
-        int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
-
-        // Assert
-        assertEquals(0, rowsAffected);
-    }
-
-    @Test
     void findStaleInFlight_usesExecutionClaimAge() throws Exception {
         User user = new User("some_email@mail.com", "someHash");
         Environment environment = new Environment("Env 1", "Desc 1", user);
@@ -152,9 +89,9 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(staleButWrongStatus);
 
         Instant longAgo = Instant.now().minusSeconds(3600);
-        underTest.claim(stale.getId(), Instant.now());
+        claimAttempt(stale.getId());
         backdateClaimedAt(stale.getId(), longAgo);
-        underTest.claim(staleButWrongStatus.getId(), Instant.now());
+        claimAttempt(staleButWrongStatus.getId());
         backdateClaimedAt(staleButWrongStatus.getId(), longAgo);
 
         // Act
@@ -194,7 +131,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
             testEntityManager.persistAndFlush(iterationDelivery);
             Attempt attempt = new Attempt(app, message, iterationEndpoint, iterationDelivery, 1);
             testEntityManager.persistAndFlush(attempt);
-            underTest.claim(attempt.getId(), Instant.now());
+            claimAttempt(attempt.getId());
             backdateClaimedAt(attempt.getId(), longAgo);
         }
 
@@ -226,7 +163,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId(), Instant.now()); // CREATED -> IN_FLIGHT
+        claimAttempt(attempt.getId()); // CREATED -> IN_FLIGHT
         backdateClaimedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
@@ -260,7 +197,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId(), Instant.now()); // updated_at is "now", not stale
+        claimAttempt(attempt.getId()); // updated_at is "now", not stale
 
         // Act
         int rowsAffected = executionRepository.resetStuck(attempt.getId(),
@@ -301,41 +238,6 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
     }
 
     @Test
-    void claim_advancesUpdatedAt() throws Exception {
-        User user = new User("some_email@mail.com", "someHash");
-        Environment environment = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", environment);
-        Event event = new Event("some.event", app);
-        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
-        objectMapper = new ObjectMapper();
-        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
-
-        testEntityManager.persistAndFlush(user);
-        testEntityManager.persistAndFlush(environment);
-        testEntityManager.persistAndFlush(app);
-        testEntityManager.persistAndFlush(event);
-        testEntityManager.persistAndFlush(endpoint);
-        testEntityManager.persistAndFlush(message);
-        testEntityManager.persistAndFlush(delivery);
-        testEntityManager.persistAndFlush(attempt);
-
-        // Simulate a retry that sat in a wait tier for hours before being claimed.
-        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(21_600));
-
-        // Act
-        underTest.claim(attempt.getId(), Instant.now());
-
-        // Assert
-        Attempt reloaded = underTest.findById(attempt.getId()).get();
-        assertEquals(1L, reloaded.getExecutionGeneration());
-        assertNotNull(reloaded.getExecutionClaimedAt());
-        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
-                "claim() should advance updated_at from the simulated old timestamp");
-    }
-
-    @Test
     void resetStuck_advancesUpdatedAt() throws Exception {
         User user = new User("some_email@mail.com", "someHash");
         Environment environment = new Environment("Env 1", "Desc 1", user);
@@ -356,7 +258,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
-        underTest.claim(attempt.getId(), Instant.now());
+        claimAttempt(attempt.getId());
         backdateClaimedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
@@ -367,36 +269,6 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         Attempt reloaded = underTest.findById(attempt.getId()).get();
         assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
                 "resetStuck() should stamp updated_at using PostgreSQL time");
-    }
-
-    @Test
-    void claim_returns0_whenRowIsScheduled() throws Exception {
-        User user = new User("some_email@mail.com", "someHash");
-        Environment environment = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", environment);
-        Event event = new Event("some.event", app);
-        Endpoint endpoint = new Endpoint("testing", "https://example.com", "whsec_some_secret", app);
-        objectMapper = new ObjectMapper();
-        Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 2);
-        attempt.setStatus(AttemptStatus.SCHEDULED);
-
-        testEntityManager.persistAndFlush(user);
-        testEntityManager.persistAndFlush(environment);
-        testEntityManager.persistAndFlush(app);
-        testEntityManager.persistAndFlush(event);
-        testEntityManager.persistAndFlush(endpoint);
-        testEntityManager.persistAndFlush(message);
-        testEntityManager.persistAndFlush(delivery);
-        testEntityManager.persistAndFlush(attempt);
-
-        // Act
-        int rowsAffected = underTest.claim(attempt.getId(), Instant.now());
-
-        // Assert
-        assertEquals(0, rowsAffected);
-        assertEquals(AttemptStatus.SCHEDULED, underTest.findById(attempt.getId()).get().getStatus());
     }
 
     @Test
@@ -892,6 +764,12 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
                 .setParameter("id", attemptId)
                 .executeUpdate();
         testEntityManager.getEntityManager().clear();
+    }
+
+    private AttemptExecutionClaim claimAttempt(UUID attemptId) {
+        AttemptExecutionClaim claim = executionRepository.claim(attemptId).orElseThrow();
+        testEntityManager.clear();
+        return claim;
     }
 
     private void backdateClaimedAt(UUID attemptId, Instant when) {

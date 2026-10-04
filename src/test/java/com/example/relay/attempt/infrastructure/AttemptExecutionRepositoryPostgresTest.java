@@ -46,10 +46,27 @@ class AttemptExecutionRepositoryPostgresTest implements SharedPostgresContainer 
         assertEquals(0L, attempt.getExecutionGeneration());
         assertNull(attempt.getExecutionClaimedAt());
         em.flush();
+        jdbc.update("UPDATE attempts SET updated_at = CURRENT_TIMESTAMP - INTERVAL '6 hours' WHERE id = ?",
+                attempt.getId());
         var first = repository.claim(attempt.getId()).orElseThrow();
         assertEquals(1L, first.generation());
         assertNotNull(first.claimedAt());
+        Instant updatedAt = jdbc.queryForObject("SELECT updated_at FROM attempts WHERE id = ?", Instant.class,
+                attempt.getId());
+        assertTrue(updatedAt.isAfter(Instant.now().minusSeconds(10)),
+                "claim() must advance updated_at from its previous value");
         assertTrue(repository.claim(attempt.getId()).isEmpty());
+    }
+
+    @Test
+    void scheduledAttemptCannotBeClaimed() throws Exception {
+        Attempt attempt = createAttempt();
+        attempt.setStatus(AttemptStatus.SCHEDULED);
+        em.flush();
+
+        assertTrue(repository.claim(attempt.getId()).isEmpty());
+        assertEquals("SCHEDULED", jdbc.queryForObject("SELECT status FROM attempts WHERE id = ?", String.class,
+                attempt.getId()));
     }
 
     @Test

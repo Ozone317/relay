@@ -17,16 +17,6 @@ import org.springframework.data.jpa.repository.Query;
 
 public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
-    @Modifying(clearAutomatically = true)
-    @Query(value = """
-                UPDATE attempts
-                SET status = 'IN_FLIGHT', execution_generation = execution_generation + 1,
-                    execution_claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :attemptId
-                AND status = 'CREATED'
-            """, nativeQuery = true)
-    int claim(UUID attemptId, Instant now);
-
     List<Attempt> findByStatusAndNextRetryAtBefore(AttemptStatus status, Instant threshold, Limit limit);
 
     List<Attempt> findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(AttemptStatus status, Instant threshold,
