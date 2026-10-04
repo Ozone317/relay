@@ -5,6 +5,7 @@ import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.http.WebhookDeliveryException;
 import com.example.relay.deliveryengine.http.WebhookHeaders;
@@ -39,17 +40,22 @@ public class DeliveryWorker {
     private final WebhookHttpTransport webhookHttpTransport;
     private final ExecutorService virtualThreadExecutor;
     private final RetryDelayCalculator retryDelayCalculator;
+    private final AttemptRepository attemptRepository;
+    private final ExecutionOwnershipMetrics ownershipMetrics;
 
     public DeliveryWorker(AttemptService attemptService, HmacSigner hmacSigner,
             WebhookHttpTransport webhookHttpTransport, AttemptPublisher attemptPublisher,
             ExecutorService virtualThreadExecutor, Clock clock, RetryProperties retryProperties,
-            RetryJitterSource retryJitterSource) {
+            RetryJitterSource retryJitterSource, AttemptRepository attemptRepository,
+            ExecutionOwnershipMetrics ownershipMetrics) {
         this.attemptService = attemptService;
         this.hmacSigner = hmacSigner;
         this.webhookHttpTransport = webhookHttpTransport;
         this.attemptPublisher = attemptPublisher;
         this.virtualThreadExecutor = virtualThreadExecutor;
         this.retryDelayCalculator = new RetryDelayCalculator(clock, retryProperties, retryJitterSource);
+        this.attemptRepository = attemptRepository;
+        this.ownershipMetrics = ownershipMetrics;
     }
 
     @RabbitListener(id = "deliveryWorker", queues = RabbitMqConfig.TASKS_QUEUE,
@@ -61,12 +67,12 @@ public class DeliveryWorker {
     private void processMessage(String attemptIdRaw) {
         UUID attemptId = UUID.fromString(attemptIdRaw);
 
-        AttemptExecution execution = attemptService.claim(attemptId).orElse(null);
-        if (execution == null) {
-            log.warn("Attempt {} was already claimed, skipping", attemptId);
+        var claimed = attemptService.claim(attemptId);
+        if (claimed.isEmpty()) {
+            log.info("Attempt {} is not claimable; acknowledging duplicate or obsolete task", attemptId);
             return;
         }
-        deliver(execution);
+        deliver(claimed.orElseThrow());
     }
 
     private void deliver(AttemptExecution execution) {
@@ -84,7 +90,9 @@ public class DeliveryWorker {
             long latencyMs = System.currentTimeMillis() - startedAt;
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                attemptService.markSucceeded(execution, response.statusCode(), response.responseBody(), latencyMs);
+                AttemptMutationOutcome outcome = attemptService.markSucceeded(execution, response.statusCode(),
+                        response.responseBody(), latencyMs);
+                handleCompletionOutcome(execution, "SUCCEEDED", outcome);
             } else {
                 handleFailure(execution, response.statusCode(), response.responseBody(), null, latencyMs);
             }
@@ -105,13 +113,28 @@ public class DeliveryWorker {
                     responseBody, lastError, latencyMs);
             if (outcome == AttemptMutationOutcome.APPLIED) {
                 attemptPublisher.publishToRoutingKey(attempt.getId(), RabbitMqConfig.DEADLETTER_ROUTING_KEY);
+            } else {
+                handleCompletionOutcome(execution, "DEAD", outcome);
             }
         } else {
             int nextAttemptNo = attempt.getAttemptNo() + 1;
             RetryTier tier = RetryTier.forAttemptNo(nextAttemptNo);
             Instant dueAt = retryDelayCalculator.nextRetryAt(tier.getDelay());
 
-            attemptService.markFailedAndCreateRetry(execution, dueAt, responseCode, responseBody, lastError, latencyMs);
+            AttemptMutationOutcome outcome = attemptService.markFailedAndCreateRetry(execution, dueAt, responseCode,
+                    responseBody, lastError, latencyMs);
+            handleCompletionOutcome(execution, "FAILED_RETRYING", outcome);
+        }
+    }
+
+    private void handleCompletionOutcome(AttemptExecution execution, String completion,
+            AttemptMutationOutcome outcome) {
+        if (outcome == AttemptMutationOutcome.OWNERSHIP_LOST) {
+            AttemptStatus currentStatus = attemptRepository.findById(execution.attempt().getId())
+                    .map(Attempt::getStatus).orElse(null);
+            ownershipMetrics.recordOwnershipLost(completion, currentStatus);
+            log.info("Attempt {} completion {} lost execution ownership; current status is {}",
+                    execution.attempt().getId(), completion, currentStatus == null ? "missing" : currentStatus);
         }
     }
 

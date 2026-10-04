@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Logger;
@@ -92,8 +94,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -121,7 +128,7 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
     @ServiceConnection
     static RabbitMQContainer rabbitMQContainer = new RabbitMQContainer("rabbitmq:4.3.6-management");
 
-    @Autowired
+    @MockitoSpyBean
     private AttemptPublisher attemptPublisher;
 
     @Autowired
@@ -162,6 +169,12 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
 
     @Autowired
     private MessageRepository messageRepository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @MockitoBean
     private Clock clock;
@@ -809,6 +822,49 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
                 rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 5000);
         assertNotNull(deadLettered, "expected the attempt id on " + RabbitMqConfig.DEADLETTER_QUEUE);
         assertEquals(attempt.getId().toString(), new String(deadLettered.getBody()));
+    }
+
+    @Test
+    void activeFinalFailure_commitsDeadBeforeDeadLetterPublication() throws Exception {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("final diagnostic"));
+        Attempt attempt = persistAttempt(webhookUrl("/webhook"), RetryTier.MAX_ATTEMPTS);
+        AtomicInteger publicationCalls = new AtomicInteger();
+        AtomicReference<Throwable> publicationFailure = new AtomicReference<>();
+        CountDownLatch publicationObserved = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            publicationCalls.incrementAndGet();
+            try {
+                TransactionTemplate independent = new TransactionTemplate(transactionManager);
+                independent.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                independent.executeWithoutResult(status -> {
+                    var persisted = jdbc.queryForMap("SELECT status, response_code, response_body, last_error, "
+                            + "latency_ms, execution_claimed_at FROM attempts WHERE id = ?", attempt.getId());
+                    assertEquals("DEAD", persisted.get("status"));
+                    assertEquals(500, ((Number) persisted.get("response_code")).intValue());
+                    assertEquals("final diagnostic", persisted.get("response_body"));
+                    assertNull(persisted.get("last_error"));
+                    assertNotNull(persisted.get("latency_ms"));
+                    assertNull(persisted.get("execution_claimed_at"));
+                });
+            } catch (Throwable failure) {
+                publicationFailure.set(failure);
+                throw failure;
+            } finally {
+                publicationObserved.countDown();
+            }
+            return invocation.callRealMethod();
+        }).when(attemptPublisher).publishToRoutingKey(eq(attempt.getId()), eq(RabbitMqConfig.DEADLETTER_ROUTING_KEY));
+
+        attemptPublisher.publish(attempt.getId());
+
+        assertTrue(publicationObserved.await(10, TimeUnit.SECONDS),
+                "dead-letter publication callback must observe the committed row");
+        assertNull(publicationFailure.get());
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertEquals(AttemptStatus.DEAD,
+                        attemptRepository.findById(attempt.getId()).orElseThrow().getStatus()));
+        assertEquals(1, publicationCalls.get());
     }
 
     @Test
