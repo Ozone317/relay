@@ -42,7 +42,7 @@ import org.springframework.test.context.transaction.TestTransaction;
 @Tag("integration")
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(ReadyWorkRepositoryImpl.class)
+@Import({ReadyWorkRepositoryImpl.class, AttemptExecutionRepositoryImpl.class})
 class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
 
     @Autowired
@@ -50,6 +50,9 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository attemptRepository;
+
+    @Autowired
+    private AttemptExecutionRepository attemptExecutionRepository;
 
     @Autowired
     private TestEntityManager testEntityManager;
@@ -172,10 +175,10 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
         Attempt attempt = createdAttempt();
         setReadyFields(attempt, Instant.now(), UUID.randomUUID(), Instant.now());
         testEntityManager.flush();
-        assertThat(attemptRepository.claim(attempt.getId(), Instant.now())).isEqualTo(1);
-        backdateUpdatedAt(attempt);
+        long generation = attemptExecutionRepository.claim(attempt.getId()).orElseThrow().generation();
+        backdateClaim(attempt);
 
-        assertThat(attemptRepository.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now()))
+        assertThat(attemptExecutionRepository.resetStuck(attempt.getId(), generation, Duration.ofSeconds(60)))
                 .isEqualTo(1);
 
         Attempt recovered = reload(attempt);
@@ -190,9 +193,9 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
         Attempt attempt = createdAttempt();
         UUID oldClaim = UUID.randomUUID();
         readyWorkRepository.claimUnpublishedReady(oldClaim, Duration.ofSeconds(5), 1);
-        assertThat(attemptRepository.claim(attempt.getId(), Instant.now())).isEqualTo(1);
-        backdateUpdatedAt(attempt);
-        assertThat(attemptRepository.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now()))
+        long generation = attemptExecutionRepository.claim(attempt.getId()).orElseThrow().generation();
+        backdateClaim(attempt);
+        assertThat(attemptExecutionRepository.resetStuck(attempt.getId(), generation, Duration.ofSeconds(60)))
                 .isEqualTo(1);
 
         UUID newClaim = UUID.randomUUID();
@@ -303,9 +306,9 @@ class ReadyWorkRepositoryPostgresTest implements SharedPostgresContainer {
         attempt.setReadyDispatchClaimedAt(claimedAt);
     }
 
-    private void backdateUpdatedAt(Attempt attempt) {
+    private void backdateClaim(Attempt attempt) {
         jdbcTemplate.update(
-                "UPDATE attempts SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
+                "UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
                 attempt.getId());
     }
 

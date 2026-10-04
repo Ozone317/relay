@@ -27,23 +27,6 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
             """, nativeQuery = true)
     int claim(UUID attemptId, Instant now);
 
-    List<Attempt> findByStatusAndUpdatedAtBefore(AttemptStatus status, Instant threshold, Limit limit);
-
-    @Modifying(clearAutomatically = true)
-    @Query(value = """
-                UPDATE attempts
-                SET status = 'CREATED',
-                    execution_claimed_at = NULL,
-                    ready_published_at = NULL,
-                    ready_dispatch_claim_id = NULL,
-                    ready_dispatch_claimed_at = NULL,
-                    updated_at = :now
-                WHERE id = :attemptId
-                AND status = 'IN_FLIGHT'
-                AND updated_at < :threshold
-            """, nativeQuery = true)
-    int resetStuck(UUID attemptId, Instant threshold, Instant now);
-
     List<Attempt> findByStatusAndNextRetryAtBefore(AttemptStatus status, Instant threshold, Limit limit);
 
     List<Attempt> findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(AttemptStatus status, Instant threshold,

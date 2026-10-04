@@ -32,14 +32,20 @@ import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.context.annotation.Import;
+import java.time.Duration;
 
 @Tag("integration")
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import(AttemptExecutionRepositoryImpl.class)
 public class AttemptRepositoryTest implements SharedPostgresContainer {
 
     @Autowired
     private AttemptRepository underTest;
+
+    @Autowired
+    private AttemptExecutionRepository executionRepository;
 
     private ObjectMapper objectMapper;
 
@@ -110,7 +116,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
     }
 
     @Test
-    void findByStatusAndUpdatedAtBefore_returnsOnlyStaleMatchingRows() throws Exception {
+    void findStaleInFlight_usesExecutionClaimAge() throws Exception {
         User user = new User("some_email@mail.com", "someHash");
         Environment environment = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", environment);
@@ -119,9 +125,7 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
 
-        // Each gets its own endpoint: idx_attempts_one_active_per_message_endpoint allows only one
-        // active (CREATED/IN_FLIGHT/SCHEDULED) row per (message_id, endpoint_id) pair, and endpoint
-        // identity is irrelevant to what this test checks.
+        // Each gets its own endpoint because each can have only one active Attempt.
         Endpoint endpointFresh = new Endpoint("testing-fresh", "https://example.com/fresh", "whsec_fresh", app);
         Endpoint endpointStaleWrongStatus =
                 new Endpoint("testing-swrong", "https://example.com/swrong", "whsec_swrong", app);
@@ -148,24 +152,22 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(staleButWrongStatus);
 
         Instant longAgo = Instant.now().minusSeconds(3600);
-        backdateUpdatedAt(stale.getId(), longAgo);
-        backdateUpdatedAt(staleButWrongStatus.getId(), longAgo);
-        underTest.claim(staleButWrongStatus.getId(), Instant.now()); // flips it to IN_FLIGHT
-
-        Instant threshold = Instant.now().minusSeconds(60);
+        underTest.claim(stale.getId(), Instant.now());
+        backdateClaimedAt(stale.getId(), longAgo);
+        underTest.claim(staleButWrongStatus.getId(), Instant.now());
+        backdateClaimedAt(staleButWrongStatus.getId(), longAgo);
 
         // Act
-        List<Attempt> result = underTest.findByStatusAndUpdatedAtBefore(
-                AttemptStatus.CREATED, threshold, Limit.of(100));
+        List<AttemptExecutionCandidate> result = executionRepository.findStaleInFlight(Duration.ofSeconds(60), 100);
 
         // Assert
-        assertEquals(1, result.size());
-        assertEquals(stale.getId(), result.get(0).getId());
-        assertTrue(result.stream().noneMatch(a -> a.getId().equals(fresh.getId()))); // Fresh row is not returned
+        assertEquals(2, result.size());
+        assertTrue(result.stream().anyMatch(candidate -> candidate.id().equals(stale.getId())));
+        assertTrue(result.stream().noneMatch(candidate -> candidate.id().equals(fresh.getId())));
     }
 
     @Test
-    void findByStatusAndUpdatedAtBefore_respectsLimit() throws Exception {
+    void findStaleInFlight_respectsLimit() throws Exception {
         User user = new User("some_email@mail.com", "someHash");
         Environment environment = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", environment);
@@ -192,12 +194,12 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
             testEntityManager.persistAndFlush(iterationDelivery);
             Attempt attempt = new Attempt(app, message, iterationEndpoint, iterationDelivery, 1);
             testEntityManager.persistAndFlush(attempt);
-            backdateUpdatedAt(attempt.getId(), longAgo);
+            underTest.claim(attempt.getId(), Instant.now());
+            backdateClaimedAt(attempt.getId(), longAgo);
         }
 
         // Act
-        List<Attempt> result = underTest.findByStatusAndUpdatedAtBefore(
-                AttemptStatus.CREATED, Instant.now().minusSeconds(60), Limit.of(2));
+        List<AttemptExecutionCandidate> result = executionRepository.findStaleInFlight(Duration.ofSeconds(60), 2);
 
         // Assert
         assertEquals(2, result.size());
@@ -225,10 +227,12 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now()); // CREATED -> IN_FLIGHT
-        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+        backdateClaimedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
-        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now());
+        int rowsAffected = executionRepository.resetStuck(attempt.getId(),
+                underTest.findById(attempt.getId()).orElseThrow().getExecutionGeneration(), Duration.ofSeconds(60));
+        testEntityManager.clear();
 
         // Assert
         assertEquals(1, rowsAffected);
@@ -259,7 +263,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         underTest.claim(attempt.getId(), Instant.now()); // updated_at is "now", not stale
 
         // Act
-        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now());
+        int rowsAffected = executionRepository.resetStuck(attempt.getId(),
+                underTest.findById(attempt.getId()).orElseThrow().getExecutionGeneration(), Duration.ofSeconds(60));
 
         // Assert
         assertEquals(0, rowsAffected);
@@ -287,10 +292,8 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(delivery);
         testEntityManager.persistAndFlush(attempt);
 
-        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
-
         // Act
-        int rowsAffected = underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), Instant.now());
+        int rowsAffected = executionRepository.resetStuck(attempt.getId(), 0L, Duration.ofSeconds(60));
 
         // Assert
         assertEquals(0, rowsAffected);
@@ -354,16 +357,16 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         testEntityManager.persistAndFlush(attempt);
 
         underTest.claim(attempt.getId(), Instant.now());
-        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+        backdateClaimedAt(attempt.getId(), Instant.now().minusSeconds(3600));
 
         // Act
-        Instant now = Instant.now();
-        underTest.resetStuck(attempt.getId(), Instant.now().minusSeconds(60), now);
+        executionRepository.resetStuck(attempt.getId(),
+                underTest.findById(attempt.getId()).orElseThrow().getExecutionGeneration(), Duration.ofSeconds(60));
 
         // Assert
         Attempt reloaded = underTest.findById(attempt.getId()).get();
-        assertEquals(now.truncatedTo(ChronoUnit.MILLIS), reloaded.getUpdatedAt().truncatedTo(ChronoUnit.MILLIS),
-                "resetStuck() should stamp updated_at to the bound now parameter, not leave the old value");
+        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(10)),
+                "resetStuck() should stamp updated_at using PostgreSQL time");
     }
 
     @Test
@@ -889,5 +892,12 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
                 .setParameter("id", attemptId)
                 .executeUpdate();
         testEntityManager.getEntityManager().clear();
+    }
+
+    private void backdateClaimedAt(UUID attemptId, Instant when) {
+        testEntityManager.getEntityManager().createNativeQuery(
+                "UPDATE attempts SET execution_claimed_at = :when WHERE id = :id")
+                .setParameter("when", when).setParameter("id", attemptId).executeUpdate();
+        testEntityManager.clear();
     }
 }

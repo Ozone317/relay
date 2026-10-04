@@ -11,6 +11,10 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepositoryImpl;
+import com.example.relay.attempt.infrastructure.AttemptExecutionClaim;
+import com.example.relay.attempt.application.AttemptExecution;
 import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
@@ -33,7 +37,16 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -72,6 +85,12 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     private AttemptRepository attemptRepository;
 
     @Autowired
+    private AttemptExecutionRepository executionRepository;
+
+    @Autowired
+    private AttemptExecutionRepositoryImpl executionRepositoryDelegate;
+
+    @Autowired
     private DeliveryRepository deliveryRepository;
 
     @Autowired
@@ -106,6 +125,15 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
 
     @Autowired
     private AttemptService attemptService;
+
+    @Autowired
+    private com.example.relay.deliveryengine.publisher.AttemptPublisher attemptPublisher;
+
+    @Autowired
+    private ReconciliationProperties reconciliationProperties;
+
+    @Autowired
+    private com.example.relay.deliveryengine.worker.ExecutionOwnershipMetrics executionOwnershipMetrics;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -179,9 +207,16 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         });
     }
 
+    private void backdateClaim(UUID id) {
+        transactionTemplate.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = :id")
+                .setParameter("id", id).executeUpdate());
+    }
+
     @Test
     void staleInFlightAttempt_isResetWithoutDirectPublication() {
-        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.IN_FLIGHT, Instant.now().minusSeconds(3600));
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.IN_FLIGHT, Instant.now());
+        backdateClaim(attempt.getId());
 
         sweeper.sweep();
 
@@ -214,12 +249,161 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     }
 
     @Test
+    void staleObservedGeneration_cannotResetNewOwner() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        var first = attemptService.claim(attempt.getId()).orElseThrow();
+        backdateClaim(attempt.getId());
+        var observed = executionRepository.findStaleInFlight(Duration.ofMinutes(1), 10).get(0);
+
+        assertEquals(1, executionRepository.resetStuck(attempt.getId(), first.generation(), Duration.ofMinutes(1)));
+        var replacement = attemptService.claim(attempt.getId()).orElseThrow();
+
+        assertEquals(first.generation() + 1, replacement.generation());
+        assertEquals(0, executionRepository.resetStuck(attempt.getId(), observed.generation(), Duration.ofMinutes(1)));
+        assertEquals(AttemptStatus.IN_FLIGHT, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void delayedObservedGeneration_afterReplacementTerminal_cannotResetOrEraseDiagnostics() throws Exception {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        var first = attemptService.claim(attempt.getId()).orElseThrow();
+        backdateClaim(attempt.getId());
+
+        CountDownLatch candidateSelected = new CountDownLatch(1);
+        CountDownLatch releaseSweeper = new CountDownLatch(1);
+        AtomicInteger delayedResetRows = new AtomicInteger(-1);
+        AtomicReference<List<com.example.relay.attempt.infrastructure.AttemptExecutionCandidate>> observedCandidates =
+                new AtomicReference<>();
+        AttemptExecutionRepository spyingRepository = new AttemptExecutionRepository() {
+            @Override
+            public Optional<AttemptExecutionClaim> claim(UUID attemptId) {
+                return executionRepositoryDelegate.claim(attemptId);
+            }
+
+            @Override
+            public List<com.example.relay.attempt.infrastructure.AttemptExecutionCandidate> findStaleInFlight(
+                    Duration grace, int limit) {
+                List<com.example.relay.attempt.infrastructure.AttemptExecutionCandidate> candidates =
+                        executionRepositoryDelegate.findStaleInFlight(grace, limit);
+                observedCandidates.set(candidates);
+                candidateSelected.countDown();
+                try {
+                    if (!releaseSweeper.await(10, TimeUnit.SECONDS)) {
+                        throw new AssertionError("sweeper stayed gated after selecting its stale candidate");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError("sweeper gate was interrupted", interrupted);
+                }
+                return candidates;
+            }
+
+            @Override
+            public int resetStuck(UUID attemptId, long observedGeneration, Duration grace) {
+                int rows = executionRepositoryDelegate.resetStuck(attemptId, observedGeneration, grace);
+                delayedResetRows.set(rows);
+                return rows;
+            }
+
+            @Override
+            public int markSucceeded(AttemptExecution execution, Integer responseCode, String responseBody,
+                    Long latencyMs) {
+                return executionRepositoryDelegate.markSucceeded(execution, responseCode, responseBody, latencyMs);
+            }
+
+            @Override
+            public int markFailed(AttemptExecution execution, AttemptStatus status, Instant nextRetryAt,
+                    Integer responseCode, String responseBody, String lastError, Long latencyMs) {
+                return executionRepositoryDelegate.markFailed(execution, status, nextRetryAt, responseCode,
+                        responseBody, lastError, latencyMs);
+            }
+        };
+
+        AttemptService delayedAttemptService = new AttemptService(attemptRepository, spyingRepository, deliveryRepository);
+        ReconciliationSweeper delayedSweeper = new ReconciliationSweeper(attemptRepository, spyingRepository,
+                attemptPublisher, delayedAttemptService, reconciliationProperties, executionOwnershipMetrics);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> sweep = executor.submit(delayedSweeper::sweep);
+            assertEquals(true, candidateSelected.await(10, TimeUnit.SECONDS));
+            assertEquals(1, observedCandidates.get().size());
+            assertEquals(attempt.getId(), observedCandidates.get().get(0).id());
+            assertEquals(first.generation(), observedCandidates.get().get(0).generation());
+            assertNotNull(observedCandidates.get().get(0).claimedAt());
+            assertEquals(1, executionRepository.resetStuck(attempt.getId(), first.generation(), Duration.ofMinutes(1)));
+            var replacement = attemptService.claim(attempt.getId()).orElseThrow();
+            attemptService.markSucceeded(replacement, 207, "replacement response", 321L);
+            Attempt before = attemptRepository.findById(attempt.getId()).orElseThrow();
+            releaseSweeper.countDown();
+            sweep.get(10, TimeUnit.SECONDS);
+            Attempt after = attemptRepository.findById(attempt.getId()).orElseThrow();
+
+            assertEquals(AttemptStatus.SUCCEEDED, after.getStatus());
+            assertEquals(before.getExecutionGeneration(), after.getExecutionGeneration());
+            assertEquals(before.getResponseCode(), after.getResponseCode());
+            assertEquals(before.getResponseBody(), after.getResponseBody());
+            assertEquals(before.getLastError(), after.getLastError());
+            assertEquals(before.getLatencyMs(), after.getLatencyMs());
+            assertNull(after.getExecutionClaimedAt());
+            assertEquals(0, delayedResetRows.get(), "the delayed sweeper's real reset SQL must lose the race");
+        } finally {
+            releaseSweeper.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void completionBeforeReset_causesResetToLose() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        var execution = attemptService.claim(attempt.getId()).orElseThrow();
+        backdateClaim(attempt.getId());
+        var candidate = executionRepository.findStaleInFlight(Duration.ofMinutes(1), 10).get(0);
+        attemptService.markSucceeded(execution, 201, "finished first", 19L);
+
+        assertEquals(0, executionRepository.resetStuck(attempt.getId(), candidate.generation(), Duration.ofMinutes(1)));
+        assertEquals(AttemptStatus.SUCCEEDED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void resetBeforeCompletion_fencesOldOwnerImmediately() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        var execution = attemptService.claim(attempt.getId()).orElseThrow();
+        backdateClaim(attempt.getId());
+
+        assertEquals(1, executionRepository.resetStuck(attempt.getId(), execution.generation(), Duration.ofMinutes(1)));
+        assertEquals(com.example.relay.attempt.application.AttemptMutationOutcome.OWNERSHIP_LOST,
+                attemptService.markSucceeded(execution, 201, "too late", 19L));
+        assertEquals(AttemptStatus.CREATED, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void abandonedGeneration_resetsAndIsReclaimedAtHigherGeneration() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        var original = attemptService.claim(attempt.getId()).orElseThrow();
+        backdateClaim(attempt.getId());
+
+        sweeper.sweep();
+
+        var reclaimed = attemptService.claim(attempt.getId()).orElseThrow();
+        assertEquals(original.generation() + 1, reclaimed.generation());
+    }
+
+    @Test
+    void updatedAtChange_doesNotReplaceExecutionClaimAgeAuthority() {
+        Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now());
+        attemptService.claim(attempt.getId());
+        backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));
+
+        sweeper.sweep();
+
+        assertEquals(AttemptStatus.IN_FLIGHT, attemptRepository.findById(attempt.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
     void inFlightAttempt_thatFinishesConcurrently_isNotResetOrDuplicated() {
-        // Simulates DeliveryWorker completing the delivery in the gap between the sweeper's
-        // SELECT and its UPDATE: the row is stale by updated_at at query time, but by the time
-        // resetStuck's own WHERE clause re-evaluates it, it's already SUCCEEDED with a fresh
-        // updated_at. Proven the same way RELAY_HANDOFF.md documents proving the poison-message
-        // fix: by directly asserting the guarded outcome, not by racing real threads.
+        // A terminal completion clears execution_claimed_at, so a later sweeper selection no
+        // longer sees this row as stale IN_FLIGHT work. The delayed-selection race is exercised
+        // separately with latches in delayedObservedGeneration_afterReplacementTerminal_cannotResetOrEraseDiagnostics.
         Attempt attempt = persistAttemptWithUpdatedAt(AttemptStatus.CREATED, Instant.now().minusSeconds(3600));
         var execution = attemptService.claim(attempt.getId()).orElseThrow();
         backdateUpdatedAt(attempt.getId(), Instant.now().minusSeconds(3600));

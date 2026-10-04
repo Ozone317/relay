@@ -154,6 +154,10 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         return attemptRepository.save(new Attempt(app, message, endpoint, delivery, attemptNo));
     }
 
+    private long executionGeneration(UUID attemptId) {
+        return attemptRepository.findById(attemptId).orElseThrow().getExecutionGeneration();
+    }
+
     private long unacknowledgedCount(String queue) throws Exception {
         String auth = Base64.getEncoder().encodeToString((rabbitMQ.getAdminUsername() + ":"
                 + rabbitMQ.getAdminPassword()).getBytes());
@@ -189,8 +193,8 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         jdbc.update("UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour', "
                 + "updated_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
                 original.getId());
-        assertEquals(1, attemptService.resetStuck(original.getId(), java.time.Instant.now().plusSeconds(60),
-                java.time.Instant.now()));
+        assertEquals(1, attemptService.resetStuck(original.getId(), executionGeneration(original.getId()),
+                Duration.ofMinutes(1)));
         dispatcher.dispatchOnce();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
@@ -259,8 +263,8 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         assertTrue(firstEntered.await(10, TimeUnit.SECONDS));
         jdbc.update("UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour', "
                 + "updated_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?", original.getId());
-        assertEquals(1, attemptService.resetStuck(original.getId(), java.time.Instant.now().plusSeconds(60),
-                java.time.Instant.now()));
+        assertEquals(1, attemptService.resetStuck(original.getId(), executionGeneration(original.getId()),
+                Duration.ofMinutes(1)));
         dispatcher.dispatchOnce();
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertEquals(AttemptStatus.SUCCEEDED,
@@ -351,8 +355,8 @@ class DeliveryWorkerOwnershipFencingIntegrationTest implements SharedPostgresCon
         jdbc.update("UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour', "
                 + "updated_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
                 attempt.getId());
-        assertEquals(1, attemptService.resetStuck(attempt.getId(), java.time.Instant.now().plusSeconds(60),
-                java.time.Instant.now()));
+        assertEquals(1, attemptService.resetStuck(attempt.getId(), executionGeneration(attempt.getId()),
+                Duration.ofMinutes(1)));
         var current = attemptService.claim(attempt.getId()).orElseThrow();
         assertEquals(com.example.relay.attempt.application.AttemptMutationOutcome.APPLIED,
                 attemptService.markSucceeded(current, 204, "new owner", 1L));

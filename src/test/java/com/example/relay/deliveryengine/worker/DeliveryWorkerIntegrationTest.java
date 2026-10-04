@@ -390,7 +390,8 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
             assertEquals(2, fixture.acceptedConnections.get(),
                     "truncating a fixed-length response must use a replacement socket");
             assertEquals(0, attemptService.resetStuck(
-                    attempt.getId(), Instant.now().plusSeconds(1), Instant.now()),
+                    attempt.getId(), attemptRepository.findById(attempt.getId()).orElseThrow().getExecutionGeneration(),
+                    Duration.ofMinutes(1)),
                     "a successfully completed attempt must not become executable through IN_FLIGHT recovery");
         }
     }

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 public class ExecutionOwnershipMetrics {
 
     public static final String OWNERSHIP_LOST_COUNTER = "relay.delivery.execution.ownership.lost";
+    public static final String REVOKED_COUNTER = "relay.delivery.execution.revoked";
 
     private final MeterRegistry meterRegistry;
 
@@ -19,5 +20,9 @@ public class ExecutionOwnershipMetrics {
         meterRegistry.counter(OWNERSHIP_LOST_COUNTER,
                 "completion", completion,
                 "current_status", currentStatus == null ? "missing" : currentStatus.name()).increment();
+    }
+
+    public void recordRevoked(String result) {
+        meterRegistry.counter(REVOKED_COUNTER, "result", result).increment();
     }
 }

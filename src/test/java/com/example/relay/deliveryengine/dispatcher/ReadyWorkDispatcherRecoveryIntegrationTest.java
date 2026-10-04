@@ -163,7 +163,7 @@ class ReadyWorkDispatcherRecoveryIntegrationTest implements SharedPostgresContai
     }
 
     private void backdateAttempt(UUID attemptId) {
-        jdbcTemplate.update("UPDATE attempts SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
+        jdbcTemplate.update("UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = ?",
                 attemptId);
     }
 

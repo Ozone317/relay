@@ -2,6 +2,7 @@ package com.example.relay.deliveryengine.reconciliation;
 
 import java.time.Instant;
 import java.util.List;
+import java.time.Duration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,28 +14,37 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.attempt.infrastructure.AttemptExecutionCandidate;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.deliveryengine.config.RabbitMqConfig;
 import com.example.relay.deliveryengine.publisher.AttemptPublisher;
+import com.example.relay.deliveryengine.worker.ExecutionOwnershipMetrics;
 
 @Component
 public class ReconciliationSweeper {
     private static final Logger log = LoggerFactory.getLogger(ReconciliationSweeper.class);
 
     private AttemptRepository attemptRepository;
+    private AttemptExecutionRepository executionRepository;
     private AttemptPublisher attemptPublisher;
     private AttemptService attemptService;
     private ReconciliationProperties reconciliationProperties;
+    private ExecutionOwnershipMetrics executionOwnershipMetrics;
 
     public ReconciliationSweeper(
         AttemptRepository attemptRepository,
+        AttemptExecutionRepository executionRepository,
         AttemptPublisher attemptPublisher,
         AttemptService attemptService,
-        ReconciliationProperties reconciliationProperties
+        ReconciliationProperties reconciliationProperties,
+        ExecutionOwnershipMetrics executionOwnershipMetrics
     ) {
         this.attemptRepository = attemptRepository;
+        this.executionRepository = executionRepository;
         this.attemptPublisher = attemptPublisher;
         this.attemptService = attemptService;
         this.reconciliationProperties = reconciliationProperties;
+        this.executionOwnershipMetrics = executionOwnershipMetrics;
     }
 
     @Scheduled(fixedDelayString = "${relay.reconciliation.interval}")
@@ -51,17 +61,20 @@ public class ReconciliationSweeper {
     }
 
     private void recoverInFlight() {
-        Instant now = Instant.now();
-        Instant threshold = now.minus(reconciliationProperties.getInFlightGrace());
-        List<Attempt> attempts = attemptRepository.findByStatusAndUpdatedAtBefore(
-            AttemptStatus.IN_FLIGHT, threshold, Limit.of(reconciliationProperties.getBatchSize())
-        );
+        Duration grace = reconciliationProperties.getInFlightGrace();
+        List<AttemptExecutionCandidate> attempts = executionRepository.findStaleInFlight(
+                grace, reconciliationProperties.getBatchSize());
 
-        for (Attempt attempt : attempts) {
-            if (attemptService.resetStuck(attempt.getId(), threshold, now) == 1) {
-                log.warn("Reset stuck IN_FLIGHT attempt {} back to CREATED", attempt.getId());
+        for (AttemptExecutionCandidate attempt : attempts) {
+            long ageMillis = Duration.between(attempt.claimedAt(), Instant.now()).toMillis();
+            if (attemptService.resetStuck(attempt.id(), attempt.generation(), grace) == 1) {
+                executionOwnershipMetrics.recordRevoked("revoked");
+                log.warn("Revoked stale IN_FLIGHT attempt {} generation {} after {} ms",
+                        attempt.id(), attempt.generation(), ageMillis);
             } else {
-                log.info("Attempt {} resolved before the sweep could reset it, skipping", attempt.getId());
+                executionOwnershipMetrics.recordRevoked("lost_race");
+                log.info("Stale IN_FLIGHT attempt {} generation {} lost a reconciliation race",
+                        attempt.id(), attempt.generation());
             }
         }
     }

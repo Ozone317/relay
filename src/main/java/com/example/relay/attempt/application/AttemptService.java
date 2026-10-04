@@ -11,6 +11,7 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.subscription.domain.Subscription;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -119,8 +120,8 @@ public class AttemptService {
     }
 
     @Transactional
-    public int resetStuck(UUID attemptId, Instant threshold, Instant now) {
-        return attemptRepository.resetStuck(attemptId, threshold, now);
+    public int resetStuck(UUID attemptId, long observedGeneration, Duration grace) {
+        return executionRepository.resetStuck(attemptId, observedGeneration, grace);
     }
 
     @Transactional

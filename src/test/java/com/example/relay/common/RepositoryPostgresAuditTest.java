@@ -122,9 +122,11 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
     void everyNativeAttemptQueryExecutesOnPostgres() {
         Instant now = Instant.now();
         Instant future = now.plus(1, ChronoUnit.DAYS);
-
-        assertEquals(1, attemptRepository.claim(attempt.getId(), now));
-        assertEquals(1, attemptRepository.resetStuck(attempt.getId(), future, now));
+        var claim = attemptExecutionRepository.claim(attempt.getId()).orElseThrow();
+        jdbcTemplate.update("UPDATE attempts SET execution_claimed_at = CURRENT_TIMESTAMP - INTERVAL '2 days' WHERE id = ?",
+                attempt.getId());
+        assertEquals(1, attemptExecutionRepository.resetStuck(attempt.getId(), claim.generation(),
+                java.time.Duration.ofDays(1)));
         assertDoesNotThrow(() -> attemptRepository.touchDeadLetterCandidate(attempt.getId(), future, now));
         assertDoesNotThrow(() -> attemptRepository.claimDeadLetterNotification(attempt.getId(), now));
     }
@@ -163,8 +165,7 @@ class RepositoryPostgresAuditTest implements SharedPostgresContainer {
     void everyAttemptFinderExecutesOnPostgres() {
         Instant future = Instant.now().plus(1, ChronoUnit.DAYS);
 
-        assertDoesNotThrow(
-                () -> attemptRepository.findByStatusAndUpdatedAtBefore(AttemptStatus.CREATED, future, Limit.of(100)));
+        assertDoesNotThrow(() -> attemptExecutionRepository.findStaleInFlight(java.time.Duration.ofDays(1), 100));
         assertDoesNotThrow(() -> attemptRepository.findByStatusAndNextRetryAtBefore(AttemptStatus.SCHEDULED, future,
                 Limit.of(100)));
         assertDoesNotThrow(() -> attemptRepository.findByStatusAndDeadLetterNotifiedAtIsNullAndUpdatedAtBefore(
