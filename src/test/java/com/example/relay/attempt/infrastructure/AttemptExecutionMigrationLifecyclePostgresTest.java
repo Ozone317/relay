@@ -28,6 +28,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.data.jpa.repository.support.JpaRepositoryFactory;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -112,13 +113,20 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
         entityManagerFactoryBean.setJpaPropertyMap(Map.of("hibernate.hbm2ddl.auto", "none"));
         entityManagerFactoryBean.afterPropertiesSet();
         EntityManagerFactory entityManagerFactory = entityManagerFactoryBean.getObject();
-        try (EntityManager entityManager = entityManagerFactory.createEntityManager()) {
+        try {
+            EntityManager entityManager = SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory);
             AttemptRepository attemptRepository = new JpaRepositoryFactory(entityManager)
                     .getRepository(AttemptRepository.class);
             DeliveryRepository deliveryRepository = new JpaRepositoryFactory(entityManager)
                     .getRepository(DeliveryRepository.class);
             AttemptService service = new AttemptService(attemptRepository, repository, deliveryRepository);
-            Attempt attempt = entityManager.find(Attempt.class, attemptId);
+            JpaTransactionManager transactionManager = new JpaTransactionManager(entityManagerFactory);
+            TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+            Attempt attempt = transaction.execute(status -> {
+                assertTrue(entityManager.isJoinedToTransaction(),
+                        "the repository EntityManager must participate in the service transaction");
+                return entityManager.find(Attempt.class, attemptId);
+            });
             assertNotNull(attempt);
             AttemptExecution generationZero = new AttemptExecution(attempt, 0L, legacyClaimedAt);
             assertEquals(0, repository.markSucceeded(generationZero, 200, "stale", 9L));
@@ -126,11 +134,13 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
                     "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
                     Integer.class);
             assertEquals(1, childrenBefore);
-            JpaTransactionManager transactionManager = new JpaTransactionManager(entityManagerFactory);
             assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST,
-                    new TransactionTemplate(transactionManager).execute(status ->
-                            service.markFailedAndCreateRetry(generationZero, Instant.now().plusSeconds(60),
-                                    500, "stale", "stale", 9L)));
+                    transaction.execute(status -> {
+                        assertTrue(entityManager.isJoinedToTransaction(),
+                                "retry persistence must share the fenced parent transaction");
+                        return service.markFailedAndCreateRetry(generationZero, Instant.now().plusSeconds(60),
+                                500, "stale", "stale", 9L);
+                    }));
             int childrenAfter = jdbc.queryForObject(
                     "SELECT COUNT(*) FROM attempts WHERE delivery_id = '00000000-0000-0000-0000-000000000007'",
                     Integer.class);
