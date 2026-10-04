@@ -425,18 +425,18 @@ public class AttemptRepositoryTest implements SharedPostgresContainer {
         objectMapper = new ObjectMapper();
         Message message = new Message(app, event, objectMapper.readTree("{\"name\": \"hello\"}"));
 
-        // All three share one Delivery: same (message, endpoint) pair, and deliveries has a real
-        // unique constraint on (message_id, endpoint_id).
+        // All three share one Delivery: same (message, endpoint) pair, with distinct sequence
+        // numbers. Deliveries has a real unique constraint on (message_id, endpoint_id).
         Delivery delivery = new Delivery(app, message, endpoint);
 
-        Attempt staleUnnotified = new Attempt(app, message, endpoint, delivery, 6);
+        Attempt staleUnnotified = new Attempt(app, message, endpoint, delivery, 1);
         staleUnnotified.setStatus(AttemptStatus.DEAD);
 
-        Attempt staleButNotified = new Attempt(app, message, endpoint, delivery, 6);
+        Attempt staleButNotified = new Attempt(app, message, endpoint, delivery, 2);
         staleButNotified.setStatus(AttemptStatus.DEAD);
         staleButNotified.setDeadLetterNotifiedAt(Instant.now());
 
-        Attempt freshUnnotified = new Attempt(app, message, endpoint, delivery, 6);
+        Attempt freshUnnotified = new Attempt(app, message, endpoint, delivery, 3);
         freshUnnotified.setStatus(AttemptStatus.DEAD);
 
         testEntityManager.persistAndFlush(user);
