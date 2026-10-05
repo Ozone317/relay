@@ -11,6 +11,7 @@ import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.attempt.infrastructure.AttemptAllocationRepository;
 import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.attempt.infrastructure.AttemptExecutionRepositoryImpl;
 import com.example.relay.attempt.infrastructure.AttemptExecutionClaim;
@@ -92,6 +93,9 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
 
     @Autowired
     private DeliveryRepository deliveryRepository;
+
+    @Autowired
+    private AttemptAllocationRepository allocationRepository;
 
     @Autowired
     private RabbitTemplate rabbitTemplate;
@@ -319,7 +323,8 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
             }
         };
 
-        AttemptService delayedAttemptService = new AttemptService(attemptRepository, spyingRepository, deliveryRepository);
+        AttemptService delayedAttemptService = new AttemptService(attemptRepository, spyingRepository, deliveryRepository,
+                allocationRepository);
         ReconciliationSweeper delayedSweeper = new ReconciliationSweeper(attemptRepository, spyingRepository,
                 attemptPublisher, delayedAttemptService, reconciliationProperties, executionOwnershipMetrics);
         ExecutorService executor = Executors.newSingleThreadExecutor();

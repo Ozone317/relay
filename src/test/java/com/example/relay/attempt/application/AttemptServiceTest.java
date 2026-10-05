@@ -1,22 +1,31 @@
 package com.example.relay.attempt.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.attempt.infrastructure.AttemptAllocationRepository;
 import com.example.relay.attempt.infrastructure.AttemptExecutionClaim;
 import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.exception.ActiveAttemptAlreadyExistsException;
+import com.example.relay.delivery.exception.DeliveryNotDeadException;
+import com.example.relay.delivery.exception.DeliveryNotFoundException;
+import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
@@ -32,9 +41,12 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 public class AttemptServiceTest {
@@ -47,6 +59,9 @@ public class AttemptServiceTest {
 
     @Mock
     private DeliveryRepository deliveryRepository;
+
+    @Mock
+    private AttemptAllocationRepository allocationRepository;
 
     @InjectMocks
     private AttemptService underTest;
@@ -161,8 +176,7 @@ public class AttemptServiceTest {
         Attempt attempt = new Attempt(null, null, null, null, 1);
         AttemptExecution execution = new AttemptExecution(attempt, 9L, Instant.now());
         String responseBody = "x".repeat(10_239) + "\uD83D\uDE00";
-        when(executionRepository.markSucceeded(any(), eq(200), any(), eq(10L)))
-                .thenReturn(1);
+        when(executionRepository.markSucceeded(any(), eq(200), any(), eq(10L))).thenReturn(1);
 
         AttemptMutationOutcome result = underTest.markSucceeded(execution, 200, responseBody, 10L);
 
@@ -189,8 +203,7 @@ public class AttemptServiceTest {
     void markFailedTruncatesResponseAndErrorBeforeFencedRepositoryCall() {
         AttemptExecution execution = new AttemptExecution(new Attempt(null, null, null, null, 1), 2L, Instant.now());
         Instant nextRetryAt = Instant.now().plusSeconds(30);
-        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(0);
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(0);
 
         AttemptMutationOutcome result = underTest.markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, 503,
                 "r".repeat(20_000), "e".repeat(20_000), 25L);
@@ -220,8 +233,7 @@ public class AttemptServiceTest {
     void markFailedAndCreateRetryDoesNotCreateRetryWhenExecutionOwnershipIsLost() {
         Attempt attempt = new Attempt(null, null, null, null, 1);
         AttemptExecution execution = new AttemptExecution(attempt, 2L, Instant.now());
-        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(0);
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(0);
 
         AttemptMutationOutcome outcome =
                 underTest.markFailedAndCreateRetry(execution, Instant.now().plusSeconds(30), 503, "failure", null, 10L);
@@ -232,8 +244,125 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void createReplay_buildsANewAttemptOneNumberHigherThanTheOriginal_andSavesAndFlushesIt() {
-        // Arrange
+    void createReplay_checksCurrentEligibilityAndAllocatesUnderOrderedParentLocks() {
+        Delivery delivery = replayDelivery();
+        Attempt latest = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 6);
+        latest.setStatus(AttemptStatus.DEAD);
+        when(allocationRepository.lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId())).thenReturn(true);
+        when(attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId()))
+                .thenReturn(Optional.of(latest));
+        // The authoritative allocator supplies the number, even when it differs from the loaded Attempt's ordinal.
+        when(allocationRepository.nextAttemptNoUnderDeliveryLock(delivery.getId())).thenReturn(9);
+        when(attemptRepository.saveAndFlush(any(Attempt.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Attempt replay = underTest.createReplay(delivery);
+
+        assertEquals(9, replay.getAttemptNo());
+        assertEquals(AttemptStatus.CREATED, replay.getStatus());
+        assertSame(delivery, replay.getDelivery());
+        assertSame(delivery.getMessage(), replay.getMessage());
+        assertSame(delivery.getEndpoint(), replay.getEndpoint());
+        assertEquals(0, replay.getExecutionGeneration());
+        assertNull(replay.getExecutionClaimedAt());
+        assertNull(replay.getNextRetryAt());
+        var ordered = inOrder(allocationRepository, attemptRepository);
+        ordered.verify(allocationRepository).lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId());
+        ordered.verify(attemptRepository).findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId());
+        ordered.verify(attemptRepository).existsByMessageIdAndEndpointIdAndStatusIn(delivery.getMessage().getId(),
+                delivery.getEndpoint().getId(),
+                List.of(AttemptStatus.CREATED, AttemptStatus.IN_FLIGHT, AttemptStatus.SCHEDULED));
+        ordered.verify(allocationRepository).nextAttemptNoUnderDeliveryLock(delivery.getId());
+        ordered.verify(attemptRepository).saveAndFlush(replay);
+        verifyNoInteractions(executionRepository);
+    }
+
+    @Test
+    void createReplay_rejectsLockedInactiveEndpointBeforeReadingHistory() {
+        Delivery delivery = replayDelivery();
+        when(allocationRepository.lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId())).thenReturn(false);
+
+        assertThrows(ReplayEndpointInactiveException.class, () -> underTest.createReplay(delivery));
+
+        verifyNoInteractions(attemptRepository, executionRepository);
+        verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
+    }
+
+    @Test
+    void createReplay_rejectsMissingHistoryAfterLockingParents() {
+        Delivery delivery = replayDelivery();
+        when(allocationRepository.lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId())).thenReturn(true);
+        when(attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId()))
+                .thenReturn(Optional.empty());
+
+        assertThrows(DeliveryNotFoundException.class, () -> underTest.createReplay(delivery));
+
+        verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AttemptStatus.class, names = "DEAD", mode = EnumSource.Mode.EXCLUDE)
+    void createReplay_rejectsCurrentNonDeadBeforeCheckingActiveHistoryOrAllocating(AttemptStatus status) {
+        Delivery delivery = replayDelivery();
+        Attempt latest = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 7);
+        latest.setStatus(status);
+        when(allocationRepository.lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId())).thenReturn(true);
+        when(attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId()))
+                .thenReturn(Optional.of(latest));
+
+        DeliveryNotDeadException rejection =
+                assertThrows(DeliveryNotDeadException.class, () -> underTest.createReplay(delivery));
+
+        assertTrue(rejection.getMessage().contains(status.name()));
+        verify(attemptRepository, never()).existsByMessageIdAndEndpointIdAndStatusIn(any(), any(), any());
+        verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createReplay_rejectsContradictoryActiveHistoryWithoutAllocating() {
+        Delivery delivery = replayDelivery();
+        Attempt latest = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 6);
+        latest.setStatus(AttemptStatus.DEAD);
+        when(allocationRepository.lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId())).thenReturn(true);
+        when(attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId()))
+                .thenReturn(Optional.of(latest));
+        when(attemptRepository.existsByMessageIdAndEndpointIdAndStatusIn(delivery.getMessage().getId(),
+                delivery.getEndpoint().getId(),
+                List.of(AttemptStatus.CREATED, AttemptStatus.IN_FLIGHT, AttemptStatus.SCHEDULED))).thenReturn(true);
+
+        assertThrows(ActiveAttemptAlreadyExistsException.class, () -> underTest.createReplay(delivery));
+
+        verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createReplay_propagatesInsertInvariantFailureWithoutRetrying() {
+        Delivery delivery = replayDelivery();
+        Attempt latest = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 6);
+        latest.setStatus(AttemptStatus.DEAD);
+        when(allocationRepository.lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(),
+                delivery.getId())).thenReturn(true);
+        when(attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId()))
+                .thenReturn(Optional.of(latest));
+        when(allocationRepository.nextAttemptNoUnderDeliveryLock(delivery.getId())).thenReturn(7);
+        DataIntegrityViolationException failure = new DataIntegrityViolationException("sequence invariant violated");
+        when(attemptRepository.saveAndFlush(any())).thenThrow(failure);
+
+        assertSame(failure,
+                assertThrows(DataIntegrityViolationException.class, () -> underTest.createReplay(delivery)));
+
+        verify(attemptRepository).saveAndFlush(any());
+    }
+
+    private Delivery replayDelivery() {
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
@@ -241,21 +370,6 @@ public class AttemptServiceTest {
         Event event = new Event("payment.completed", app);
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         Message message = new Message(app, event, body);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt original = new Attempt(app, message, endpoint, delivery, 6);
-        original.setStatus(AttemptStatus.DEAD);
-
-        // Stub
-        when(attemptRepository.saveAndFlush(any(Attempt.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        // Act
-        Attempt replay = underTest.createReplay(original);
-
-        // Assert
-        assertEquals(7, replay.getAttemptNo());
-        assertEquals(AttemptStatus.CREATED, replay.getStatus());
-        assertEquals(original.getMessage().getId(), replay.getMessage().getId());
-        assertEquals(original.getEndpoint().getId(), replay.getEndpoint().getId());
-        verify(attemptRepository).saveAndFlush(any(Attempt.class));
+        return new Delivery(app, message, endpoint);
     }
 }

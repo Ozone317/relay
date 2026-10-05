@@ -2,21 +2,24 @@ package com.example.relay.attempt.application;
 
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
+import com.example.relay.attempt.infrastructure.AttemptAllocationRepository;
 import com.example.relay.attempt.infrastructure.AttemptExecutionClaim;
 import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.domain.Delivery;
+import com.example.relay.delivery.exception.ActiveAttemptAlreadyExistsException;
+import com.example.relay.delivery.exception.DeliveryNotDeadException;
+import com.example.relay.delivery.exception.DeliveryNotFoundException;
+import com.example.relay.delivery.exception.ReplayEndpointInactiveException;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.subscription.domain.Subscription;
-
-import java.time.Instant;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,16 +27,20 @@ import org.springframework.transaction.annotation.Transactional;
 public class AttemptService {
 
     private static final int DIAGNOSTIC_CHARACTER_LIMIT = 10_240;
+    private static final List<AttemptStatus> ACTIVE_STATUSES =
+            List.of(AttemptStatus.CREATED, AttemptStatus.IN_FLIGHT, AttemptStatus.SCHEDULED);
 
     private final AttemptRepository attemptRepository;
     private final AttemptExecutionRepository executionRepository;
     private final DeliveryRepository deliveryRepository;
+    private final AttemptAllocationRepository allocationRepository;
 
     public AttemptService(AttemptRepository attemptRepository, AttemptExecutionRepository executionRepository,
-            DeliveryRepository deliveryRepository) {
+            DeliveryRepository deliveryRepository, AttemptAllocationRepository allocationRepository) {
         this.attemptRepository = attemptRepository;
         this.executionRepository = executionRepository;
         this.deliveryRepository = deliveryRepository;
+        this.allocationRepository = allocationRepository;
     }
 
     @Transactional
@@ -80,10 +87,25 @@ public class AttemptService {
     }
 
     @Transactional
-    public Attempt createReplay(Attempt original) {
-        Attempt replay = new Attempt(original.getApp(), original.getMessage(), original.getEndpoint(),
-                original.getDelivery(), original.getAttemptNo() + 1);
-        return attemptRepository.saveAndFlush(replay);
+    public Attempt createReplay(Delivery delivery) {
+        boolean parentsLocked = allocationRepository
+                .lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(), delivery.getId());
+        if (!parentsLocked) {
+            throw new ReplayEndpointInactiveException(delivery.getEndpoint().getId());
+        }
+        Attempt latest = attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId())
+                .orElseThrow(() -> new DeliveryNotFoundException(delivery.getId()));
+        if (latest.getStatus() != AttemptStatus.DEAD) {
+            throw new DeliveryNotDeadException(delivery.getId(), latest.getStatus());
+        }
+        if (attemptRepository.existsByMessageIdAndEndpointIdAndStatusIn(delivery.getMessage().getId(),
+                delivery.getEndpoint().getId(), ACTIVE_STATUSES)) {
+            throw new ActiveAttemptAlreadyExistsException(delivery.getMessage().getId(),
+                    delivery.getEndpoint().getId());
+        }
+        int attemptNo = allocationRepository.nextAttemptNoUnderDeliveryLock(delivery.getId());
+        return attemptRepository.saveAndFlush(
+                new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, attemptNo));
     }
 
     @Transactional

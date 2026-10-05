@@ -1,6 +1,7 @@
 package com.example.relay.delivery.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -42,9 +43,9 @@ import org.springframework.http.ResponseEntity;
 /**
  * Regression test for the Open-Session-In-View stale-read bug in {@link DeliveryReplayService#replay}: with OSIV on
  * (the project default - spring.jpa.open-in-view is never overridden), one Hibernate Session is bound to the whole HTTP
- * request. The DeliveryStatus row loaded early in replay() lands in that session's identity map, and because
- * DeliveryStatus is {@code @Immutable}, a later findById for the "fresh" post-replay row silently returned the same
- * pre-replay instance without issuing any SQL.
+ * request. A pre-insert DeliveryStatus read would land in that session's identity map. Because DeliveryStatus is
+ * {@code @Immutable}, a later findById could silently return the pre-replay instance. Replay must perform its first
+ * view read after the allocation transaction commits.
  *
  * <p>
  * Neither {@code DeliveryReplayServiceTest} (pure Mockito - no real Session, no OSIV) nor
@@ -129,9 +130,11 @@ class DeliveryReplayHttpIntegrationTest implements SharedPostgresContainer {
             Message message = messageRepository.save(new Message(app, event, body));
 
             Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
-            Attempt deadAttempt = new Attempt(app, message, endpoint, delivery, 6);
-            deadAttempt.setStatus(AttemptStatus.DEAD);
-            attemptRepository.save(deadAttempt);
+            for (int number = 1; number <= 6; number++) {
+                Attempt deadAttempt = new Attempt(app, message, endpoint, delivery, number);
+                deadAttempt.setStatus(AttemptStatus.DEAD);
+                attemptRepository.save(deadAttempt);
+            }
 
             String token = jwtService.generateToken(user.getEmail(), user.getId(), true);
             HttpHeaders headers = new HttpHeaders();
@@ -143,12 +146,23 @@ class DeliveryReplayHttpIntegrationTest implements SharedPostgresContainer {
 
             assertEquals(HttpStatus.CREATED, response.getStatusCode());
             JsonNode responseBody = response.getBody();
-            // THE POINT OF THE TEST: before the entityManager.detach(current) fix, this endpoint
-            // returned the stale, pre-replay snapshot (latestAttemptNo=6, attemptCount=1) because
-            // the DeliveryStatus loaded earlier in replay() stayed in the OSIV session's identity
-            // map across attemptService.createReplay's commit.
+            // A real OSIV-bound request must expose the committed replay without a pre-insert view read or detach.
             assertEquals(7, responseBody.get("latestAttemptNo").asInt());
-            assertEquals(2, responseBody.get("attemptCount").asInt());
+            assertEquals(7, responseBody.get("attemptCount").asInt());
+            assertEquals("CREATED", responseBody.get("status").asText());
+            Attempt created =
+                    attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId()).orElseThrow();
+            assertEquals(0, created.getExecutionGeneration());
+            assertNull(created.getExecutionClaimedAt());
+
+            ResponseEntity<JsonNode> conflict = rest.exchange(
+                    "/api/v1/environments/{environmentId}/apps/{appId}/deliveries/{deliveryId}/replay", HttpMethod.POST,
+                    new HttpEntity<>(headers), JsonNode.class, env.getId(), app.getId(), delivery.getId());
+            assertEquals(HttpStatus.CONFLICT, conflict.getStatusCode());
+            assertEquals(7,
+                    attemptRepository
+                            .findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
+                            .getTotalElements());
         } finally {
             clearDatabase();
         }

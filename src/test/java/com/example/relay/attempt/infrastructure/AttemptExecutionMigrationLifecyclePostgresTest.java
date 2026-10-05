@@ -119,7 +119,8 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
                     .getRepository(AttemptRepository.class);
             DeliveryRepository deliveryRepository = new JpaRepositoryFactory(entityManager)
                     .getRepository(DeliveryRepository.class);
-            AttemptService service = new AttemptService(attemptRepository, repository, deliveryRepository);
+            AttemptService service = new AttemptService(attemptRepository, repository, deliveryRepository,
+                    new AttemptAllocationRepositoryImpl(new NamedParameterJdbcTemplate(dataSource)));
             JpaTransactionManager transactionManager = new JpaTransactionManager(entityManagerFactory);
             TransactionTemplate transaction = new TransactionTemplate(transactionManager);
             Attempt attempt = transaction.execute(status -> {

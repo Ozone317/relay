@@ -46,6 +46,8 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID> {
 
     Page<Attempt> findByDeliveryId(UUID deliveryId, Pageable pageable);
 
+    Optional<Attempt> findFirstByDeliveryIdOrderByAttemptNoDesc(UUID deliveryId);
+
     Optional<Attempt> findByIdAndDeliveryIdAndAppIdAndAppEnvironmentIdAndAppEnvironmentUserId(UUID attemptId,
             UUID deliveryId, UUID appId, UUID environmentId, UUID userId);
 }
