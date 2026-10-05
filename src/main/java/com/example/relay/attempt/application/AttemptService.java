@@ -16,16 +16,21 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.subscription.domain.Subscription;
 import java.time.Duration;
 import java.time.Instant;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AttemptService {
 
+    private static final Logger log = LoggerFactory.getLogger(AttemptService.class);
     private static final int DIAGNOSTIC_CHARACTER_LIMIT = 10_240;
     private static final List<AttemptStatus> ACTIVE_STATUSES =
             List.of(AttemptStatus.CREATED, AttemptStatus.IN_FLIGHT, AttemptStatus.SCHEDULED);
@@ -34,19 +39,25 @@ public class AttemptService {
     private final AttemptExecutionRepository executionRepository;
     private final DeliveryRepository deliveryRepository;
     private final AttemptAllocationRepository allocationRepository;
+    private final AttemptAllocationMetrics allocationMetrics;
 
     public AttemptService(AttemptRepository attemptRepository, AttemptExecutionRepository executionRepository,
-            DeliveryRepository deliveryRepository, AttemptAllocationRepository allocationRepository) {
+            DeliveryRepository deliveryRepository, AttemptAllocationRepository allocationRepository,
+            AttemptAllocationMetrics allocationMetrics) {
         this.attemptRepository = attemptRepository;
         this.executionRepository = executionRepository;
         this.deliveryRepository = deliveryRepository;
         this.allocationRepository = allocationRepository;
+        this.allocationMetrics = allocationMetrics;
     }
 
     @Transactional
     public List<Attempt> createFromSubscriptionList(List<Subscription> susbcriptions, Message message) {
         List<Attempt> attempts = createAttempts(susbcriptions, message);
         List<Attempt> createdAttempts = attemptRepository.saveAll(attempts);
+        for (int ignored = 0; ignored < createdAttempts.size(); ignored++) {
+            allocationMetrics.record("initial", "created");
+        }
         return createdAttempts;
     }
 
@@ -82,21 +93,31 @@ public class AttemptService {
         boolean parentsLocked = allocationRepository
                 .lockReplayAllocationParentsIfEndpointActive(delivery.getEndpoint().getId(), delivery.getId());
         if (!parentsLocked) {
+            allocationMetrics.record("replay", "rejected");
             throw new ReplayEndpointInactiveException(delivery.getEndpoint().getId());
         }
         Attempt latest = attemptRepository.findFirstByDeliveryIdOrderByAttemptNoDesc(delivery.getId())
                 .orElseThrow(() -> new DeliveryNotFoundException(delivery.getId()));
         if (latest.getStatus() != AttemptStatus.DEAD) {
+            allocationMetrics.record("replay", "rejected");
             throw new DeliveryNotDeadException(delivery.getId(), latest.getStatus());
         }
         if (attemptRepository.existsByMessageIdAndEndpointIdAndStatusIn(delivery.getMessage().getId(),
                 delivery.getEndpoint().getId(), ACTIVE_STATUSES)) {
+            allocationMetrics.record("replay", "rejected");
             throw new ActiveAttemptAlreadyExistsException(delivery.getMessage().getId(),
                     delivery.getEndpoint().getId());
         }
         int attemptNo = allocationRepository.nextAttemptNoUnderDeliveryLock(delivery.getId());
-        return attemptRepository.saveAndFlush(
-                new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, attemptNo));
+        try {
+            Attempt replay = attemptRepository.saveAndFlush(
+                    new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, attemptNo));
+            allocationMetrics.record("replay", "created");
+            return replay;
+        } catch (DataIntegrityViolationException exception) {
+            recordInvariantViolation("replay", delivery.getId(), attemptNo, exception);
+            throw exception;
+        }
     }
 
     @Transactional
@@ -125,6 +146,7 @@ public class AttemptService {
                 responseCode, truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT),
                 truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT), latencyMs);
         if (updated == 0) {
+            allocationMetrics.record("retry", "ownership_lost");
             return AttemptMutationOutcome.OWNERSHIP_LOST;
         }
         if (updated != 1) {
@@ -135,7 +157,13 @@ public class AttemptService {
                 previous.getDelivery(), nextAttemptNo);
         retry.setStatus(AttemptStatus.SCHEDULED);
         retry.setNextRetryAt(nextRetryAt);
-        attemptRepository.save(retry);
+        try {
+            attemptRepository.saveAndFlush(retry);
+        } catch (DataIntegrityViolationException exception) {
+            recordInvariantViolation("retry", previous.getDelivery().getId(), nextAttemptNo, exception);
+            throw exception;
+        }
+        allocationMetrics.record("retry", "created");
         return AttemptMutationOutcome.APPLIED;
     }
 
@@ -178,5 +206,17 @@ public class AttemptService {
             return AttemptMutationOutcome.OWNERSHIP_LOST;
         }
         throw new IllegalStateException("Attempt execution repository updated unexpected row count: " + rows);
+    }
+
+    private void recordInvariantViolation(String creator, UUID deliveryId, int attemptNo,
+            DataIntegrityViolationException exception) {
+        allocationMetrics.record(creator, "invariant_violation");
+        String sqlState = "unknown";
+        Throwable cause = exception.getMostSpecificCause();
+        if (cause instanceof SQLException sqlException) {
+            sqlState = sqlException.getSQLState();
+        }
+        log.error("Attempt allocation invariant violation: deliveryId={} creator={} attemptNo={} sqlState={}",
+                deliveryId, creator, attemptNo, sqlState);
     }
 }

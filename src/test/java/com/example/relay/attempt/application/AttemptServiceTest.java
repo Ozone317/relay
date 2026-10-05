@@ -64,6 +64,9 @@ public class AttemptServiceTest {
     @Mock
     private AttemptAllocationRepository allocationRepository;
 
+    @Mock
+    private AttemptAllocationMetrics allocationMetrics;
+
     @InjectMocks
     private AttemptService underTest;
 
@@ -154,7 +157,7 @@ public class AttemptServiceTest {
         Instant nextRetryAt = Instant.now().plusSeconds(30);
         when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
         when(allocationRepository.nextAttemptNoUnderDeliveryLock(delivery.getId())).thenReturn(4);
-        when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(attemptRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         assertEquals(AttemptMutationOutcome.APPLIED, underTest.markFailedAndCreateRetry(execution, nextRetryAt, 503,
                 "r".repeat(20_000), "e".repeat(20_000), 12L));
@@ -166,7 +169,7 @@ public class AttemptServiceTest {
         ordered.verify(executionRepository).markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, 503,
                 "r".repeat(10_240), "e".repeat(10_240), 12L);
         ordered.verify(allocationRepository).nextAttemptNoUnderDeliveryLock(delivery.getId());
-        ordered.verify(attemptRepository).save(child.capture());
+        ordered.verify(attemptRepository).saveAndFlush(child.capture());
         Attempt result = child.getValue();
         assertEquals(4, result.getAttemptNo());
         assertEquals(AttemptStatus.SCHEDULED, result.getStatus());
@@ -192,7 +195,7 @@ public class AttemptServiceTest {
                 Instant.now().plusSeconds(30), 503, "body", null, 1L));
 
         verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
-        verify(attemptRepository, never()).save(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -266,7 +269,7 @@ public class AttemptServiceTest {
         assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, outcome);
         verify(allocationRepository).lockRetryAllocationParents(delivery.getEndpoint().getId(), delivery.getId());
         verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
-        verify(attemptRepository, never()).save(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
         verify(attemptRepository, never()).flush();
     }
 

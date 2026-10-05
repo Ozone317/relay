@@ -214,9 +214,11 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
     private Delivery persistDeadDelivery(String url) {
         Endpoint endpoint = endpointRepository.save(new Endpoint("EP 1", url, "whsec_1", app));
         Delivery delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 6);
-        attempt.setStatus(AttemptStatus.DEAD);
-        attemptRepository.save(attempt);
+        for (int attemptNo = 1; attemptNo <= 6; attemptNo++) {
+            Attempt attempt = new Attempt(app, message, endpoint, delivery, attemptNo);
+            attempt.setStatus(AttemptStatus.DEAD);
+            attemptRepository.save(attempt);
+        }
         return delivery;
     }
 
@@ -233,12 +235,12 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
             }
         });
         Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
-        Attempt dead =
-                attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
-                        .getContent().get(0);
-
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
         Attempt replay = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
+        assertEquals(AttemptStatus.CREATED, replay.getStatus());
+        assertEquals(7, replay.getAttemptNo());
+        assertEquals(7, result.getAttemptCount());
+        assertEquals(result.getAttemptCount(), result.getAttemptNo());
         assertEquals(0L, replay.getExecutionGeneration());
         assertNull(replay.getExecutionClaimedAt());
 
@@ -249,6 +251,12 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
             assertEquals(AttemptStatus.IN_FLIGHT, claimedReplay.getStatus());
             assertEquals(1L, claimedReplay.getExecutionGeneration());
             assertNotNull(claimedReplay.getExecutionClaimedAt());
+            assertEquals(6, attemptRepository.findByDeliveryId(delivery.getId(),
+                    org.springframework.data.domain.Pageable.unpaged()).getContent().stream()
+                    .filter(attempt -> attempt.getAttemptNo() <= 6
+                            && attempt.getStatus() == AttemptStatus.DEAD
+                            && attempt.getExecutionGeneration() == 0
+                            && attempt.getExecutionClaimedAt() == null).count());
         } finally {
             releaseResponse.countDown();
         }
@@ -256,8 +264,9 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
-            assertEquals(dead.getAttemptNo() + 1, reloaded.getAttemptNo());
+            assertEquals(7, reloaded.getAttemptNo());
             assertEquals(1L, reloaded.getExecutionGeneration());
+            assertEquals(7, attemptRepository.count());
         });
     }
 
@@ -267,11 +276,16 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
 
         DeliveryStatus result = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        Attempt created = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
+        assertEquals(AttemptStatus.CREATED, created.getStatus());
+        assertEquals(0, created.getExecutionGeneration());
+        assertNull(created.getExecutionClaimedAt());
         readyWorkDispatcher.dispatchOnce();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(result.getLatestAttemptId()).orElseThrow();
             assertEquals(AttemptStatus.DEAD, reloaded.getStatus());
+            assertEquals(1, reloaded.getExecutionGeneration());
         });
 
         // Proves this reached DEAD via handleFailure's isFinal branch, not via a retry publication.
@@ -283,23 +297,28 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("still broken"));
         mockWebServer.enqueue(new MockResponse().setResponseCode(200).setBody("ok"));
         Delivery delivery = persistDeadDelivery(webhookUrl("/webhook"));
-        Attempt dead =
-                attemptRepository.findByDeliveryId(delivery.getId(), org.springframework.data.domain.Pageable.unpaged())
-                        .getContent().get(0);
-
         DeliveryStatus firstReplay = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        assertEquals(7, firstReplay.getAttemptNo());
+        assertEquals(firstReplay.getAttemptNo(), firstReplay.getAttemptCount());
         readyWorkDispatcher.dispatchOnce();
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(AttemptStatus.DEAD,
                 attemptRepository.findById(firstReplay.getLatestAttemptId()).orElseThrow().getStatus()));
 
         // Delivery is write-once - a second replay of the same delivery, not a new one.
         DeliveryStatus secondReplay = deliveryReplayService.replay(delivery.getId(), appId, environmentId, userId);
+        Attempt secondCreated = attemptRepository.findById(secondReplay.getLatestAttemptId()).orElseThrow();
+        assertEquals(AttemptStatus.CREATED, secondCreated.getStatus());
+        assertEquals(0, secondCreated.getExecutionGeneration());
+        assertNull(secondCreated.getExecutionClaimedAt());
+        assertEquals(8, secondReplay.getAttemptNo());
+        assertEquals(secondReplay.getAttemptNo(), secondReplay.getAttemptCount());
         readyWorkDispatcher.dispatchOnce();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Attempt reloaded = attemptRepository.findById(secondReplay.getLatestAttemptId()).orElseThrow();
             assertEquals(AttemptStatus.SUCCEEDED, reloaded.getStatus());
-            assertEquals(dead.getAttemptNo() + 2, reloaded.getAttemptNo());
+            assertEquals(8, reloaded.getAttemptNo());
+            assertEquals(1, reloaded.getExecutionGeneration());
         });
     }
 

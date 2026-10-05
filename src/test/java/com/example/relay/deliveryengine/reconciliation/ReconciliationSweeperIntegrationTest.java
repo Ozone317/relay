@@ -324,7 +324,8 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         };
 
         AttemptService delayedAttemptService = new AttemptService(attemptRepository, spyingRepository, deliveryRepository,
-                allocationRepository);
+                allocationRepository, new com.example.relay.attempt.application.AttemptAllocationMetrics(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
         ReconciliationSweeper delayedSweeper = new ReconciliationSweeper(attemptRepository, spyingRepository,
                 attemptPublisher, delayedAttemptService, reconciliationProperties, executionOwnershipMetrics);
         ExecutorService executor = Executors.newSingleThreadExecutor();

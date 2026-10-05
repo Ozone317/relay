@@ -3,12 +3,14 @@ package com.example.relay.attempt.infrastructure;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.example.relay.attempt.application.AttemptExecution;
+import com.example.relay.attempt.application.AttemptAllocationMetrics;
 import com.example.relay.attempt.application.AttemptMutationOutcome;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
 import com.example.relay.support.SharedPostgresContainer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import java.sql.Connection;
@@ -120,7 +122,8 @@ class AttemptExecutionMigrationLifecyclePostgresTest implements SharedPostgresCo
             DeliveryRepository deliveryRepository = new JpaRepositoryFactory(entityManager)
                     .getRepository(DeliveryRepository.class);
             AttemptService service = new AttemptService(attemptRepository, repository, deliveryRepository,
-                    new AttemptAllocationRepositoryImpl(new NamedParameterJdbcTemplate(dataSource)));
+                    new AttemptAllocationRepositoryImpl(new NamedParameterJdbcTemplate(dataSource)),
+                    new AttemptAllocationMetrics(new SimpleMeterRegistry()));
             JpaTransactionManager transactionManager = new JpaTransactionManager(entityManagerFactory);
             TransactionTemplate transaction = new TransactionTemplate(transactionManager);
             Attempt attempt = transaction.execute(status -> {

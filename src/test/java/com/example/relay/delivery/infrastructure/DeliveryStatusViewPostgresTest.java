@@ -51,9 +51,8 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
         Delivery delivery = new Delivery(app, message, endpoint);
         testEntityManager.persistAndFlush(delivery);
 
-        // Two attempts for the same delivery: an earlier failed one, a later scheduled retry.
-        // The view must report the one with the HIGHER attempt_no (2), not the earlier one, even
-        // though both rows exist. The second attempt is deliberately backdated below to BEFORE the
+        // Three contiguous attempts for one delivery. The view must report the highest number (3)
+        // and a matching count. The third attempt is deliberately backdated to BEFORE the
         // first attempt's created_at, so attempt_no ordering and created_at ordering disagree - this
         // is the only way to actually pin down that the view orders by attempt_no DESC (the correct,
         // deliberate design - this project's own clock-skew lesson) rather than created_at DESC (the
@@ -68,6 +67,11 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
 
         Attempt second = new Attempt(app, message, endpoint, delivery, 2);
         testEntityManager.persist(second);
+        entityManager.createNativeQuery("UPDATE attempts SET status = 'FAILED_RETRYING' WHERE id = ?")
+                .setParameter(1, second.getId())
+                .executeUpdate();
+        Attempt third = new Attempt(app, message, endpoint, delivery, 3);
+        testEntityManager.persist(third);
         // Backdate using a SQL-side subquery against the first attempt's own created_at, rather than
         // reading Attempt#getCreatedAt() back in Java - @CreationTimestamp only actually populates
         // that field once Hibernate flushes the insert, and relying on the in-memory value here would
@@ -78,7 +82,7 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
                 WHERE id = :secondId
                 """)
                 .setParameter("firstId", first.getId())
-                .setParameter("secondId", second.getId())
+                .setParameter("secondId", third.getId())
                 .executeUpdate();
         testEntityManager.flush();
 
@@ -88,7 +92,8 @@ class DeliveryStatusViewPostgresTest implements SharedPostgresContainer {
                 .getSingleResult();
 
         assertEquals("SCHEDULED", row[0]);
-        assertEquals(2, ((Number) row[1]).intValue());
-        assertEquals(2L, ((Number) row[2]).longValue());
+        assertEquals(3, ((Number) row[1]).intValue());
+        assertEquals(3L, ((Number) row[2]).longValue());
+        assertEquals(((Number) row[1]).longValue(), ((Number) row[2]).longValue());
     }
 }

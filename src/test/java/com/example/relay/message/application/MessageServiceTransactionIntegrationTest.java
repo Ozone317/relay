@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @Tag("integration")
 @SpringBootTest
@@ -45,7 +45,7 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
     @Autowired
     private MessageRepository messageRepository;
 
-    @MockitoBean
+    @MockitoSpyBean
     private AttemptRepository attemptRepository;
 
     @Autowired
@@ -86,8 +86,7 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
 
     @BeforeEach
     void setUp() {
-        // attemptRepository is @MockitoBean here, so it cannot clear real attempt rows left by
-        // other test classes - and those rows FK-reference messages. Raw SQL first, then messages.
+        // Remove prior attempt rows before their parent messages.
         // deliveries must go before messages too - it FK-references messages directly, and
         // AttemptService now creates one real Delivery row per (message, endpoint) pair.
         jdbcTemplate.update("DELETE FROM attempts");
@@ -128,6 +127,31 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
 
         // Assert
         assertEquals(0, messageRepository.count());
+        assertEquals(0, deliveryRepository.count());
+        assertEquals(0, attemptRepository.count());
+    }
+
+    @Test
+    void create_commitsOneDeliveryAndAttemptOnePerActiveSubscription() throws Exception {
+        User user = userRepository.save(new User("fanout@mail.com", "passwordHash"));
+        Environment env = environmentRepository.save(new Environment("Env 1", "Desc 1", user));
+        App app = appRepository.save(new App("App 1", env));
+        Event event = eventRepository.save(new Event("payment.created", app));
+        Endpoint first = endpointRepository.save(new Endpoint("first", "https://example.com/first", "secret", app));
+        Endpoint second = endpointRepository.save(new Endpoint("second", "https://example.com/second", "secret", app));
+        subscriptionRepository.save(new Subscription(app, event, first));
+        subscriptionRepository.save(new Subscription(app, event, second));
+
+        underTest.create(new MessageCreateDto(event.getId(), objectMapper.readTree("{\"amount\":1}")),
+                app.getId(), env.getId(), user.getId());
+
+        assertEquals(1, messageRepository.count());
+        assertEquals(2, deliveryRepository.count());
+        assertEquals(2, attemptRepository.count());
+        assertEquals(2, attemptRepository.findAll().stream().filter(attempt -> attempt.getAttemptNo() == 1
+                && attempt.getExecutionGeneration() == 0 && attempt.getExecutionClaimedAt() == null).count());
+        assertEquals(2, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM delivery_status WHERE attempt_no = 1 "
+                + "AND attempt_count = 1", Long.class));
     }
 
     @AfterEach
@@ -135,6 +159,7 @@ public class MessageServiceTransactionIntegrationTest implements SharedPostgresC
         // Explicit cleanup to remove this test's created fixtures. This test is not @Transactional,
         // so manual cleanup ensures no data persists to affect subsequent tests.
         subscriptionRepository.deleteAll();
+        jdbcTemplate.update("DELETE FROM attempts");
         deliveryRepository.deleteAll();
         messageRepository.deleteAll();
         endpointRepository.deleteAll();

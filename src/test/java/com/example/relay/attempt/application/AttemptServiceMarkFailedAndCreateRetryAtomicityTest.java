@@ -33,6 +33,8 @@ import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -43,6 +45,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -93,6 +96,9 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     private Endpoint endpoint;
     private Message message;
 
@@ -133,13 +139,19 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
             allocatedNumber.set(number);
             return number;
         }).when(allocationSpy).nextAttemptNoUnderDeliveryLock(any());
-        doThrow(new RuntimeException("simulated crash during retry insertion")).when(attemptRepository)
-                .save(argThat(a -> a != null && a.getStatus() == AttemptStatus.SCHEDULED));
+        DataIntegrityViolationException invariantFailure = new DataIntegrityViolationException(
+                "simulated retry sequence violation", new SQLException("duplicate", "23505"));
+        doThrow(invariantFailure).when(attemptRepository)
+                .saveAndFlush(argThat(a -> a != null && a.getStatus() == AttemptStatus.SCHEDULED));
 
         Instant dueAt = Instant.now().plusSeconds(30).truncatedTo(ChronoUnit.MICROS);
+        double invariantBefore = counter("invariant_violation");
+        double createdBefore = counter("created");
         // Act & Assert
-        assertThrows(RuntimeException.class,
-                () -> attemptService.markFailedAndCreateRetry(execution, dueAt, 500, "internal error", null, 120L));
+        assertEquals(invariantFailure, assertThrows(DataIntegrityViolationException.class,
+                () -> attemptService.markFailedAndCreateRetry(execution, dueAt, 500, "internal error", null, 120L)));
+        assertEquals(invariantBefore + 1, counter("invariant_violation"));
+        assertEquals(createdBefore, counter("created"));
         assertEquals(2, allocatedNumber.get(), "child insertion follows current-max allocation");
 
         // Assert - the whole transaction rolled back: the parent is still IN_FLIGHT (its
@@ -161,6 +173,7 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
         reset(attemptRepository);
         assertEquals(AttemptMutationOutcome.APPLIED,
                 attemptService.markFailedAndCreateRetry(execution, dueAt, 500, "internal error", null, 120L));
+        assertEquals(createdBefore + 1, counter("created"));
         assertEquals(List.of(1, 2),
                 jdbc.queryForList("SELECT attempt_no FROM attempts WHERE delivery_id = ? ORDER BY attempt_no",
                         Integer.class, delivery.getId()));
@@ -174,5 +187,11 @@ class AttemptServiceMarkFailedAndCreateRetryAtomicityTest implements SharedPostg
         assertEquals(dueAt,
                 jdbc.queryForObject("SELECT next_retry_at FROM attempts WHERE delivery_id = ? AND attempt_no = 2",
                         Instant.class, delivery.getId()));
+    }
+
+    private double counter(String outcome) {
+        var counter = meterRegistry.find(AttemptAllocationMetrics.COUNTER)
+                .tags("creator", "retry", "outcome", outcome).counter();
+        return counter == null ? 0 : counter.count();
     }
 }
