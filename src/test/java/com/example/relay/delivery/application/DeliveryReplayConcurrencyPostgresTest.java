@@ -33,6 +33,7 @@ import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -62,6 +63,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @SpringBootTest
 class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    private static final Instant RETRY_AT = Instant.parse("2030-01-01T00:00:00Z");
 
     @Autowired
     DeliveryReplayService deliveryReplayService;
@@ -94,6 +96,7 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
     private TransactionTemplate transactions;
     private final List<CountDownLatch> releaseGates = new ArrayList<>();
     private final ThreadLocal<ReplayBoundary> replayBoundary = new ThreadLocal<>();
+    private final ThreadLocal<ReplayBoundary> retryBoundary = new ThreadLocal<>();
     private User user;
     private Environment environment;
     private App app;
@@ -134,6 +137,16 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
             }
             return created;
         }).when(attemptService).createReplay(any());
+        doAnswer(invocation -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                    "the service proxy must own the fenced retry/allocation transaction");
+            ReplayBoundary boundary = retryBoundary.get();
+            if (boundary != null) {
+                boundary.pid().set(jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                boundary.reached().countDown();
+            }
+            return invocation.callRealMethod();
+        }).when(attemptService).markFailedAndCreateRetry(any(), any(), any(), any(), any(), any());
     }
 
     @AfterEach
@@ -294,6 +307,165 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
         assertCreatedReplay(7);
     }
 
+    @Test
+    void replayWaitingBehindRetryCreation_observesScheduledLatestAndCreatesNothing() throws Exception {
+        AttemptExecution owner = prepareRetry();
+        CountDownLatch allocated = new CountDownLatch(1);
+        CountDownLatch insert = releaseGate();
+        pauseSave(delivery.getId(), allocated, insert, false);
+        Task<AttemptMutationOutcome> retry = startRetry(owner);
+        awaitGate(allocated);
+        Task<DeliveryStatus> replay = startReplay(delivery.getId());
+
+        // Reaching Delivery proves replay acquired its compatible Endpoint SHARE lock first.
+        assertBlockedBy(replay, retry, "FROM deliveries", "FOR UPDATE");
+        assertEquals(List.of(1), attemptNumbers(delivery.getId()), "the child is not committed yet");
+        assertEquals("IN_FLIGHT", persistedStatus(owner.attempt().getId()), "the parent is not committed yet");
+        insert.countDown();
+
+        assertEquals(AttemptMutationOutcome.APPLIED, result(retry));
+        Throwable rejection = failure(replay);
+        assertInstanceOf(DeliveryNotDeadException.class, rejection);
+        assertTrue(rejection.getMessage().contains("SCHEDULED"));
+        assertEquals("FAILED_RETRYING", persistedStatus(owner.attempt().getId()));
+        assertScheduledRetry(2);
+    }
+
+    @Test
+    void twoCompletionsForOneGeneration_allocateOnlyOneChildNumber() throws Exception {
+        AttemptExecution owner = prepareRetry();
+        CountDownLatch allocated = new CountDownLatch(1);
+        CountDownLatch insert = releaseGate();
+        pauseSave(delivery.getId(), allocated, insert, false);
+        Task<AttemptMutationOutcome> first = startRetry(owner);
+        awaitGate(allocated);
+        Task<AttemptMutationOutcome> second = startRetry(owner);
+
+        assertBlockedBy(second, first, "FROM deliveries", "FOR UPDATE");
+        insert.countDown();
+        assertEquals(AttemptMutationOutcome.APPLIED, result(first));
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, result(second));
+        assertScheduledRetry(2);
+        assertEquals("FAILED_RETRYING", persistedStatus(owner.attempt().getId()));
+    }
+
+    @Test
+    void retryLocksEndpointKeyShareBeforeDeliveryUpdate() throws Exception {
+        AttemptExecution owner = prepareRetry();
+        CountDownLatch endpointLocked = new CountDownLatch(1);
+        CountDownLatch unlockEndpoint = releaseGate();
+        Task<UUID> endpointLocker = startTransaction(() -> {
+            UUID id = jdbc.queryForObject("SELECT id FROM endpoints WHERE id = ? FOR UPDATE", UUID.class,
+                    endpoint.getId());
+            endpointLocked.countDown();
+            awaitGate(unlockEndpoint);
+            return id;
+        });
+        awaitGate(endpointLocked);
+        Task<AttemptMutationOutcome> retry = startRetry(owner);
+        assertBlockedBy(retry, endpointLocker, "FROM endpoints", "FOR KEY SHARE");
+
+        // The Delivery must still be available while retry is waiting for its first parent lock.
+        Task<UUID> deliveryLocker = startTransaction(() -> jdbc
+                .queryForObject("SELECT id FROM deliveries WHERE id = ? FOR UPDATE", UUID.class, delivery.getId()));
+        assertEquals(delivery.getId(), result(deliveryLocker));
+        assertEquals("IN_FLIGHT", persistedStatus(owner.attempt().getId()));
+        unlockEndpoint.countDown();
+        assertEquals(endpoint.getId(), result(endpointLocker));
+        assertEquals(AttemptMutationOutcome.APPLIED, result(retry));
+        assertScheduledRetry(2);
+    }
+
+    @Test
+    void ownershipLostWhileRetryWaitsForDelivery_createsNoChildAndConsumesNoNumber() throws Exception {
+        AttemptExecution owner = prepareRetry();
+        CountDownLatch deliveryLocked = new CountDownLatch(1);
+        CountDownLatch unlockDelivery = releaseGate();
+        Task<UUID> deliveryLocker = startTransaction(() -> {
+            UUID id = jdbc.queryForObject("SELECT id FROM deliveries WHERE id = ? FOR UPDATE", UUID.class,
+                    delivery.getId());
+            deliveryLocked.countDown();
+            awaitGate(unlockDelivery);
+            return id;
+        });
+        awaitGate(deliveryLocked);
+        Task<AttemptMutationOutcome> retry = startRetry(owner);
+        assertBlockedBy(retry, deliveryLocker, "FROM deliveries", "FOR UPDATE");
+
+        // A non-allocating P04 completion can win because retry has not written/locked the Attempt yet.
+        Task<AttemptMutationOutcome> success =
+                startTransaction(() -> attemptService.markSucceeded(owner, 204, "winner", 9L));
+        assertEquals(AttemptMutationOutcome.APPLIED, result(success));
+        unlockDelivery.countDown();
+        assertEquals(delivery.getId(), result(deliveryLocker));
+        assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, result(retry));
+        assertEquals(List.of(1), attemptNumbers(delivery.getId()));
+        assertEquals("SUCCEEDED", persistedStatus(owner.attempt().getId()));
+        assertEquals("winner", jdbc.queryForObject("SELECT response_body FROM attempts WHERE id = ?", String.class,
+                owner.attempt().getId()));
+    }
+
+    @Test
+    void retryAndEndpointDeleteDoNotDeadlock() throws Exception {
+        AttemptExecution owner = prepareRetry();
+        CountDownLatch allocated = new CountDownLatch(1);
+        CountDownLatch insert = releaseGate();
+        pauseSave(delivery.getId(), allocated, insert, false);
+        Task<AttemptMutationOutcome> retry = startRetry(owner);
+        awaitGate(allocated);
+        Task<Integer> delete =
+                startTransaction(() -> jdbc.update("DELETE FROM endpoints WHERE id = ?", endpoint.getId()));
+        assertBlockedBy(delete, retry, "DELETE FROM endpoints", "id");
+        insert.countDown();
+
+        assertEquals(AttemptMutationOutcome.APPLIED, result(retry));
+        Throwable deleteFailure = failure(delete);
+        assertFalse(hasSqlState(deleteFailure, "40P01"));
+        assertTrue(hasSqlState(deleteFailure, "23503"), "the existing parent FK prevents Endpoint deletion");
+        assertScheduledRetry(2);
+    }
+
+    @Test
+    void retryEndpointKeyShareRemainsCompatibleWithDeactivate() throws Exception {
+        AttemptExecution owner = prepareRetry();
+        CountDownLatch allocated = new CountDownLatch(1);
+        CountDownLatch insert = releaseGate();
+        pauseSave(delivery.getId(), allocated, insert, false);
+        Task<AttemptMutationOutcome> retry = startRetry(owner);
+        awaitGate(allocated);
+
+        Task<Integer> deactivate = startTransaction(this::deactivateEndpoint);
+        assertEquals(1, result(deactivate), "a non-key update commits while retry retains KEY SHARE");
+        assertFalse(endpointActive());
+        assertFalse(retry.future().isDone(), "retry still holds its allocation transaction at the insert barrier");
+        insert.countDown();
+        assertEquals(AttemptMutationOutcome.APPLIED, result(retry));
+        assertScheduledRetry(2);
+    }
+
+    private AttemptExecution prepareRetry() {
+        Message message = messageRepository.save(new Message(app, event, new ObjectMapper().createObjectNode()));
+        delivery = deliveryRepository.save(new Delivery(app, message, endpoint));
+        Attempt first = attemptRepository.save(new Attempt(app, message, endpoint, delivery, 1));
+        return attemptService.claim(first.getId()).orElseThrow();
+    }
+
+    private String persistedStatus(UUID attemptId) {
+        return jdbc.queryForObject("SELECT status FROM attempts WHERE id = ?", String.class, attemptId);
+    }
+
+    private void assertScheduledRetry(int number) {
+        assertEquals(List.of(1, 2), attemptNumbers(delivery.getId()));
+        var child = jdbc.queryForMap("SELECT status, execution_generation, execution_claimed_at "
+                + "FROM attempts WHERE delivery_id = ? AND attempt_no = ?", delivery.getId(), number);
+        assertEquals("SCHEDULED", child.get("status"));
+        assertEquals(0L, ((Number) child.get("execution_generation")).longValue());
+        assertNull(child.get("execution_claimed_at"));
+        assertEquals(RETRY_AT,
+                jdbc.queryForObject("SELECT next_retry_at FROM attempts WHERE delivery_id = ? AND attempt_no = ?",
+                        Instant.class, delivery.getId(), number));
+    }
+
     private Delivery createDeadDelivery() {
         Message message = messageRepository.save(new Message(app, event, new ObjectMapper().createObjectNode()));
         Delivery result = deliveryRepository.save(new Delivery(app, message, endpoint));
@@ -336,6 +508,20 @@ class DeliveryReplayConcurrencyPostgresTest implements SharedPostgresContainer {
                 return replay(deliveryId);
             } finally {
                 replayBoundary.remove();
+            }
+        });
+        return new Task<>(future, pid);
+    }
+
+    private Task<AttemptMutationOutcome> startRetry(AttemptExecution execution) {
+        AtomicInteger pid = new AtomicInteger();
+        Future<AttemptMutationOutcome> future = executor.submit(() -> {
+            retryBoundary.set(new ReplayBoundary(pid, new CountDownLatch(1), null));
+            try {
+                return attemptService.markFailedAndCreateRetry(execution, RETRY_AT, 503, "retry response", "error",
+                        12L);
+            } finally {
+                retryBoundary.remove();
             }
         });
         return new Task<>(future, pid);

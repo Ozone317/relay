@@ -57,7 +57,7 @@ public class AttemptService {
             // time, in the same transaction as this pair's first Attempt - see
             // docs/superpowers/specs/2026-09-09-delivery-entity-design.md Section 4. Automatic
             // retries and manual replays never create another Delivery; they carry this one
-            // forward (see createRetry/createReplay below).
+            // forward (see markFailedAndCreateRetry/createReplay below).
             Delivery delivery = deliveryRepository.save(new Delivery(sub.getApp(), message, sub.getEndpoint()));
             Attempt attempt = new Attempt(sub.getApp(), message, sub.getEndpoint(), delivery, 1);
             attempts.add(attempt);
@@ -75,15 +75,6 @@ public class AttemptService {
         Attempt attempt = attemptRepository.findById(attemptId)
                 .orElseThrow(() -> new IllegalStateException("Claimed attempt " + attemptId + " not found"));
         return Optional.of(new AttemptExecution(attempt, claim.get().generation(), claim.get().claimedAt()));
-    }
-
-    @Transactional
-    public Attempt createRetry(Attempt previous, Instant nextRetryAt) {
-        Attempt retry = new Attempt(previous.getApp(), previous.getMessage(), previous.getEndpoint(),
-                previous.getDelivery(), previous.getAttemptNo() + 1);
-        retry.setStatus(AttemptStatus.SCHEDULED);
-        retry.setNextRetryAt(nextRetryAt);
-        return attemptRepository.save(retry);
     }
 
     @Transactional
@@ -128,6 +119,8 @@ public class AttemptService {
     @Transactional
     public AttemptMutationOutcome markFailedAndCreateRetry(AttemptExecution execution, Instant nextRetryAt,
             Integer responseCode, String responseBody, String lastError, Long latencyMs) {
+        Attempt previous = execution.attempt();
+        allocationRepository.lockRetryAllocationParents(previous.getEndpoint().getId(), previous.getDelivery().getId());
         int updated = executionRepository.markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt,
                 responseCode, truncate(responseBody, DIAGNOSTIC_CHARACTER_LIMIT),
                 truncate(lastError, DIAGNOSTIC_CHARACTER_LIMIT), latencyMs);
@@ -137,7 +130,12 @@ public class AttemptService {
         if (updated != 1) {
             throw new IllegalStateException("unexpected parent update count: " + updated);
         }
-        createRetry(execution.attempt(), nextRetryAt);
+        int nextAttemptNo = allocationRepository.nextAttemptNoUnderDeliveryLock(previous.getDelivery().getId());
+        Attempt retry = new Attempt(previous.getApp(), previous.getMessage(), previous.getEndpoint(),
+                previous.getDelivery(), nextAttemptNo);
+        retry.setStatus(AttemptStatus.SCHEDULED);
+        retry.setNextRetryAt(nextRetryAt);
+        attemptRepository.save(retry);
         return AttemptMutationOutcome.APPLIED;
     }
 

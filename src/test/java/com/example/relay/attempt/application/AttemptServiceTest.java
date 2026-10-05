@@ -43,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -146,29 +147,52 @@ public class AttemptServiceTest {
     }
 
     @Test
-    void createRetry_createsSavesAndReturnsScheduledAttemptWithIncreasedAttemptCountAndDueTime() {
-        // Arrange
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.completed", app);
-        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
-        Message message = new Message(app, event, body);
-        Endpoint endpoint = new Endpoint("staging", "https://webhook.com", "whsec_some_secret", app);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        Attempt attempt = new Attempt(app, message, endpoint, delivery, 1);
+    void markFailedAndCreateRetry_locksParentsBeforeFencingAndUsesCurrentSequenceWithScheduledDefaults() {
+        Delivery delivery = replayDelivery();
+        Attempt attempt = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 1);
+        AttemptExecution execution = new AttemptExecution(attempt, 3L, Instant.now());
         Instant nextRetryAt = Instant.now().plusSeconds(30);
-
-        // Stub
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
+        when(allocationRepository.nextAttemptNoUnderDeliveryLock(delivery.getId())).thenReturn(4);
         when(attemptRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        // Act
-        Attempt result = underTest.createRetry(attempt, nextRetryAt);
+        assertEquals(AttemptMutationOutcome.APPLIED, underTest.markFailedAndCreateRetry(execution, nextRetryAt, 503,
+                "r".repeat(20_000), "e".repeat(20_000), 12L));
 
-        // Assert
-        assertEquals(attempt.getAttemptNo() + 1, result.getAttemptNo());
+        ArgumentCaptor<Attempt> child = ArgumentCaptor.forClass(Attempt.class);
+        var ordered = inOrder(allocationRepository, executionRepository, attemptRepository);
+        ordered.verify(allocationRepository).lockRetryAllocationParents(delivery.getEndpoint().getId(),
+                delivery.getId());
+        ordered.verify(executionRepository).markFailed(execution, AttemptStatus.FAILED_RETRYING, nextRetryAt, 503,
+                "r".repeat(10_240), "e".repeat(10_240), 12L);
+        ordered.verify(allocationRepository).nextAttemptNoUnderDeliveryLock(delivery.getId());
+        ordered.verify(attemptRepository).save(child.capture());
+        Attempt result = child.getValue();
+        assertEquals(4, result.getAttemptNo());
         assertEquals(AttemptStatus.SCHEDULED, result.getStatus());
         assertEquals(nextRetryAt, result.getNextRetryAt());
+        assertSame(delivery, result.getDelivery());
+        assertSame(delivery.getEndpoint(), result.getEndpoint());
+        assertSame(delivery.getMessage(), result.getMessage());
+        assertSame(delivery.getApp(), result.getApp());
+        assertEquals(0, result.getExecutionGeneration());
+        assertNull(result.getExecutionClaimedAt());
+        assertEquals(AttemptStatus.CREATED, attempt.getStatus(), "completion must not merge the detached parent");
+    }
+
+    @Test
+    void markFailedAndCreateRetry_rejectsUnexpectedParentUpdateCountWithoutAllocating() {
+        Delivery delivery = replayDelivery();
+        AttemptExecution execution = new AttemptExecution(
+                new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 1), 3L,
+                Instant.now());
+        when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(2);
+
+        assertThrows(IllegalStateException.class, () -> underTest.markFailedAndCreateRetry(execution,
+                Instant.now().plusSeconds(30), 503, "body", null, 1L));
+
+        verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
+        verify(attemptRepository, never()).save(any());
     }
 
     @Test
@@ -231,7 +255,8 @@ public class AttemptServiceTest {
 
     @Test
     void markFailedAndCreateRetryDoesNotCreateRetryWhenExecutionOwnershipIsLost() {
-        Attempt attempt = new Attempt(null, null, null, null, 1);
+        Delivery delivery = replayDelivery();
+        Attempt attempt = new Attempt(delivery.getApp(), delivery.getMessage(), delivery.getEndpoint(), delivery, 1);
         AttemptExecution execution = new AttemptExecution(attempt, 2L, Instant.now());
         when(executionRepository.markFailed(any(), any(), any(), any(), any(), any(), any())).thenReturn(0);
 
@@ -239,6 +264,8 @@ public class AttemptServiceTest {
                 underTest.markFailedAndCreateRetry(execution, Instant.now().plusSeconds(30), 503, "failure", null, 10L);
 
         assertEquals(AttemptMutationOutcome.OWNERSHIP_LOST, outcome);
+        verify(allocationRepository).lockRetryAllocationParents(delivery.getEndpoint().getId(), delivery.getId());
+        verify(allocationRepository, never()).nextAttemptNoUnderDeliveryLock(any());
         verify(attemptRepository, never()).save(any());
         verify(attemptRepository, never()).flush();
     }
