@@ -581,7 +581,9 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw \
 
 Exit 0, BUILD SUCCESS: 56 tests, 0 failures/errors/skips (36.183 s). Counts: native repository 7, P04 migration 1,
 reconciliation 14, allocation metrics 5, view 1, Message transaction 2, Attempt service 21, replay service 5.
-Both ordered parent/max operations and the latest finder execute on PostgreSQL in the native audit.
+RepositoryPostgresAuditTest executes the native allocation parent-lock and max queries on PostgreSQL.
+The derived `findFirstByDeliveryIdOrderByAttemptNoDesc` finder executes through replay integration/concurrency tests,
+including DeliveryReplayConcurrencyPostgresTest.
 Log: `target/task-6-final-supplemental.log`.
 
 The exact unmodified `make test-full-docker` initially failed before tests because the worktree has no .env.
@@ -654,7 +656,7 @@ No P00 autonomous component was globally enabled; explicitly opted-in lifecycle/
 | Permanent positivity/uniqueness; historical-only contiguity | migration 5-case class, direct 23505/23514 checks, zero-row preflight and catalog |
 | V12 -> V13 -> V14 preserves complete history and both final index roles | new serialized-history migration case; 100,000-row representative digest unchanged |
 | View latest/count/history and bounded decision metrics | DeliveryStatusViewPostgresTest, replay lifecycle, AttemptAllocationMetricsTest pass |
-| Native lock/max/finder syntax actually executed | RepositoryPostgresAuditTest 7 passing cases |
+| Native lock/max SQL and derived latest finder execute on PostgreSQL | RepositoryPostgresAuditTest (native lock/max); DeliveryReplayConcurrencyPostgresTest (finder via replay service) |
 | P00–P04 and broad regressions | 79 focused + 56 supplemental + 856 practical Docker suite, with explicit single-method exclusion |
 
 Self-review found no fourth writer, reverse parent-lock edge, weakened P04 predicate, silent conversion of V13 failures
@@ -677,9 +679,15 @@ No other architectural change was needed.
 - Apply V13 plus V14 schema-first within an approved DDL lock/time window. V14 is the authorized ordinary CREATE INDEX,
   so its build blocks conflicting writes; include that duration in the lock-time budget. Keep both final indexes.
 - Deploy the ordered allocator to every instance. Mixed old/new binaries retain positivity/uniqueness but do not give
-  full P05 current-eligibility/availability semantics until all allocators are updated.
+  full P05 current-eligibility/availability semantics until all allocators are updated. A reproduced mixed-version
+  deadlock occurs when the new allocator holds Endpoint SHARE and Delivery UPDATE while an old unlocked INSERT retains
+  the competing unique-index entry and waits for Delivery FK KEY SHARE; the new INSERT then waits on the old
+  transaction. PostgreSQL may abort a participant with SQLState 40P01. This is a transient mixed-binary
+  availability/HTTP 500 risk; V13 still protects durable sequence integrity, and full allocator rollout removes this
+  mixed-version cycle.
 - P04 semantic worker quiescing is unnecessary: V13/V14 do not reinterpret generation authority or invalidate in-flight
-  capabilities. DDL lock budgeting is still required.
+  capabilities. That P04 semantic requirement is separate from the mixed-version deadlock risk above. DDL lock
+  budgeting is still required.
 - Perform target post-deploy preflight and concurrent replay smoke; monitor allocation decisions/invariant failures,
   lock waits, deadlocks, and latency. Counters observe decisions before commit, not exact durable totals.
 - Roll forward application failures; retain V13 permanent guarantees and V14 read access path. No automatic history
