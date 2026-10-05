@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-04
 
-**Status:** Approved; Task 1 schema checkpoint implemented
+**Status:** Approved; Tasks 1–6 verified including owner-authorized V14 correction; merge/deployment approval pending
 
 **Source revision:** `a7148d7` on `main` (`origin/main` at the same revision)
 
@@ -61,11 +61,32 @@ uk_attempts_delivery_attempt_no` for the actual `WHERE delivery_id = ? ORDER BY 
 had no Sort node. V13 therefore drops the old ordering index after adding the unique constraint; the active-row index
 remains. The complete plan and setup are recorded in the Task 1 report.
 
+**Task 6 discovery (2026-10-05):** The positive production-writer audit found only initial fan-out, replay, and retry;
+both append paths implement Endpoint-before-Delivery locking. The Task 1 backward-scan evidence still holds for one
+Delivery, but it does not establish performance for
+the `delivery_status` mixed ordering `(delivery_id ASC, attempt_no DESC)`. On PostgreSQL 16.15 with 5,000 Deliveries
+and 100,000 Attempts, five warm exact list/count query runs gave median list/count times of 174.729/81.846 ms with
+V13's index shape versus 136.423/33.024 ms with the old DESC index present. The count gains an Incremental Sort over
+all Attempts after the index removal. Task 6 stopped and the owner authorized forward-only V14 to restore that exact
+DESC index. V13 history is unchanged. V13's unique index enforces correctness; V14's mixed-order index serves the
+existing list/count read pattern. Their shared columns do not make them redundant: ordering and purpose differ.
+The migration test proves exact serialized Attempt-history preservation across V12 -> V13 -> V14, and the V14
+count plan regains the mixed-order Index Only Scan without the extra Incremental Sort. Full before/after plans,
+timings, final gates, and rollout conditions are in `docs/reviews/2026-10-04-p05-verification.md`.
+
+**Final Task 6 result:** PostgreSQL 16.15 steady before/after-V14 medians were 191.266/152.380 ms for the list and
+88.085/36.849 ms for the count; both final indexes and both permanent constraints exist. The representative 100,000
+Attempt row count and serialized-history digest are unchanged. The prescribed focused selection passed 79 tests,
+supplemental native/P04/lifecycle/service gates passed 56, and the practical full Docker suite passed 856 with only
+the confirmed unrelated Brevo 429 method excluded (its other 10 tests pass). Scoped Java formatting and diff checks
+pass; the global formatting command still reports 179 existing violations. No external database was audited or deployed.
+
 ## 2. Sources and method
 
-Current `main` is authoritative. Historical readiness documents, the Delivery design, the PRD, and the approved P04
-design/plan were used only to recover intent and explicit prior decisions. Findings were verified against current Java,
-Flyway V1–V12, current tests, and PostgreSQL 16.
+The original investigation used `main` at `a7148d7`. Historical readiness documents, the Delivery design, the PRD, and
+the approved P04 design/plan recovered intent and explicit decisions; baseline findings were verified against Java,
+Flyway V1–V12, tests, and PostgreSQL 16. Task 6 repeats the positive source/lock audit on the implemented P05 branch
+and verifies final Flyway V1–V14 schema and tests. Historical reproductions below retain their baseline context.
 
 The production-writer audit searched for:
 
@@ -125,8 +146,9 @@ calls it gap-free, and current consumers rely on that shape:
 - `DeliveryWorker` derives retry tier and finality from the number;
 - replay history keeps increasing on the same Delivery.
 
-The schema currently enforces none of positivity, uniqueness, or contiguity. It only has a non-unique ordering index.
-Contiguity will remain a production-writer protocol; uniqueness and positivity will become database constraints.
+The pre-P05 schema enforced none of positivity, ordinal uniqueness, or contiguity. V13 permanently enforces
+positivity and ordinal uniqueness; contiguity remains a production-writer protocol. V14 restores the ordering index
+for read performance separately from those correctness constraints.
 
 ### 3.3 Presentation contract
 
@@ -145,8 +167,8 @@ P05 therefore protects a customer-visible identity/history contract, not merely 
 | Creator | Initiator and transaction | Parent Delivery | Current allocation | Current serialization/constraint | Contention and required result |
 |---|---|---|---|---|---|
 | Initial fan-out | `MessageService.create` outer transaction calls `AttemptService.createFromSubscriptionList`; Message, Deliveries, and Attempts commit together | Newly inserted, unique `(message_id, endpoint_id)` | fixed `1` | new UUID Message and new Delivery; Delivery unique index | No production path can concurrently append to the not-yet-committed new Delivery. Keep fixed 1; V13 validates it |
-| Automatic retry | `DeliveryWorker` calls `AttemptService.markFailedAndCreateRetry`; one service transaction performs the P04 fenced parent update then child insert | existing Delivery from the claimed Attempt | detached parent's `attemptNo + 1` | P04 permits only current positive generation to update; active partial unique index is incidental backup | Can contend with replay or another stale execution. Lock Endpoint `FOR KEY SHARE`, then Delivery `FOR UPDATE`, before the fenced update; allocate current max+1 in the same transaction |
-| Manual replay | HTTP `POST /deliveries/{id}/replay` calls non-transactional `DeliveryReplayService`; repository reads occur before separate transactional `AttemptService.createReplay` | existing Delivery | previously loaded latest Attempt's `attemptNo + 1` | pre-check plus partial active-row uniqueness | Can contend with replay, retry, and Endpoint mutation. Move eligibility and allocation into one transaction that locks Endpoint `FOR SHARE` before Delivery `FOR UPDATE` |
+| Automatic retry | `DeliveryWorker` calls proxied transactional `AttemptService.markFailedAndCreateRetry` | existing Delivery from the claimed Attempt | current `MAX(attempt_no) + 1` after ordered locks and successful P04 parent fence | Endpoint `FOR KEY SHARE` -> Delivery `FOR UPDATE` -> exact positive-generation P04 parent UPDATE; V13 unique backstop | Same transaction inserts SCHEDULED generation-0 child; zero-row stale fence inserts nothing; rollback consumes no number |
+| Manual replay | HTTP `POST /deliveries/{id}/replay` calls non-transactional `DeliveryReplayService` for ownership only, then proxied transactional `AttemptService.createReplay(Delivery)` | existing Delivery | current `MAX(attempt_no) + 1` after serialized eligibility | Endpoint `FOR SHARE` and current activity -> Delivery `FOR UPDATE` -> current latest DEAD/active guard; V13 unique backstop | Same transaction inserts CREATED generation-0 work and holds both parent locks through commit; response view is first read after commit |
 
 No other production Attempt creator exists:
 
@@ -161,20 +183,22 @@ Test fixtures and the temporary investigation probe insert Attempts but are not 
 
 ## 5. Current database contract
 
-Current relevant constraints/indexes are:
+Final relevant constraints/indexes after V13 and V14 are:
 
 - primary key `attempts(id)`;
 - non-null foreign key `attempts.delivery_id -> deliveries(id)`;
 - unique `deliveries(message_id, endpoint_id)`;
-- non-unique `idx_attempts_delivery_attempt_no(delivery_id, attempt_no DESC)`;
+- positive check `attempts_attempt_no_positive CHECK (attempt_no >= 1)`;
+- unique `uk_attempts_delivery_attempt_no(delivery_id, attempt_no)`, backed by its ascending B-tree index;
+- non-unique V14 `idx_attempts_delivery_attempt_no(delivery_id, attempt_no DESC)` for mixed-order list/count reads;
 - generated `active_endpoint_id` plus unique
   `idx_attempts_one_active_per_message_endpoint(message_id, active_endpoint_id)` for statuses `CREATED`, `IN_FLIGHT`,
   or `SCHEDULED`;
 - status, execution-generation, and `IN_FLIGHT`/claim-time consistency checks.
 
-There is no `UNIQUE (delivery_id, attempt_no)` and no positive-number check. The active-row index is not a sequence
-constraint. It permits any number of terminal duplicates and permits a new active duplicate as soon as the first row
-with that number becomes terminal.
+Before P05 there was no ordinal unique/positive constraint. The active-row index alone did not constrain ordinal
+identity: it permitted terminal duplicates and a new active duplicate after the first row became terminal.
+V13 supplies the separate permanent sequence backstops; V14's DESC index supplies no correctness constraint.
 
 V13 permanently enforces only the invariants PostgreSQL can express directly: `CHECK (attempt_no >= 1)` permanently
 enforces positivity, and `UNIQUE (delivery_id, attempt_no)` permanently enforces physical ordinal uniqueness. The
@@ -588,6 +612,19 @@ Recommended migration: `V13__enforce_attempt_delivery_sequence.sql`.
    the actual descending latest-Attempt query with the old index absent. The plan used a backward scan of the unique
    Delivery/number index without a sort, so V13 removes `idx_attempts_delivery_attempt_no`.
 
+The Task 1 evidence did not cover the mixed-order `delivery_status` list/count reads. The owner-authorized forward
+correction is `V14__restore_attempt_delivery_ordering_index.sql`:
+
+```sql
+CREATE INDEX idx_attempts_delivery_attempt_no
+    ON attempts (delivery_id, attempt_no DESC);
+```
+
+V13 remains immutable migration history. Apply V14 after V13 and retain both indexes: the unique ascending index
+backs the correctness constraint; the mixed-order DESC index supports the existing read access pattern. The V12 ->
+V13 -> V14 regression compares complete serialized Attempt rows before/after each migration, retains all diagnostics,
+ordinals, statuses, execution metadata, and retry timestamps, and verifies both permanent SQLState backstops.
+
 The positive check and unique constraint are permanent database guarantees. The contiguity audit is a migration-time
 historical proof, not a declarative PostgreSQL constraint: PostgreSQL does not permanently enforce `1..N` gaplessness.
 After migration, the Endpoint-before-Delivery hierarchy, Delivery serialization lock, max+1 calculation,
@@ -604,7 +641,7 @@ Recommended order:
 
 1. run the read-only audit against the target database and export results;
 2. ensure no duplicate/non-positive/non-contiguous rows; stop for explicit repair if any exist;
-3. apply V13 within an approved DDL lock window;
+3. apply V13 plus V14 within an approved DDL lock window; budget the V14 non-concurrent index build's write blocking;
 4. deploy the new allocator to all application instances;
 5. run post-deploy audit and concurrent replay smoke test;
 6. monitor allocation invariant violations and lock/deadlock/latency signals.
@@ -620,8 +657,8 @@ incorrect migration; no automatic duplicate repair is part of P05.
 
 ## 16. Observability
 
-- Counter `relay.attempt.allocation{creator=retry|replay,outcome=created|rejected|ownership_lost|invariant_violation}`
-  with bounded tags only.
+- Counter `relay.attempt.allocation{creator=initial|retry|replay,outcome=created|rejected|ownership_lost|invariant_violation}`
+  with bounded tags only. Counters observe service decisions before transaction commit, not exact durable-row totals.
 - Error log on V13 uniqueness/check violation after deployment with Delivery ID, creator, attempted number, and SQLState;
   never payload, response body, or signing secret.
 - Debug/trace timing for Delivery-lock wait may be added through database metrics; do not put unbounded Delivery IDs in

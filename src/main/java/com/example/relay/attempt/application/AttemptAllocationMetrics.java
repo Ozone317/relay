@@ -18,6 +18,9 @@ public class AttemptAllocationMetrics {
         this.meterRegistry = meterRegistry;
     }
 
+    /**
+     * Records service decisions before transaction commit; counters are not exact totals of durable Attempt rows.
+     */
     public void record(String creator, String outcome) {
         if (!CREATORS.contains(creator) || !OUTCOMES.contains(outcome)) {
             throw new IllegalArgumentException("Unsupported attempt allocation metric tags");

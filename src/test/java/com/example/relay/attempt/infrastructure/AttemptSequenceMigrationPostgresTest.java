@@ -27,7 +27,7 @@ class AttemptSequenceMigrationPostgresTest implements SharedPostgresContainer {
             statement.execute(attemptInsert(8, 1, "DEAD"));
             statement.execute(attemptInsert(9, 2, "CREATED"));
 
-            migrateLatest(schema);
+            migrateV13(schema);
 
             assertTrue(constraintExists(statement, "attempts_attempt_no_positive"));
             assertTrue(constraintExists(statement, "uk_attempts_delivery_attempt_no"));
@@ -35,6 +35,42 @@ class AttemptSequenceMigrationPostgresTest implements SharedPostgresContainer {
             assertConstraintRejects(statement, attemptInsert(10, 1, "DEAD"), "23505");
             assertConstraintRejects(statement, attemptInsert(11, 0, "DEAD"), "23514");
             captureLatestAttemptPlanWithoutOldIndex(statement);
+        });
+    }
+
+    @Test
+    void v14RestoresMixedOrderIndexWithoutMutatingAttemptHistory() throws Exception {
+        withV12Schema((schema, statement) -> {
+            statement.execute(attemptInsert(8, 1, "FAILED_RETRYING"));
+            statement.execute(attemptInsert(9, 2, "DEAD"));
+            statement.execute(attemptInsert(10, 3, "SCHEDULED"));
+            statement.execute("UPDATE attempts SET response_code = 503, response_body = 'response retained', "
+                    + "last_error = 'diagnostic retained', latency_ms = 17, execution_generation = 2 "
+                    + "WHERE attempt_no < 3");
+            statement.execute("UPDATE attempts SET next_retry_at = CURRENT_TIMESTAMP + INTERVAL '5 minutes' "
+                    + "WHERE attempt_no = 3");
+            List<String> before = attemptHistory(statement);
+            assertEquals(3, before.size());
+
+            migrateV13(schema);
+            assertEquals(before, attemptHistory(statement));
+            assertFalse(indexExists(statement, "idx_attempts_delivery_attempt_no"));
+
+            migrateLatest(schema);
+
+            assertEquals(before, attemptHistory(statement));
+            assertTrue(constraintExists(statement, "attempts_attempt_no_positive"));
+            assertTrue(constraintExists(statement, "uk_attempts_delivery_attempt_no"));
+            assertTrue(indexExists(statement, "uk_attempts_delivery_attempt_no"));
+            assertTrue(indexExists(statement, "idx_attempts_delivery_attempt_no"));
+            try (var rows = statement.executeQuery("SELECT indexdef FROM pg_indexes WHERE schemaname = "
+                    + "current_schema() AND indexname = 'idx_attempts_delivery_attempt_no'")) {
+                assertTrue(rows.next());
+                assertTrue(rows.getString(1).endsWith("USING btree (delivery_id, attempt_no DESC)"));
+            }
+            assertConstraintRejects(statement, attemptInsert(11, 2, "DEAD"), "23505");
+            assertConstraintRejects(statement, attemptInsert(12, 0, "DEAD"), "23514");
+            assertEquals(before, attemptHistory(statement));
         });
     }
 
@@ -120,6 +156,22 @@ class AttemptSequenceMigrationPostgresTest implements SharedPostgresContainer {
     private static void migrateLatest(String schema) {
         Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .schemas(schema).defaultSchema(schema).locations("classpath:db/migration").load().migrate();
+    }
+
+    private static void migrateV13(String schema) {
+        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .schemas(schema).defaultSchema(schema).target("13").locations("classpath:db/migration").load()
+                .migrate();
+    }
+
+    private static List<String> attemptHistory(Statement statement) throws SQLException {
+        List<String> history = new ArrayList<>();
+        try (var rows = statement.executeQuery("SELECT row_to_json(a)::text FROM attempts a ORDER BY id")) {
+            while (rows.next()) {
+                history.add(rows.getString(1));
+            }
+        }
+        return history;
     }
 
     private static void assertMigrationFailsWith(String schema, Statement statement, String expectedText)

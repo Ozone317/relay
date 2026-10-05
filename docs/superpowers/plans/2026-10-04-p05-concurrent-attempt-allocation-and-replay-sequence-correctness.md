@@ -43,6 +43,8 @@ Testcontainers, Micrometer
 
 - `src/main/resources/db/migration/V13__enforce_attempt_delivery_sequence.sql` — audits V12 data and adds permanent
   positive and unique sequence constraints; drops the old ordering index only after Task 1 PostgreSQL 16 evidence.
+- `src/main/resources/db/migration/V14__restore_attempt_delivery_ordering_index.sql` — owner-authorized Task 6
+  forward correction restoring the mixed-order DESC index for existing Delivery list/count reads; V13 stays unchanged.
 - `src/main/java/com/example/relay/attempt/infrastructure/AttemptAllocationRepository.java` — ordered replay/retry
   parent-lock operations and explicitly preconditioned next-number contract.
 - `src/main/java/com/example/relay/attempt/infrastructure/AttemptAllocationRepositoryImpl.java` — PostgreSQL native
@@ -235,6 +237,12 @@ correctness and Task 1 completion do not depend on removing the index.
 **Task 1 resolution (2026-10-04):** In an isolated PostgreSQL 16.15 schema with 101 Deliveries and 2,002 Attempts,
 the actual latest-Attempt query used `Index Scan Backward using uk_attempts_delivery_attempt_no` without a Sort after
 the old index was dropped in that disposable schema. V13 removes the old index; the Task 1 report records the full plan.
+
+**Evidence limitation / Task 6 correction (2026-10-05):** That checkpoint established the single-Delivery lookup,
+not the existing `delivery_status` mixed ordering `(delivery_id ASC, attempt_no DESC)`. Task 6 found a material
+pagination-count Incremental Sort regression and stopped. The owner then authorized forward-only V14 restoring
+`idx_attempts_delivery_attempt_no(delivery_id, attempt_no DESC)`. V13 is immutable history. Its unique index is the
+correctness backstop; V14's different ordering serves the read pattern, so the two indexes are not redundant.
 
 Run:
 
@@ -711,16 +719,27 @@ git commit -m "test: verify allocated attempt lifecycle and metrics"
 
 ### Task 6: Final creator and lock-order audit, regression gate, and rollout record
 
+**Owner-authorized amendment (2026-10-05):** Include the minimal V14 index restoration and a real V12 -> V13 -> V14
+migration test proving both permanent constraints, both final index roles, and exact serialized Attempt-row preservation.
+Repeat the representative PostgreSQL 16 list/count probe before/after V14 with plan evidence and recorded timings,
+without wall-clock test assertions. Repeat all source audits and final regression/native/migration/full practical gates.
+Use a local test-only Compose override if the worktree lacks `.env`; exclude only the confirmed unrelated Brevo 429
+method when needed, and record global formatting baseline failures separately from changed-file formatting checks.
+Apply V13 plus V14 schema-first within the approved DDL window; never rewrite V13 history.
+
 **Files:**
 
 - Modify if implementation facts changed: `docs/superpowers/specs/2026-10-04-p05-concurrent-attempt-allocation-and-replay-sequence-correctness-design.md`
 - Create: `docs/reviews/2026-10-04-p05-verification.md`
+- Create: `src/main/resources/db/migration/V14__restore_attempt_delivery_ordering_index.sql`
+- Modify: `src/test/java/com/example/relay/attempt/infrastructure/AttemptSequenceMigrationPostgresTest.java`
+- Modify documentation only: `src/main/java/com/example/relay/attempt/application/AttemptAllocationMetrics.java`
 
 **Interfaces:**
 
 - Consumes: all prior tasks and current source tree.
 - Produces: positive production-writer inventory, exact command evidence, migration audit SQL/output template, and rollout
-  checklist; no production behavior.
+  checklist; the owner-authorized V14 restores the existing read access path without changing allocation behavior.
 
 - [ ] **Step 1: Perform the positive Attempt-creator/allocation audit**
 
@@ -801,10 +820,11 @@ WHERE schemaname = current_schema()
   AND indexname IN ('idx_attempts_delivery_attempt_no', 'uk_attempts_delivery_attempt_no');
 ```
 
-Expected: both permanent constraints exist. The presence or absence of the old ordering index exactly matches Task 1's
-recorded representative PostgreSQL 16 evidence. If removed, attach the Task 1 plan showing the unique index's backward
-scan; do not make Task 6 the first evidence collected after a destructive migration. If retained, record that removal
-is optional cleanup and not required for P05 correctness.
+Expected after the owner-authorized V14 correction: both permanent constraints exist, and both the unique index and
+restored `(delivery_id ASC, attempt_no DESC)` index exist. Attach Task 1's single-Delivery backward-scan checkpoint,
+Task 6's pre-V14 list/count regression, and the corrected V14 list/count plans. The count must regain the mixed-order
+read path without the extra Incremental Sort; record representative timings without brittle timing assertions.
+Keep V13 unchanged and explain the separate correctness/read-performance roles of the two indexes.
 
 - [ ] **Step 6: Self-review against the design**
 
@@ -828,8 +848,12 @@ Verify explicitly:
 
 ```bash
 git add docs/superpowers/specs/2026-10-04-p05-concurrent-attempt-allocation-and-replay-sequence-correctness-design.md \
-  docs/reviews/2026-10-04-p05-verification.md
-git commit -m "docs: record P05 allocation verification and rollout"
+  docs/superpowers/plans/2026-10-04-p05-concurrent-attempt-allocation-and-replay-sequence-correctness.md \
+  docs/reviews/2026-10-04-p05-verification.md \
+  src/main/resources/db/migration/V14__restore_attempt_delivery_ordering_index.sql \
+  src/test/java/com/example/relay/attempt/infrastructure/AttemptSequenceMigrationPostgresTest.java \
+  src/main/java/com/example/relay/attempt/application/AttemptAllocationMetrics.java
+git commit -m "fix: restore P05 read index and record final verification"
 ```
 
 Stop after this checkpoint and request deployment/merge approval. Do not begin P06, P08, or paid-tier work.
