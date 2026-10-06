@@ -4,6 +4,10 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -59,6 +63,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -128,7 +133,7 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
     @Autowired
     private MessageRepository messageRepository;
 
-    @Autowired
+    @MockitoSpyBean
     private AttemptService attemptService;
 
     @Autowired
@@ -456,6 +461,47 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
         Message queued = rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 5000);
         assertNotNull(queued, "expected the stale unnotified DEAD attempt to be republished");
         assertEquals(attempt.getId().toString(), new String(queued.getBody()));
+    }
+
+    @Test
+    void concurrentSweeps_touchAndPublishAStaleDeadAttemptOnlyOnce() throws Exception {
+        Attempt attempt = persistDeadAttempt(Instant.now().minusSeconds(3600), null);
+        CountDownLatch bothCallersSelectedCandidate = new CountDownLatch(2);
+        CountDownLatch releaseCallers = new CountDownLatch(1);
+        doAnswer(invocation -> {
+                    bothCallersSelectedCandidate.countDown();
+                    if (!releaseCallers.await(10, TimeUnit.SECONDS)) {
+                        throw new AssertionError("both reconciliation callers did not reach the touch barrier");
+                    }
+                    return invocation.callRealMethod();
+                })
+                .when(attemptService)
+                .touchDeadLetterCandidate(eq(attempt.getId()), any(Instant.class), any(Instant.class));
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> firstSweep = executor.submit(sweeper::sweep);
+            Future<?> secondSweep = executor.submit(sweeper::sweep);
+            assertEquals(true, bothCallersSelectedCandidate.await(10, TimeUnit.SECONDS),
+                    "both sweepers must observe the same stale row before either can touch it");
+            releaseCallers.countDown();
+            firstSweep.get(10, TimeUnit.SECONDS);
+            secondSweep.get(10, TimeUnit.SECONDS);
+        } finally {
+            releaseCallers.countDown();
+            executor.shutdownNow();
+        }
+
+        Attempt reloaded = attemptRepository.findById(attempt.getId()).orElseThrow();
+        assertNull(reloaded.getDeadLetterNotifiedAt(), "the sweep touch must not impersonate notifier confirmation");
+        assertTrue(reloaded.getUpdatedAt().isAfter(Instant.now().minusSeconds(15)),
+                "the winning compare-and-set touch must advance the stale row");
+
+        Message published = rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 5000);
+        assertNotNull(published, "one caller must publish the row that won the touch");
+        assertEquals(attempt.getId().toString(), new String(published.getBody()));
+        assertNull(rabbitTemplate.receive(RabbitMqConfig.DEADLETTER_QUEUE, 250),
+                "the losing concurrent touch must not publish a duplicate");
     }
 
     @Test
