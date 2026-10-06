@@ -22,13 +22,19 @@ import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -177,26 +183,45 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         jdbcTemplate.update("UPDATE password_reset_tokens SET updated_at = ? WHERE id = ?",
                 Timestamp.from(staleUpdatedAt), stale.getId());
 
-        CountDownLatch callersReady = new CountDownLatch(2);
-        CountDownLatch startCallers = new CountDownLatch(1);
-        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch blockerLocked = new CountDownLatch(1);
+        CountDownLatch releaseBlocker = new CountDownLatch(1);
+        CountDownLatch recoverySelectedCandidate = new CountDownLatch(1);
+        CountDownLatch releaseRecovery = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        AtomicInteger blockerPid = new AtomicInteger();
+        Future<?> blocker = null;
+        Future<?> recovery = null;
+        Future<?> ordinaryRequest = null;
         try {
-            Future<?> recovery = executor.submit(() -> {
-                callersReady.countDown();
-                awaitRelease(startCallers);
-                recoverySweeper.sweep();
-            });
-            Future<?> ordinaryRequest = executor.submit(() -> {
-                callersReady.countDown();
-                awaitRelease(startCallers);
-                passwordResetService.issueAndDispatch(user);
-            });
-            assertTrue(callersReady.await(10, TimeUnit.SECONDS), "both callers must be ready at the start gate");
-            startCallers.countDown();
+            TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+            blocker = executor.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+                blockerPid.set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                jdbcTemplate.queryForObject("SELECT id FROM users WHERE id = ? FOR UPDATE", UUID.class, user.getId());
+                blockerLocked.countDown();
+                awaitRelease(releaseBlocker);
+            }));
+            assertTrue(blockerLocked.await(10, TimeUnit.SECONDS), "test transaction must hold the user row lock");
+
+            PasswordResetEmailRecoverySweeper selectedRecovery = gatedRecoverySweeper(
+                    recoverySelectedCandidate, releaseRecovery);
+            recovery = executor.submit(selectedRecovery::sweep);
+            assertTrue(recoverySelectedCandidate.await(10, TimeUnit.SECONDS),
+                    "recovery must have selected the stale candidate before issuance starts");
+            releaseRecovery.countDown();
+            ordinaryRequest = executor.submit(() -> passwordResetService.issueAndDispatch(user));
+
+            Set<Integer> blockedIssuancePids = awaitTwoBlockedUserLockWaiters(blockerPid.get());
+            assertThat(blockedIssuancePids).hasSize(2);
+            assertThat(blockedIssuancePids).doesNotContain(blockerPid.get());
+
+            // Keep the independent transaction's user-row lock until both real issuance transactions are queued.
+            releaseBlocker.countDown();
+            blocker.get(15, TimeUnit.SECONDS);
             recovery.get(15, TimeUnit.SECONDS);
             ordinaryRequest.get(15, TimeUnit.SECONDS);
         } finally {
-            startCallers.countDown();
+            releaseRecovery.countDown();
+            releaseBlocker.countDown();
             executor.shutdownNow();
         }
 
@@ -205,11 +230,22 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         List<PasswordResetToken> rowsForUser = tokenRepository.findAll().stream()
                 .filter(token -> token.getUser().getId().equals(user.getId()))
                 .toList();
+        List<PasswordResetToken> successors = rowsForUser.stream()
+                .filter(token -> !token.getId().equals(stale.getId()))
+                .toList();
         List<PasswordResetToken> usable = rowsForUser.stream().filter(token -> token.getUsedAt() == null).toList();
-        assertThat(usable).as("the user-row lock must serialize recovery against ordinary issuance").hasSize(1);
+        List<PasswordResetToken> invalidated = rowsForUser.stream().filter(token -> token.getUsedAt() != null).toList();
+        assertThat(rowsForUser).as("stale row plus both successful issuance successors").hasSize(3);
+        assertThat(successors).as("ordinary issuance and recovery each persist a distinct successor").hasSize(2);
+        assertThat(reloadedStale.getUsedAt()).as("the selected stale candidate is superseded").isNotNull();
+        assertThat(usable).as("the user-row lock serializes recovery against ordinary issuance").hasSize(1);
+        assertThat(invalidated).as("stale and superseded successor are both invalidated").hasSize(2);
         assertThat(publications).hasSize(2);
-        assertThat(publications).allMatch(publication -> rowsForUser.stream()
-                .anyMatch(token -> token.getId().toString().equals(publication.idempotencyKey())));
+        Set<String> publicationKeys = publications.stream().map(EmailDispatchMessage::idempotencyKey)
+                .collect(Collectors.toSet());
+        assertThat(publicationKeys).as("each issuance publishes its own successor id").hasSize(2)
+                .containsExactlyInAnyOrderElementsOf(
+                        successors.stream().map(token -> token.getId().toString()).toList());
         assertThat(usable.getFirst().getFirstRequestedAt()).satisfies(requestedAt -> {
             if (requestedAt.equals(persistedFirstRequestedAt)) {
                 return;
@@ -220,6 +256,31 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         User reloadedUser = userRepository.findById(user.getId()).orElseThrow();
         assertThat(reloadedUser.getPasswordHash()).isEqualTo("unchanged-hash");
         assertThat(reloadedUser.isEmailVerified()).isFalse();
+    }
+
+    private Set<Integer> awaitTwoBlockedUserLockWaiters(int blockerBackendPid) {
+        AtomicReference<Set<Integer>> waitingPids = new AtomicReference<>(Set.of());
+        Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10)).untilAsserted(() -> {
+            List<Map<String, Object>> activities = jdbcTemplate.queryForList("""
+                    SELECT pid, query, wait_event_type, cardinality(pg_blocking_pids(pid)) AS blocker_count,
+                           ? = ANY(pg_blocking_pids(pid)) AS blocked_by_test_holder
+                    FROM pg_stat_activity
+                    WHERE wait_event_type = 'Lock'
+                      AND lower(query) LIKE '%from users%'
+                      AND (lower(query) LIKE '%for update%' OR lower(query) LIKE '%for no key update%')
+                    """, blockerBackendPid);
+            List<Map<String, Object>> blocked = activities.stream()
+                    .filter(activity -> ((Number) activity.get("blocker_count")).intValue() > 0)
+                    .toList();
+            Set<Integer> pids = blocked.stream().map(activity -> ((Number) activity.get("pid")).intValue())
+                    .collect(Collectors.toSet());
+            waitingPids.set(pids);
+            assertThat(blocked).as("both issuance connections must wait on the users row lock: " + activities)
+                    .hasSize(2);
+            assertThat(blocked).anyMatch(activity -> Boolean.TRUE.equals(activity.get("blocked_by_test_holder")));
+            assertThat(blocked).allMatch(activity -> "Lock".equals(activity.get("wait_event_type")));
+        });
+        return waitingPids.get();
     }
 
     private Instant persistedFirstRequestedAt(UUID tokenId) {
