@@ -261,11 +261,12 @@ components:
 - `ScheduledCallbackAdmission`, a context-owned singleton and highest-precedence `ContextClosedEvent` listener;
 - `ScheduledCallbackRunner`, a thin coordinator used by every production `@Scheduled` entry method.
 
-`ScheduledCallbackAdmission` owns a private monitor, an `open` flag, and an admitted-callback count used for bounded
-state inspection. `runIfOpen(Runnable)` acquires the monitor, rejects when closed, or records admission while still
-holding the monitor; it then releases the monitor and invokes the supplied body in `try/finally`. The close listener
-acquires the same monitor and changes `open` to false. It does not wait for admitted callbacks and does not interrupt
-them. Consequently admission and close have a total order:
+`ScheduledCallbackAdmission` owns a private monitor, an `open` flag, and balanced active-admission accounting. It
+increments the count under the monitor when admission is granted and decrements it under the same monitor in
+`finally`; close neither reads that count nor waits on it. `runIfOpen(Runnable)` acquires the monitor, rejects when
+closed, or records admission while still holding the monitor; it then releases the monitor and invokes the supplied
+body in `try/finally`. The close listener acquires the same monitor and changes `open` to false. It does not wait for
+admitted callbacks and does not interrupt them. Consequently admission and close have a total order:
 
 1. If admission owns the monitor first, it records admission before releasing the monitor. That callback is considered
    running work even if the Java thread is descheduled before the supplied body begins; close may then proceed without

@@ -110,6 +110,9 @@ outcomes `success`/`failure`. The runtime meters are `relay.scheduler.callback.d
 `executor.queued`, and `executor.pool.size` meters. The metric tests exercise denied callbacks, errors, and fixed
 tag-key cardinality. No customer or entity identifiers are tags.
 
+Review correction: the active-admission count is balanced under the gate monitor for accounting only; close does not
+inspect it or wait on it.
+
 ## Configuration, validation, and cardinality
 
 Scheduler pool sizes and lifecycle flags are hard-coded invariants; there is no operator property that can reduce the
