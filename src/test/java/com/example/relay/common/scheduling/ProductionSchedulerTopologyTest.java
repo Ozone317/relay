@@ -17,6 +17,12 @@ import java.util.Map;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.actuate.autoconfigure.metrics.MetricsAutoConfiguration;
+import org.springframework.boot.actuate.autoconfigure.metrics.export.simple.SimpleMetricsExportAutoConfiguration;
+import org.springframework.boot.actuate.autoconfigure.metrics.task.TaskExecutorMetricsAutoConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Configuration;
@@ -27,6 +33,27 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 class ProductionSchedulerTopologyTest {
 
     @Test
+    void bootBindsPoolMetersForRecurringProductionSchedulers() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(MetricsAutoConfiguration.class,
+                        SimpleMetricsExportAutoConfiguration.class,
+                        TaskExecutorMetricsAutoConfiguration.class))
+                .withUserConfiguration(ProductionSchedulerConfig.class)
+                .run(context -> {
+                    assertTrue(context.getStartupFailure() == null,
+                            () -> "scheduler metrics context failed: " + context.getStartupFailure());
+                    MeterRegistry registry = context.getBean(MeterRegistry.class);
+                    for (String schedulerName : new String[] { SchedulerNames.DELIVERY_PROGRESS,
+                            SchedulerNames.DELIVERY_RECONCILIATION, SchedulerNames.PASSWORD_RESET_MAINTENANCE }) {
+                        for (String meterName : new String[] { "executor.active", "executor.queued", "executor.pool.size" }) {
+                            assertNotNull(registry.find(meterName).tag("name", schedulerName).meter(),
+                                    () -> "missing " + meterName + " for " + schedulerName);
+                        }
+                    }
+                });
+    }
+
+    @Test
     void everyProductionScheduledCallbackHasItsApprovedFixedDelayRoute() throws Exception {
         Map<Callback, Route> expected = Map.of(new Callback(RetryScheduler.class, "scheduledReleaseDueRetries"),
                 new Route("${relay.retry.scheduler-interval}", "deliveryProgressTaskScheduler"),
@@ -34,9 +61,9 @@ class ProductionSchedulerTopologyTest {
                 new Route("${relay.retry.dispatcher-interval}", "deliveryProgressTaskScheduler"),
                 new Callback(ReconciliationSweeper.class, "scheduledSweep"),
                 new Route("${relay.reconciliation.interval}", "deliveryReconciliationTaskScheduler"),
-                new Callback(PasswordResetEmailRecoverySweeper.class, "sweep"),
+                new Callback(PasswordResetEmailRecoverySweeper.class, "scheduledSweep"),
                 new Route("${relay.password-reset.email-recovery.interval}", "passwordResetMaintenanceTaskScheduler"),
-                new Callback(PasswordResetTokenCleanupTask.class, "cleanup"),
+                new Callback(PasswordResetTokenCleanupTask.class, "scheduledCleanup"),
                 new Route("${relay.password-reset.cleanup.interval}", "passwordResetMaintenanceTaskScheduler"));
 
         assertEquals(5, expected.size());

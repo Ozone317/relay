@@ -1,5 +1,7 @@
 package com.example.relay.common.scheduling;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.util.ErrorHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -8,23 +10,27 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 public class ProductionSchedulerConfig {
 
     @Bean(name = SchedulerNames.DELIVERY_PROGRESS)
-    ThreadPoolTaskScheduler deliveryProgressTaskScheduler() {
-        return scheduler(2, "relay-delivery-progress-");
+    ThreadPoolTaskScheduler deliveryProgressTaskScheduler(SchedulerErrorHandlerFactory errorHandlerFactory) {
+        return scheduler(2, "relay-delivery-progress-",
+                errorHandlerFactory.forScheduler(SchedulerNames.DELIVERY_PROGRESS));
     }
 
     @Bean(name = SchedulerNames.DELIVERY_RECONCILIATION)
-    ThreadPoolTaskScheduler deliveryReconciliationTaskScheduler() {
-        return scheduler(1, "relay-delivery-reconciliation-");
+    ThreadPoolTaskScheduler deliveryReconciliationTaskScheduler(SchedulerErrorHandlerFactory errorHandlerFactory) {
+        return scheduler(1, "relay-delivery-reconciliation-",
+                errorHandlerFactory.forScheduler(SchedulerNames.DELIVERY_RECONCILIATION));
     }
 
     @Bean(name = SchedulerNames.PASSWORD_RESET_MAINTENANCE)
-    ThreadPoolTaskScheduler passwordResetMaintenanceTaskScheduler() {
-        return scheduler(2, "relay-password-reset-maintenance-");
+    ThreadPoolTaskScheduler passwordResetMaintenanceTaskScheduler(SchedulerErrorHandlerFactory errorHandlerFactory) {
+        return scheduler(2, "relay-password-reset-maintenance-",
+                errorHandlerFactory.forScheduler(SchedulerNames.PASSWORD_RESET_MAINTENANCE));
     }
 
     @Bean(name = SchedulerNames.WEBHOOK_DEADLINE)
-    ThreadPoolTaskScheduler webhookDeadlineTaskScheduler() {
-        return scheduler(1, "relay-webhook-deadline-");
+    ThreadPoolTaskScheduler webhookDeadlineTaskScheduler(SchedulerErrorHandlerFactory errorHandlerFactory) {
+        return scheduler(1, "relay-webhook-deadline-",
+                errorHandlerFactory.forScheduler(SchedulerNames.WEBHOOK_DEADLINE));
     }
 
     @Bean(name = SchedulerNames.UNCLASSIFIED_DEFAULT)
@@ -32,7 +38,18 @@ public class ProductionSchedulerConfig {
         return new UnclassifiedTaskScheduler();
     }
 
-    private ThreadPoolTaskScheduler scheduler(int poolSize, String threadNamePrefix) {
+    @Bean
+    ScheduledJobMetrics scheduledJobMetrics(MeterRegistry meterRegistry) {
+        return new ScheduledJobMetrics(meterRegistry);
+    }
+
+    @Bean
+    SchedulerErrorHandlerFactory schedulerErrorHandlerFactory(MeterRegistry meterRegistry) {
+        return new SchedulerErrorHandlerFactory(meterRegistry);
+    }
+
+    private ThreadPoolTaskScheduler scheduler(int poolSize, String threadNamePrefix,
+            ErrorHandler errorHandler) {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         scheduler.setPoolSize(poolSize);
         scheduler.setThreadNamePrefix(threadNamePrefix);
@@ -42,6 +59,7 @@ public class ProductionSchedulerConfig {
         scheduler.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
         scheduler.setWaitForTasksToCompleteOnShutdown(true);
         scheduler.setAwaitTerminationSeconds(5);
+        scheduler.setErrorHandler(errorHandler);
         return scheduler;
     }
 }

@@ -9,7 +9,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.example.relay.common.scheduling.SchedulerNames;
+import com.example.relay.common.scheduling.ScheduledJobMetrics;
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
+import java.time.Duration;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Component
 public class RetryScheduler {
@@ -18,18 +21,32 @@ public class RetryScheduler {
 
     private final ReadyWorkRepository readyWorkRepository;
     private final RetryProperties retryProperties;
+    private final ScheduledJobMetrics scheduledJobMetrics;
 
     public RetryScheduler(ReadyWorkRepository readyWorkRepository, RetryProperties retryProperties) {
+        this(readyWorkRepository, retryProperties, null);
+    }
+
+    @Autowired
+    public RetryScheduler(ReadyWorkRepository readyWorkRepository, RetryProperties retryProperties,
+            ScheduledJobMetrics scheduledJobMetrics) {
         this.readyWorkRepository = readyWorkRepository;
         this.retryProperties = retryProperties;
+        this.scheduledJobMetrics = scheduledJobMetrics;
     }
 
     @Scheduled(fixedDelayString = "${relay.retry.scheduler-interval}", scheduler = SchedulerNames.DELIVERY_PROGRESS)
     public void scheduledReleaseDueRetries() {
-        if (!retryProperties.isSchedulingEnabled()) {
-            return;
-        }
-        releaseDueRetries();
+        runScheduled("retry-promotion", retryProperties.getSchedulerInterval(), () -> {
+            if (retryProperties.isSchedulingEnabled()) {
+                releaseDueRetries();
+            }
+        });
+    }
+
+    private void runScheduled(String job, Duration fixedDelay, Runnable callback) {
+        if (scheduledJobMetrics == null) callback.run();
+        else scheduledJobMetrics.run(job, fixedDelay, callback);
     }
 
     public void releaseDueRetries() {

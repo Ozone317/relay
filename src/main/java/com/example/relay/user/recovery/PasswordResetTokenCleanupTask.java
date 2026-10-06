@@ -2,10 +2,12 @@ package com.example.relay.user.recovery;
 
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.common.scheduling.SchedulerNames;
+import com.example.relay.common.scheduling.ScheduledJobMetrics;
 import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,11 +24,19 @@ public class PasswordResetTokenCleanupTask {
 
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordResetTokenCleanupProperties properties;
+    private final ScheduledJobMetrics scheduledJobMetrics;
 
     public PasswordResetTokenCleanupTask(PasswordResetTokenRepository passwordResetTokenRepository,
             PasswordResetTokenCleanupProperties properties) {
+        this(passwordResetTokenRepository, properties, null);
+    }
+
+    @Autowired
+    public PasswordResetTokenCleanupTask(PasswordResetTokenRepository passwordResetTokenRepository,
+            PasswordResetTokenCleanupProperties properties, ScheduledJobMetrics scheduledJobMetrics) {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.properties = properties;
+        this.scheduledJobMetrics = scheduledJobMetrics;
     }
 
     /**
@@ -37,10 +47,19 @@ public class PasswordResetTokenCleanupTask {
      * call to keep out of the transaction here, so a plain method-level annotation is sufficient - no
      * {@code TransactionTemplate} needed.
      */
+    @Transactional
+    public void cleanup() {
+        cleanupOnce();
+    }
+
     @Scheduled(fixedDelayString = "${relay.password-reset.cleanup.interval}",
             scheduler = SchedulerNames.PASSWORD_RESET_MAINTENANCE)
     @Transactional
-    public void cleanup() {
+    public void scheduledCleanup() {
+        scheduledJobMetrics.run("password-reset-token-cleanup", properties.getInterval(), this::cleanupOnce);
+    }
+
+    private void cleanupOnce() {
         Instant threshold = Instant.now().minus(properties.getRetention());
         int deleted = passwordResetTokenRepository.deleteExpiredBefore(threshold);
         if (deleted > 0) {
