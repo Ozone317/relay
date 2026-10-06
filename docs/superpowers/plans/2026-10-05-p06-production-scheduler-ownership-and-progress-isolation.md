@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** READY TO IMPLEMENT after the 2026-10-06 amendment pass; do not start without explicit approval.
+**Status:** AMENDED 2026-10-06 — AWAITING REVIEW; do not resume implementation without explicit approval.
 
 **Goal:** Give every production scheduled callback explicit, lifecycle-safe ownership so unrelated work cannot prevent delivery progress or maintenance invocation.
 
-**Architecture:** Five fixed-delay callbacks route through three explicit `ThreadPoolTaskScheduler` domains sized to their member loops. A threadless fail-fast default rejects unclassified callbacks, the static webhook deadline scheduler becomes context-owned, and P00 continues to suppress scheduled registration centrally.
+**Architecture:** Five fixed-delay callbacks route through three explicit `ThreadPoolTaskScheduler` domains sized to their member loops. A context-owned, synchronized Relay admission gate closes at the start of `ContextClosedEvent`, before ordinary executor shutdown, and a thin callback runner composes that gate with existing scheduler metrics. A threadless fail-fast default rejects unclassified callbacks, the static webhook deadline scheduler becomes context-owned without joining the recurring-business gate, and P00 continues to suppress scheduled registration centrally.
 
 **Tech Stack:** Java 21, Spring Boot 3.5.16, Spring Framework 6.2.19, Micrometer 1.15.12, JUnit 5, Awaitility, PostgreSQL 16/Testcontainers, RabbitMQ/Testcontainers
 
@@ -22,13 +22,16 @@
 - Pool sizes and lifecycle flags are code-owned invariants, not operator tuning properties.
 - Use latches, barriers, captured registration, queue state, and committed state. Bounded awaits are failure limits only.
 - Metrics use fixed scheduler/job/outcome tags and no customer or entity identifiers.
+- Early context close remains ordinary `shutdown()`; destruction remains `shutdownNow()` plus bounded await.
+- Once Relay's synchronized admission boundary closes, no not-yet-admitted scheduled callback may begin business work.
+- The webhook deadline scheduler does not use the recurring-business admission gate.
 - Do not reformat or modify unrelated user files in the dirty worktree.
 
 ## Review Focus
 
 - A new unqualified callback fails the inventory test and application startup; Task 1.
 - One blocked fixed-delay member cannot consume both slots of a two-thread domain; Task 1.
-- Context close cancels queued/future work and releases threads across cached/dirtied contexts; Task 4.
+- Context close closes Relay business admission, rejects new submissions, and releases threads across cached/dirtied contexts; Task 4.
 - Concurrent instances preserve P04/P05/ready-work/token invariants; Task 5.
 - Completed HTTP work removes its deadline task and context close removes the old static lifecycle leak; Task 3.
 
@@ -42,6 +45,9 @@ New production files:
 - `common/scheduling/ProductionSchedulerConfig.java`: scheduler beans and lifecycle policy.
 - `common/scheduling/UnclassifiedTaskScheduler.java`: threadless fail-fast default.
 - `common/scheduling/ScheduledJobMetrics.java`: callback duration/count/lag.
+- `common/scheduling/ScheduledJob.java`: closed five-value job identity used for bounded telemetry.
+- `common/scheduling/ScheduledCallbackAdmission.java`: synchronized context-close admission boundary.
+- `common/scheduling/ScheduledCallbackRunner.java`: composes admission, denial telemetry, and existing callback metrics.
 - `common/scheduling/SchedulerErrorHandlerFactory.java`: scheduler error logging/counter.
 - `deliveryengine/config/DeliveryEngineAsyncConfig.java`: existing clock and ready-confirmation executor.
 
@@ -277,10 +283,29 @@ git commit -m "fix: bind webhook deadlines to context lifecycle"
 ## Task 4: P00 opt-in topology and shutdown proof
 
 **Files:**
+- Create: `src/main/java/com/example/relay/common/scheduling/ScheduledCallbackAdmission.java`
+- Create: `src/main/java/com/example/relay/common/scheduling/ScheduledCallbackRunner.java`
+- Create: `src/main/java/com/example/relay/common/scheduling/ScheduledJob.java`
+- Modify: `src/main/java/com/example/relay/common/scheduling/ScheduledJobMetrics.java`
+- Modify: all five production `@Scheduled` callback classes named in the spec
+- Create: `src/test/java/com/example/relay/common/scheduling/ScheduledCallbackAdmissionTest.java`
+- Modify: `src/test/java/com/example/relay/common/scheduling/ScheduledJobMetricsTest.java`
+- Modify: `src/test/java/com/example/relay/common/scheduling/ProductionSchedulerTopologyTest.java`
+- Modify: `src/test/java/com/example/relay/user/recovery/PasswordResetTokenCleanupTaskTest.java`
 - Modify: `BackgroundExecutionContextPolicyTest.java`
 - Modify: `BackgroundExecutionCrossContextRegressionTest.java`
 - Modify: `ProductionSchedulerLifecycleTest.java`
 - Leave `BackgroundExecutionContextCustomizerFactory.java` unchanged unless a failing RED test proves a central-policy defect.
+
+**Interfaces:**
+- `boolean ScheduledCallbackAdmission.runIfOpen(Runnable admittedBody)` linearizes admission and invokes the body only
+  after recording admission under the same monitor used by close.
+- `void ScheduledCallbackRunner.run(ScheduledJob job, Duration fixedDelay, Runnable businessBody)` applies admission first,
+  then existing callback metrics and business work, or records one bounded admission denial.
+- `void ScheduledJobMetrics.run(ScheduledJob job, Duration fixedDelay, Runnable callback)` preserves admitted callback
+  duration/lag semantics while constraining job tags to the approved enum.
+- `void ScheduledJobMetrics.recordAdmissionDenied(ScheduledJob job)` increments
+  `relay.scheduler.admission.denied{job}` without recording duration, lag, or success.
 
 - [ ] **Step 1: Expand the P00 descriptor**
 
@@ -297,13 +322,76 @@ Assert the exact five routes. Ordinary context still has no scheduled processor 
 
 Use `@SpringBootTest`, `@EnableTestBackgroundExecution(SCHEDULING)`, one-hour test cadences, and empty DB state. Inspect `ScheduledTaskHolder` runnables and assert all five method/qualifier pairs. Assert production bean topology; do not replace schedulers with fakes.
 
-- [ ] **Step 3: Add cached/dirtied lifecycle proof**
+- [ ] **Step 3: Write RED admission and linearization tests**
+
+In `ScheduledCallbackAdmissionTest`, prove the two legal total orders with latches/barriers and a package-private
+boundary probe rather than sleeps:
+
+1. admission owns the synchronization boundary first, records admission, and then close contends; close transitions
+   without waiting for the admitted body, which is classified as running work and may finish afterward;
+2. close owns the same boundary first and changes the state to closed; the contending callback is denied and its
+   business latch remains untouched.
+
+The probe may pause a contender while it owns the private boundary solely to make both orders deterministic. It must
+not expose a public production control or create an independent state check. Add mutation checks showing that an
+unsynchronized observe-open/enter-later implementation fails the race test. Add a parent/child context case: closing
+the child must leave the parent gate open, while the parent's own close event closes it. Assert the production enum has
+exactly the five approved metric identifiers.
+
+- [ ] **Step 4: Implement the narrow admission boundary**
+
+Create a context-owned singleton `ScheduledCallbackAdmission` that retains its owning `ApplicationContext` and listens
+at `Ordered.HIGHEST_PRECEDENCE`. It must ignore an event unless
+`event.getApplicationContext() == owningApplicationContext`, matching Spring's executor identity rule. Under one
+private monitor, `runIfOpen` either denies or records admission; it releases the monitor before invoking the admitted
+body and decrements the active count in `finally`. The close listener changes open to closed under that same monitor,
+but does not wait for or interrupt admitted work.
+
+Create `ScheduledCallbackRunner` as the only composition point. On admission it invokes
+`ScheduledJobMetrics.run(job, fixedDelay, businessBody)`. On denial it invokes only
+`ScheduledJobMetrics.recordAdmissionDenied(job)`. Do not put context lifecycle state in metrics and do not implement
+the gate as a `ThreadPoolTaskScheduler` task decorator.
+
+Use a closed `ScheduledJob` enum with exactly the five approved tag values. The runner and denial metric accept the
+enum, not arbitrary strings; extend architecture tests to reject missing or extra job identities.
+
+- [ ] **Step 5: Route all five recurring entry methods through the runner**
+
+Replace their direct `ScheduledJobMetrics.run(...)` calls with `ScheduledCallbackRunner.run(...)`. Keep the existing
+enable check inside the supplied business body, so an admitted disabled callback remains a successful measured no-op.
+Keep `ReconciliationSweeper.scheduledSweep()` as one admitted synchronous body containing both phases. Extend the
+production callback inventory/architecture guard to assert every production `@Scheduled` owner depends on the runner.
+
+For `PasswordResetTokenCleanupTask`, remove `@Transactional` only from `scheduledCleanup()` because proxy advice would
+otherwise start a transaction before method entry/admission. Inject the existing `PlatformTransactionManager` pattern
+used by `EmailDispatchConsumer`, construct a `TransactionTemplate`, and execute the unchanged `cleanupOnce()` inside
+that template only within the admitted business body. Keep the direct-call `cleanup()` method transactional. RED/GREEN
+tests must prove denial invokes neither `PlatformTransactionManager.getTransaction(...)` nor the repository, while an
+admitted scheduled cleanup still performs one atomic delete transaction.
+
+Do not apply the gate to `webhookDeadlineTaskScheduler`: deadline tasks are demand-driven local cancellation of HTTP
+work already owned by this JVM, not recurring business admission. Preserve Task 3's future ownership, prompt
+remove-on-cancel behavior, and monotonic P03 deadline.
+
+- [ ] **Step 6: Add cached/dirtied lifecycle proof**
 
 Capture scheduler executor identities. After the existing `AFTER_CLASS` close event, assert shutdown. A second opt-in context owns different executors and no first-context named thread remains.
 
-- [ ] **Step 4: Prove queued callbacks do not start after close**
+- [ ] **Step 7: Prove queued wrappers cannot cross business admission after close**
 
-Queue work behind controlled blockers, begin close, release, and assert the queued latch remains untouched. Assert post-close submission rejects.
+For each of the three recurring-business schedulers, occupy every configured worker with an already-admitted
+interruptible blocker and queue an immediately-ready callback behind the saturated pool. The webhook deadline
+scheduler is explicitly outside this test and outside the admission gate. Do not use real `context.close()` for the wrapper-denial phase:
+destruction could call `shutdownNow()` and drain the queued wrappers before they expose admission behavior. Instead,
+explicitly publish the owning `ContextClosedEvent`, await the gate's synchronized closed transition and ordinary
+executor shutdown, then release the blockers. Permit every queued wrapper to run, and assert none crosses the Relay
+business-work boundary; each records one admission denial but no duration, lag, or success. Only after those assertions
+call `context.close()` to prove termination and thread cleanup for that phase-isolated context.
+
+Use a separate fresh context for the destruction proof. Keep already-admitted interruptible callbacks running while
+real `context.close()` traverses the ordinary early-shutdown and later destruction phases; assert destruction interrupts
+them and the bounded await terminates the executors. Assert post-close scheduler submission still rejects. Do not try
+to prove interruption with the phase-isolated context after its blockers have already been released.
 
 Also distinguish the three lifecycle claims in assertions and test names: Spring context close performs early
 `shutdown()`, destruction performs `shutdownNow()` plus a bounded five-second await, and executor termination requires
@@ -311,19 +399,30 @@ running work to finish or honor interruption. Verify interruptible callbacks ter
 treat `daemon=true` as cleanup evidence; it is retained only so an interruption-ignoring callback cannot keep JVM
 termination alive after Spring's bounded lifecycle path.
 
-- [ ] **Step 5: Run GREEN**
+- [ ] **Step 8: Re-run Task 1-3 and Task 4 GREEN suites**
 
 ```bash
-./mvnw -q test -Dtest=BackgroundExecutionContextPolicyTest,BackgroundExecutionCrossContextRegressionTest,ProductionSchedulerLifecycleTest,ScheduledLoopEnabledSmokeTest
+./mvnw -q test -Dtest=ScheduledCallbackAdmissionTest,BackgroundExecutionContextPolicyTest,BackgroundExecutionCrossContextRegressionTest,ProductionSchedulerLifecycleTest,ScheduledLoopEnabledSmokeTest
+./mvnw -q test -Dtest=ProductionSchedulerTopologyTest,ScheduledProgressIsolationTest,ScheduledLoopEnabledSmokeTest,RetrySchedulerPostgresTest,ReadyWorkDispatcherIntegrationTest,ReconciliationSweeperIntegrationTest,PasswordResetEmailRecoverySweeperIntegrationTest,PasswordResetTokenCleanupTaskTest
+./mvnw -q test -Dtest=ScheduledJobMetricsTest,ProductionSchedulerTopologyTest,RetrySchedulerPostgresTest,ReconciliationSweeperIntegrationTest
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest,ApacheWebhookHttpTransportDeadlineTest,ApacheResponseConsumptionIntegrationTest,ApacheWebhookHttpTransportTest,DeliveryWorkerIntegrationTest,DeliveryReplayLifecycleIntegrationTest
 ```
 
-- [ ] **Step 6: Adversarial review and commit**
+The first command proves P00 suppression/opt-in and the admission boundary. The next three are the exact Task 1, Task
+2, and Task 3 regression gates: routing/fail-fast and production topology remain unchanged; disabled admitted
+callbacks remain successful metrics events; webhook deadline cancellation remains independent from recurring
+business admission.
 
-Review ordinary/scheduling/Rabbit/combined cache identities, refresh failure, close with running/queued work, and `AFTER_CLASS`. Confirm no scheduler-specific disable list exists.
+- [ ] **Step 9: Adversarial review and commit**
+
+Review both admission/close linearization orders, all workers saturated, an already-ready one-shot wrapper after early
+shutdown, already-admitted interruption at destruction, denial metric semantics, post-close rejection, ordinary/
+scheduling/Rabbit/combined cache identities, refresh failure, and `AFTER_CLASS`. Confirm no scheduler-specific disable
+list exists, no `TaskDecorator` gate exists, and webhook deadlines bypass the recurring-business gate.
 
 ```bash
-git add src/test/java/com/example/relay/support/background src/test/java/com/example/relay/common/scheduling/ProductionSchedulerLifecycleTest.java
-git commit -m "test: preserve P00 across scheduler domains"
+git add src/main/java/com/example/relay/common/scheduling src/main/java/com/example/relay/deliveryengine/{retry,dispatcher,reconciliation} src/main/java/com/example/relay/user/recovery src/test/java/com/example/relay/common/scheduling src/test/java/com/example/relay/support/background
+git commit -m "feat: fence scheduled callback admission during shutdown"
 ```
 
 ## Task 5: Multi-instance state semantics
@@ -431,7 +530,10 @@ Run the formatting/static command from CI. Record unrelated pre-existing failure
 
 - [ ] **Step 5: Inspect a real runtime graph**
 
-Record all scheduler/executor beans, registered methods/qualifiers, pools/prefixes/daemon/shutdown policies, Micrometer meters, zero ordinary P00 callbacks, five opt-in callbacks, and terminated opt-in executors after close.
+Record all scheduler/executor beans, registered methods/qualifiers, pools/prefixes/daemon/shutdown policies, the
+context-owned admission gate/runner, the five-value job enum, Micrometer meters including admission denial, zero
+ordinary P00 callbacks, five opt-in callbacks, child-context event isolation, and terminated opt-in executors after
+close.
 
 - [ ] **Step 6: Write the final audit**
 
@@ -439,7 +541,7 @@ Include resulting inventory, graph reconciliation, revision, three-run evidence,
 
 - [ ] **Step 7: Final adversarial review**
 
-Challenge all fifteen spec invariants. Temporarily add an unqualified callback, prove both guard layers fail, remove it, and rerun inventory. Run `git diff --check`; verify no retry/business/schema change.
+Challenge all seventeen spec invariants. Temporarily add an unqualified callback, prove both guard layers fail, remove it, and rerun inventory. Run `git diff --check`; verify no retry/business/schema change.
 
 - [ ] **Step 8: Commit**
 

@@ -1,7 +1,7 @@
 # P06 — Production Scheduler Ownership and Progress Isolation Design
 
 **Date:** 2026-10-05  
-**Status:** READY TO IMPLEMENT after the 2026-10-06 amendment pass; implementation still requires an explicit start  
+**Status:** AMENDED 2026-10-06 — AWAITING REVIEW; implementation must not resume without explicit approval
 **Scope:** production scheduled-callback routing, capacity isolation, scheduler lifecycle, P00 compatibility, and bounded scheduler health telemetry  
 **Out of scope:** retry policy or cadence changes, delivery/replay semantics, distributed scheduler leadership, P01–P05 redesign, billing/tiering, and general observability work
 
@@ -27,6 +27,10 @@ one fixed-delay task from overlapping itself, so one blocked member can consume 
 the other member from starting. Reconciliation remains separate because it is recovery work with a slower cadence and
 potentially many database and Rabbit operations. The static webhook deadline executor becomes context-owned but is not
 mixed with recurring maintenance.
+
+All five recurring callbacks also pass through a context-owned Relay admission boundary immediately before scheduler
+metrics and business work. Once that boundary closes on `ContextClosedEvent`, an executor wrapper may still be dequeued
+by the JDK, but it cannot begin Relay business work unless it linearized admission before the close transition.
 
 No scheduled job requires deployment-wide leader election for state correctness. PostgreSQL claims, row locks, P04
 execution-generation fencing, and P05 allocation locks remain authoritative.
@@ -139,6 +143,26 @@ The focused P00 suite also passed on current main:
   -Dtest=BackgroundExecutionContextPolicyTest,BackgroundExecutionCrossContextRegressionTest,ScheduledLoopEnabledSmokeTest
 ```
 
+### 5.1 Spring 6.2.19 close-window evidence
+
+Task 4's strengthened RED test saturated every worker in all four scheduler pools then present in the topology,
+including the demand-driven webhook-deadline scheduler, queued an immediately-ready one-shot task behind each pool,
+initiated context close, observed the early executor `shutdown()`, and then released the blockers. All four queued
+one-shot tasks executed before bean destruction (`queued latch: 4 -> 0`). A separate JDK 21 probe reproduced the result
+with one occupied `ScheduledThreadPoolExecutor` worker. This evidence establishes the executor behavior; the Relay
+business-admission gate designed below intentionally covers only the three recurring-business schedulers.
+
+This is expected behavior. Spring Framework 6.2.19's `ExecutorConfigurationSupport.initiateShutdown()` calls ordinary
+`ExecutorService.shutdown()` on `ContextClosedEvent`; destruction later calls `shutdownNow()` and awaits termination.
+For a non-periodic scheduled task, `executeExistingDelayedTasksAfterShutdownPolicy=false` removes the task only while
+its delay remains positive. An already-ready one-shot has no remaining delay and may execute when capacity becomes
+available. The setting still cancels not-yet-due one-shots, and
+`continueExistingPeriodicTasksAfterShutdownPolicy=false` cancels recurring fixed-delay tasks.
+
+Therefore P06 does not claim that the executor will never dequeue or invoke an already-ready wrapper after early
+shutdown. The production invariant is application-level: once the Relay admission boundary has closed, no scheduled
+callback that has not already crossed that boundary may begin business work.
+
 ## 6. Proposed ownership graph and rationale
 
 ```text
@@ -149,6 +173,10 @@ ScheduledAnnotationBeanPostProcessor -> TaskSchedulerRouter
   reset email recovery ---- scheduler="passwordResetMaintenanceTaskScheduler" --+
   reset token cleanup ----- scheduler="passwordResetMaintenanceTaskScheduler" --+ pool 2
   any empty qualifier ----- default bean "taskScheduler" -> fail startup
+
+five recurring method wrappers -> ScheduledCallbackRunner -> ScheduledCallbackAdmission
+  admitted -> ScheduledJobMetrics -> existing enable check and business work
+  denied   -> bounded admission-denied metric; no business work
 
 Webhook transport -> webhookDeadlineTaskScheduler (pool 1, one-shot local cancellations)
 Ready confirmations -> readyWorkConfirmationExecutor (unchanged worker capacity)
@@ -226,6 +254,67 @@ re-entrant, and protected by existing claims/fencing rather than by in-memory co
 callback only cancels an HTTP request local to the terminating JVM. Tests still must prove normal interruptible
 callbacks terminate and threads do not leak; daemon status is not accepted as evidence of correct cleanup.
 
+Spring/JDK executor policy alone is insufficient for an already-ready one-shot queued behind occupied workers: after
+early `shutdown()`, that wrapper can still run when a worker becomes free. P06 therefore adds two narrowly scoped
+components:
+
+- `ScheduledCallbackAdmission`, a context-owned singleton and highest-precedence `ContextClosedEvent` listener;
+- `ScheduledCallbackRunner`, a thin coordinator used by every production `@Scheduled` entry method.
+
+`ScheduledCallbackAdmission` owns a private monitor, an `open` flag, and an admitted-callback count used for bounded
+state inspection. `runIfOpen(Runnable)` acquires the monitor, rejects when closed, or records admission while still
+holding the monitor; it then releases the monitor and invokes the supplied body in `try/finally`. The close listener
+acquires the same monitor and changes `open` to false. It does not wait for admitted callbacks and does not interrupt
+them. Consequently admission and close have a total order:
+
+1. If admission owns the monitor first, it records admission before releasing the monitor. That callback is considered
+   running work even if the Java thread is descheduled before the supplied body begins; close may then proceed without
+   waiting, and the admitted callback follows the existing destruction/interruption contract.
+2. If close owns the monitor first, it changes the state to closed before releasing the monitor. Every later admission
+   attempt is denied and its supplied business body is never invoked.
+
+There is no independent `if (closing)` followed by a later call. The state decision and admission record are one
+synchronized linearization operation, so a callback cannot observe open, allow close to linearize, and only afterward
+commit admission. The listener retains its owning `ApplicationContext`, ignores propagated close events whose
+`event.getApplicationContext()` is not that exact instance, and uses highest precedence so Relay closes admission at
+the start of its handling of its own context-close event, before the scheduler's normal early-shutdown listener. The
+exact application-level boundary is the synchronized open-to-closed transition, not event-object creation or JDK
+wrapper dequeue. Closing a child context cannot close a parent-owned gate.
+
+`ScheduledCallbackRunner` composes this lifecycle decision with `ScheduledJobMetrics`: admitted work enters the
+existing metrics wrapper and then the existing enable check/business body; denied work never enters that wrapper.
+Keeping the primitive separate prevents metrics from owning application lifecycle. A `ThreadPoolTaskScheduler`
+`TaskDecorator` is rejected: in Spring 6.2.19 it wraps the underlying `RunnableScheduledFuture`, and skipping that
+wrapper can prevent one-shot future completion or periodic rescheduling bookkeeping.
+
+The complete recurring entry map is:
+
+| Annotated entry | Admitted body |
+|---|---|
+| `RetryScheduler.scheduledReleaseDueRetries()` | existing enable check, then `releaseDueRetries()` |
+| `ReadyWorkDispatcher.scheduledDispatch()` | existing enable check, then `dispatchOnce()` |
+| `ReconciliationSweeper.scheduledSweep()` | existing enable check, then the single synchronous two-phase `sweep()` |
+| `PasswordResetEmailRecoverySweeper.scheduledSweep()` | existing `sweepOnce()` body |
+| `PasswordResetTokenCleanupTask.scheduledCleanup()` | after admission, the existing delete body inside an explicit `TransactionTemplate` transaction |
+
+Each annotated entry invokes `ScheduledCallbackRunner` as its first scheduling concern; direct-call work methods stay
+available for existing non-scheduled tests and callers and do not acquire admission independently.
+
+`PasswordResetTokenCleanupTask.scheduledCleanup()` currently has method-level `@Transactional` advice, which would
+open a transaction before method entry and therefore before the admission boundary. P06 moves only the scheduled
+path's unchanged delete operation into an explicit `TransactionTemplate` inside the admitted body and removes
+`@Transactional` from the annotated entry method. The direct-call `cleanup()` method retains its existing transaction.
+A denied scheduled wrapper therefore acquires no transaction/connection and performs no repository call; an admitted
+wrapper still performs the same delete atomically. This is transaction-boundary placement, not a business-semantic
+change.
+
+This gate applies only to the five annotation-driven recurring business callbacks. It is not a generic shutdown
+framework, does not govern worker executors, and does not change P04/P05 or database ownership semantics. The
+demand-driven webhook deadline scheduler does not participate: its one-shot callback cancels an HTTP request already
+owned by the closing JVM, and its lifecycle is already governed by explicit `ScheduledFuture` cancellation plus the
+context-owned scheduler. Denying that cancellation through the recurring-business gate could prolong transport work
+during shutdown and provides no business-admission protection.
+
 Pool sizes and lifecycle flags are topology invariants in code, not operator tuning knobs. Existing business cadence,
 batch, retention, grace, and enable properties remain the configuration surface. This avoids an override silently
 reducing a pool below its isolation guarantee. No new per-job disable properties are introduced.
@@ -286,6 +375,8 @@ Consequently:
 
 - ordinary contexts still register zero autonomous production callbacks, including future callbacks;
 - scheduler beans may exist but have no recurring tasks and lazily create no threads until work is submitted;
+- the admission gate/runner beans may exist, but no ordinary context can autonomously reach them because the scheduled
+  annotation processor is absent; context close still closes the gate without creating scheduler work or threads;
 - `@EnableTestBackgroundExecution(SCHEDULING)` restores the real annotation processor and therefore the real production
   qualifiers/topology;
 - the opt-in annotation retains `@DirtiesContext(AFTER_CLASS)`, so live schedulers are not cached beyond the class;
@@ -303,18 +394,26 @@ P06 adds only bounded scheduler-health telemetry:
 - `relay.scheduler.callback.duration{job,outcome}` timer; its count is the execution counter;
 - `relay.scheduler.invocation.lag{job}` timer, measured at callback entry against the prior fixed-delay completion plus
   configured interval; the first invocation has no lag sample;
+- `relay.scheduler.admission.denied{job}` counter for a dequeued wrapper denied before Relay job admission;
 - `relay.scheduler.errors{scheduler}` counter from the scheduler error handler;
 - Spring Boot's existing executor binder for each `ThreadPoolTaskScheduler`, exposing active, queued, pool-size,
   completed, and related executor gauges tagged/named by the stable bean name.
 
 Job values are the five fixed names `retry-promotion`, `ready-dispatch`, `delivery-reconciliation`,
-`password-reset-email-recovery`, and `password-reset-token-cleanup`. Scheduler values are the four fixed bean names.
+`password-reset-email-recovery`, and `password-reset-token-cleanup`, represented by a closed `ScheduledJob` enum used
+by `ScheduledCallbackRunner` and `ScheduledJobMetrics`. Scheduler values are the four fixed bean names.
 No user, Message, Delivery, Attempt, Endpoint, token, or other entity identifier is a metric tag.
 
 These metrics describe scheduler admission and callback execution, not whether business work was performed. If a
 scheduled callback is admitted but its existing business enable flag makes the wrapped body a no-op, it still records
 one successful callback duration and, after the first invocation, an admission-lag sample. P06 adds no `enabled` tag
 and no business-work counter.
+
+An executor wrapper dequeued after close but denied at the Relay admission boundary is not a job invocation and is not
+a successful no-op. It records neither `relay.scheduler.callback.duration` nor `relay.scheduler.invocation.lag`, and
+it does not advance that job's next expected-start state. It increments
+`relay.scheduler.admission.denied{job}` once. `job` is restricted to the same five fixed values, so the new counter is
+bounded. This distinguishes a scheduler/JDK wrapper invocation from admission to Relay callback execution.
 
 The lag measure is scheduler admission lag, not database/Rabbit latency; callback duration captures the latter only as
 time spent inside the callback and does not diagnose its downstream cause. Alert thresholds are an operational owner
@@ -334,8 +433,13 @@ decision after observing production baselines.
 6. Preserve P00's ordinary-context assertion: no annotation processor and zero registered tasks.
 7. In a P00 scheduling-opt-in full context, inspect `ScheduledTaskHolder`/scheduled runnables and assert all five real
    callbacks and qualifiers are registered; assert the real scheduler beans have the approved topology.
-8. Schedule interruptible blockers, close contexts, and assert no post-close submission succeeds, executors are shut
-   down/terminated, and no named scheduler thread leaks. Repeat across multiple contexts.
+8. Saturate every worker in the three recurring-business schedulers with callbacks that have already crossed the Relay
+   admission boundary and queue an immediately-ready wrapper behind each pool. In a phase-isolated test, explicitly publish the owning
+   `ContextClosedEvent`, observe the gate's closed transition and ordinary executor shutdown, then release the
+   blockers before calling `context.close()`. Permit the JDK wrappers to execute and assert their business-work latches
+   remain untouched and each denial is metered. Close that context to prove termination and no named thread leak. In a
+   separate fresh context, keep already-admitted interruptible callbacks running through real `context.close()` and
+   prove destruction-time interruption and bounded termination. Also prove post-close scheduler submission rejection.
 9. Inventory committed P04/P05/ready-work concurrency evidence first and reuse it. Add PostgreSQL concurrency tests
    only for uncovered scheduled entry semantics, especially password-reset recovery and cleanup. Distinguish redundant
    reset email work from database/security corruption and apply the password-reset stop condition in Section 9.
@@ -347,6 +451,13 @@ decision after observing production baselines.
 12. Verify success, DNS, policy, connection/TLS, response/read, and timeout/race paths cancel their retained deadline
     future in `finally`; fast completion must remove the pending entry promptly rather than waiting 15 seconds. Verify
     context termination without changing the monotonic total-deadline contract.
+13. Unit-test the admission/close boundary with controlled contention in both orders. Latches/barriers and a
+    package-private boundary probe pause a contender while it owns the synchronization boundary: admission-first must
+    be classified as running work, while close-first must deny the callback and leave its business latch untouched.
+    Assert that close never waits for the admitted body and that a denied attempt cannot enter metrics or business work.
+14. Close a child application context and prove its propagated event does not close a parent-owned admission gate;
+    closing the owning parent does. For password-reset cleanup, prove a denied scheduled wrapper touches neither the
+    transaction manager nor repository, while an admitted wrapper retains one atomic delete transaction.
 
 Bounded await timeouts are test failure limits, not evidence of correctness. Ordering is established by latches,
 barriers, captured registration, affected-row counts, executor queue state, and committed database state.
@@ -376,6 +487,10 @@ scheduler explicitly.
 | Distributed scheduler leadership | No current job needs singleton invocation for database correctness; it would add a new availability dependency. |
 | Scheduler-specific test disable properties | Recreates the per-component omission problem P00 removed and would not protect future callbacks. |
 | Keep the static webhook deadline executor | It is not context-owned and cannot satisfy close/leak tests. |
+| Treat early executor `shutdown()` as a no-ready-wrapper guarantee | JDK 21 permits an already-due one-shot queued before shutdown to execute when capacity becomes available. |
+| Call `shutdownNow()` from the early close event | Changes the approved soft-shutdown/destruction phases and interrupts already-running callbacks earlier than intended. |
+| Gate through `ThreadPoolTaskScheduler.setTaskDecorator` | The decorator wraps `RunnableScheduledFuture`; skipping it can break future completion and recurring rescheduling bookkeeping. |
+| Put lifecycle state inside `ScheduledJobMetrics` | Mixes context lifecycle ownership with measurement and obscures the business-admission boundary. |
 
 ## 15. Explicit invariants
 
@@ -389,12 +504,18 @@ scheduler explicitly.
 8. P00 ordinary contexts register zero autonomous production callbacks; opt-in contexts use the real topology.
 9. P04 execution generations and P05 allocation locking remain the only relevant database authorities.
 10. No deployment-wide scheduler leader is required by P06.
-11. Scheduler resources are context-owned, reject work after close begins, and cannot hold JVM termination open.
+11. Scheduler resources are context-owned and reject new scheduler submissions after close begins. Once the
+    context-owned Relay admission boundary closes, no scheduled callback that has not already crossed it may begin
+    business work; an already-admitted callback is running work under the existing destruction/interruption contract.
 12. Scheduler metrics use only fixed low-cardinality scheduler/job/outcome values.
 13. The final implementation audit must account for every scheduling and executor facility in the resulting tree.
 14. Reconciliation remains one synchronous two-phase callback; P06 does not promise isolation between its phases.
 15. Every scheduled HTTP cancellation future is retained and canceled in `finally`; remove-on-cancel provides prompt
     queue removal but does not replace explicit ownership.
+16. All five production `@Scheduled` entry methods use `ScheduledCallbackRunner`; webhook deadline callbacks do not
+    use the recurring-business admission gate.
+17. The scheduled password-reset cleanup transaction begins only after Relay admission; denial performs no transaction
+    or repository work, while the direct-call cleanup transaction remains unchanged.
 
 ## 16. Unresolved owner decisions
 
