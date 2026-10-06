@@ -6,13 +6,26 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
+import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
+import com.example.relay.deliveryengine.reconciliation.ReconciliationProperties;
+import com.example.relay.deliveryengine.reconciliation.ReconciliationSweeper;
+import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
+import com.example.relay.deliveryengine.retry.RetryProperties;
+import com.example.relay.attempt.application.AttemptService;
+import com.example.relay.attempt.infrastructure.AttemptExecutionRepository;
+import com.example.relay.attempt.infrastructure.AttemptRepository;
+import com.example.relay.deliveryengine.publisher.AttemptPublisher;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
+import com.example.relay.deliveryengine.worker.ExecutionOwnershipMetrics;
 import org.junit.jupiter.api.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class ScheduledJobMetricsTest {
 
@@ -74,23 +87,80 @@ class ScheduledJobMetricsTest {
         boolean enabled = false;
         AtomicLong businessWork = new AtomicLong();
 
-        metrics.run("retry-dispatch", delay, () -> {
+        metrics.run("ready-dispatch", delay, () -> {
             if (enabled) {
                 businessWork.incrementAndGet();
             }
         });
         now.set(8);
-        metrics.run("retry-dispatch", delay, () -> {});
+        metrics.run("ready-dispatch", delay, () -> {});
 
         assertEquals(2.0, registry.get("relay.scheduler.callback.duration")
-                .tag("job", "retry-dispatch").tag("outcome", "success").timer().count());
+                .tag("job", "ready-dispatch").tag("outcome", "success").timer().count());
         assertEquals(1.0, registry.get("relay.scheduler.invocation.lag")
-                .tag("job", "retry-dispatch").timer().count());
+                .tag("job", "ready-dispatch").timer().count());
         assertEquals(List.of("job"), registry.get("relay.scheduler.invocation.lag")
-                .tag("job", "retry-dispatch").timer().getId().getTags().stream()
+                .tag("job", "ready-dispatch").timer().getId().getTags().stream()
                 .map(tag -> tag.getKey()).toList());
         assertEquals(0, businessWork.get());
         assertTrue(registry.getMeters().stream().noneMatch(meter -> meter.getId().getTag("enabled") != null));
+    }
+
+    @Test
+    void disabledProductionDispatcherRecordsAdmissionWithoutBusinessWork() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Queue<Long> times = new ArrayDeque<>(List.of(0L, 2L, 8L, 10L));
+        ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry, times::remove);
+        ReadyWorkRepository repository = mock(ReadyWorkRepository.class);
+        ReadyTaskPublisher publisher = mock(ReadyTaskPublisher.class);
+        RetryProperties properties = new RetryProperties();
+        properties.setSchedulingEnabled(false);
+        properties.setDispatcherInterval(Duration.ofNanos(5));
+        ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(repository, publisher, Runnable::run, properties,
+                metrics);
+
+        dispatcher.scheduledDispatch();
+        dispatcher.scheduledDispatch();
+
+        assertEquals(2.0, registry.get("relay.scheduler.callback.duration")
+                .tag("job", "ready-dispatch").tag("outcome", "success").timer().count());
+        assertEquals(4.0, registry.get("relay.scheduler.callback.duration")
+                .tag("job", "ready-dispatch").tag("outcome", "success").timer()
+                .totalTime(java.util.concurrent.TimeUnit.NANOSECONDS));
+        assertEquals(1, registry.get("relay.scheduler.invocation.lag")
+                .tag("job", "ready-dispatch").timer().count());
+        assertEquals(1.0, registry.get("relay.scheduler.invocation.lag")
+                .tag("job", "ready-dispatch").timer()
+                .totalTime(java.util.concurrent.TimeUnit.NANOSECONDS));
+        verifyNoInteractions(repository, publisher);
+    }
+
+    @Test
+    void disabledProductionReconciliationWrapperRecordsApprovedJobWithoutBusinessWork() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Queue<Long> times = new ArrayDeque<>(List.of(0L, 2L, 8L, 10L));
+        ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry, times::remove);
+        AttemptRepository attempts = mock(AttemptRepository.class);
+        AttemptExecutionRepository executions = mock(AttemptExecutionRepository.class);
+        AttemptPublisher publisher = mock(AttemptPublisher.class);
+        AttemptService service = mock(AttemptService.class);
+        ReconciliationProperties properties = new ReconciliationProperties();
+        properties.setSchedulingEnabled(false);
+        properties.setInterval(Duration.ofNanos(5));
+        ReconciliationSweeper sweeper = new ReconciliationSweeper(attempts, executions, publisher, service,
+                properties, mock(ExecutionOwnershipMetrics.class), metrics);
+
+        sweeper.scheduledSweep();
+        sweeper.scheduledSweep();
+
+        assertEquals(2.0, registry.get("relay.scheduler.callback.duration")
+                .tag("job", "delivery-reconciliation").tag("outcome", "success").timer().count());
+        assertEquals(1, registry.get("relay.scheduler.invocation.lag")
+                .tag("job", "delivery-reconciliation").timer().count());
+        assertEquals(1.0, registry.get("relay.scheduler.invocation.lag")
+                .tag("job", "delivery-reconciliation").timer()
+                .totalTime(java.util.concurrent.TimeUnit.NANOSECONDS));
+        verifyNoInteractions(attempts, executions, publisher, service);
     }
 
     @Test

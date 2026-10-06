@@ -53,7 +53,7 @@ public class ReadyWorkDispatcher {
             }
         };
         if (scheduledJobMetrics == null) callback.run();
-        else scheduledJobMetrics.run("retry-dispatch", retryProperties.getDispatcherInterval(), callback);
+        else scheduledJobMetrics.run("ready-dispatch", retryProperties.getDispatcherInterval(), callback);
     }
 
     public void dispatchOnce() {

@@ -74,7 +74,7 @@ public class ReconciliationSweeper {
             }
         };
         if (scheduledJobMetrics == null) callback.run();
-        else scheduledJobMetrics.run("reconciliation-sweep", reconciliationProperties.getInterval(), callback);
+        else scheduledJobMetrics.run("delivery-reconciliation", reconciliationProperties.getInterval(), callback);
     }
 
     public void sweep() {
