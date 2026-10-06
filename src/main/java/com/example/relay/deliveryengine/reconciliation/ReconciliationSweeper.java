@@ -10,6 +10,7 @@ import org.springframework.data.domain.Limit;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.example.relay.common.scheduling.SchedulerNames;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
@@ -47,7 +48,7 @@ public class ReconciliationSweeper {
         this.executionOwnershipMetrics = executionOwnershipMetrics;
     }
 
-    @Scheduled(fixedDelayString = "${relay.reconciliation.interval}")
+    @Scheduled(fixedDelayString = "${relay.reconciliation.interval}", scheduler = SchedulerNames.DELIVERY_RECONCILIATION)
     public void scheduledSweep() {
         if (!reconciliationProperties.isSchedulingEnabled()) {
             return;

@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.example.relay.common.scheduling.SchedulerNames;
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
 
 @Component
@@ -23,7 +24,7 @@ public class RetryScheduler {
         this.retryProperties = retryProperties;
     }
 
-    @Scheduled(fixedDelayString = "${relay.retry.scheduler-interval}", scheduler = "retryTaskScheduler")
+    @Scheduled(fixedDelayString = "${relay.retry.scheduler-interval}", scheduler = SchedulerNames.DELIVERY_PROGRESS)
     public void scheduledReleaseDueRetries() {
         if (!retryProperties.isSchedulingEnabled()) {
             return;

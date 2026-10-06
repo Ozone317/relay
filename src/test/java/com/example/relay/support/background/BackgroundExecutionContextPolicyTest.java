@@ -76,6 +76,7 @@ class BackgroundExecutionContextPolicyTest {
         @DynamicPropertySource
         static void attemptToEnableRabbitListeners(DynamicPropertyRegistry registry) {
             registry.add("spring.rabbitmq.listener.simple.auto-startup", () -> true);
+            registerInertEnvironmentProperties(registry);
         }
 
         @Autowired
@@ -212,10 +213,18 @@ class BackgroundExecutionContextPolicyTest {
     }
 
     private static void registerRabbitProperties(DynamicPropertyRegistry registry) {
+        registerInertEnvironmentProperties(registry);
         registry.add("spring.rabbitmq.host", RABBIT::getHost);
         registry.add("spring.rabbitmq.port", RABBIT::getAmqpPort);
         registry.add("spring.rabbitmq.username", RABBIT::getAdminUsername);
         registry.add("spring.rabbitmq.password", RABBIT::getAdminPassword);
+    }
+
+    private static void registerInertEnvironmentProperties(DynamicPropertyRegistry registry) {
+        registry.add("JWT_SECRET", () -> "test-only-jwt-secret-not-for-signing");
+        registry.add("RELAY_EMAIL_SENDER_EMAIL", () -> "test@example.invalid");
+        registry.add("RELAY_EMAIL_SENDER_NAME", () -> "Test Only");
+        registry.add("BREVO_API_KEY", () -> "test-only-api-key");
     }
 
     private static void assertProductionListenersRunning(

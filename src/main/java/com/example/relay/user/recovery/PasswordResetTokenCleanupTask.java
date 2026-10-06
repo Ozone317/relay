@@ -1,6 +1,7 @@
 package com.example.relay.user.recovery;
 
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
+import com.example.relay.common.scheduling.SchedulerNames;
 import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,7 +37,8 @@ public class PasswordResetTokenCleanupTask {
      * call to keep out of the transaction here, so a plain method-level annotation is sufficient - no
      * {@code TransactionTemplate} needed.
      */
-    @Scheduled(fixedDelayString = "${relay.password-reset.cleanup.interval}")
+    @Scheduled(fixedDelayString = "${relay.password-reset.cleanup.interval}",
+            scheduler = SchedulerNames.PASSWORD_RESET_MAINTENANCE)
     @Transactional
     public void cleanup() {
         Instant threshold = Instant.now().minus(properties.getRetention());

@@ -4,6 +4,7 @@ import com.example.relay.user.application.PasswordResetService;
 import com.example.relay.user.application.PasswordResetTokenService;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
+import com.example.relay.common.scheduling.SchedulerNames;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -57,7 +58,8 @@ public class PasswordResetEmailRecoverySweeper {
         this.properties = properties;
     }
 
-    @Scheduled(fixedDelayString = "${relay.password-reset.email-recovery.interval}")
+    @Scheduled(fixedDelayString = "${relay.password-reset.email-recovery.interval}",
+            scheduler = SchedulerNames.PASSWORD_RESET_MAINTENANCE)
     public void sweep() {
         Instant now = Instant.now();
         Instant threshold = now.minus(properties.getGrace());

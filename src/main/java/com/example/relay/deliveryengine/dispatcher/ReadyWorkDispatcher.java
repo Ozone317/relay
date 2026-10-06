@@ -1,6 +1,7 @@
 package com.example.relay.deliveryengine.dispatcher;
 
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
+import com.example.relay.common.scheduling.SchedulerNames;
 import com.example.relay.deliveryengine.publisher.ReadyPublishOutcome;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
 import com.example.relay.deliveryengine.retry.RetryProperties;
@@ -33,7 +34,7 @@ public class ReadyWorkDispatcher {
         this.retryProperties = retryProperties;
     }
 
-    @Scheduled(fixedDelayString = "${relay.retry.dispatcher-interval}", scheduler = "retryTaskScheduler")
+    @Scheduled(fixedDelayString = "${relay.retry.dispatcher-interval}", scheduler = SchedulerNames.DELIVERY_PROGRESS)
     public void scheduledDispatch() {
         if (!retryProperties.isSchedulingEnabled()) {
             return;

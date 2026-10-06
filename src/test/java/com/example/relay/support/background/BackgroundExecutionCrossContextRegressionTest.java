@@ -353,8 +353,8 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
             return properties;
         }
 
-        @Bean(name = "retryTaskScheduler")
-        ControllableTaskScheduler retryTaskScheduler() {
+        @Bean(name = "deliveryProgressTaskScheduler")
+        ControllableTaskScheduler deliveryProgressTaskScheduler() {
             return new ControllableTaskScheduler();
         }
 
