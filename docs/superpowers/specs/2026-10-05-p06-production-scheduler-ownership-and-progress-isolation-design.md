@@ -523,3 +523,19 @@ No correctness-blocking product decision remains. Operational owners must choose
 callback failures, and sustained executor saturation after baseline data exists. Separately, product/security owners may
 decide whether redundant password-reset recovery emails are acceptable; if not, that is a future database
 claim/idempotency project, not a reason to make P06 deployment-singleton.
+
+## 17. Implementation verification record (2026-10-06)
+
+Tasks 1–5 implementation revision audited: `f0bd44847baf37b3ae14ccdfd8ab84c701d9ee2c`.
+The fresh Task 6 source scan accounted for five explicit fixed-delay callbacks, four context-owned production
+schedulers, the threadless `taskScheduler` guard, and the independent executor/client lifecycle facilities; no static
+global scheduler, additional recurring registration mechanism, or undocumented recurring loop was found. The P00
+inventory/opt-in tests confirmed zero ordinary registrations and exactly five opt-in callbacks. The three repeated
+focused P06 runs and P00–P05, deadline, admission/lifecycle, and password-reset regression selections passed; the
+password-reset concurrency evidence remained class B with no security-relevant stop condition. The complete passing
+suite selection ran 898 tests with the previously documented unrelated
+`BrevoEmailSenderTest.send_throwsEmailSendException_on429RateLimited` method excluded after the uncapped suite
+reproduced its MockWebServer retry hang. The P06-touched Java files pass scoped Spotless; the global check still reports
+formatting violations outside that touched-file set. Full results, command selectors, mutation evidence, and the
+source-routing/executor matrices are recorded in
+`docs/reviews/2026-10-05-p06-production-scheduler-final-audit.md`.
