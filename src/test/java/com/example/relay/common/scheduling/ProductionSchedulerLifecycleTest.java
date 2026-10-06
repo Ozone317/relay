@@ -42,6 +42,7 @@ import org.apache.hc.core5.http.message.BasicClassicHttpResponse;
 import org.apache.hc.core5.io.CloseMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.support.DefaultLifecycleProcessor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
@@ -65,6 +66,81 @@ class ProductionSchedulerLifecycleTest {
     }
 
     @Test
+    void closedAdmissionDeniesReadyQueuedRecurringWrappersBeforeTheyReachBusinessWork() throws Exception {
+        AnnotationConfigApplicationContext context = schedulerContext();
+        Map<String, ThreadPoolTaskScheduler> schedulers = schedulers(context);
+        ScheduledCallbackAdmission admission = context.getBean(ScheduledCallbackAdmission.class);
+        ScheduledCallbackRunner runner = context.getBean(ScheduledCallbackRunner.class);
+        MeterRegistry registry = context.getBean(MeterRegistry.class);
+        List<SchedulerSpec> recurring = REAL_SCHEDULERS.subList(0, 3);
+        CountDownLatch blockersEntered = new CountDownLatch(5);
+        CountDownLatch blockersFinished = new CountDownLatch(5);
+        CountDownLatch releaseBlockers = new CountDownLatch(1);
+        CountDownLatch queuedBusinessWork = new CountDownLatch(recurring.size());
+        Map<String, ScheduledJob> queuedJobs = Map.of(
+                SchedulerNames.DELIVERY_PROGRESS, ScheduledJob.READY_DISPATCH,
+                SchedulerNames.DELIVERY_RECONCILIATION, ScheduledJob.DELIVERY_RECONCILIATION,
+                SchedulerNames.PASSWORD_RESET_MAINTENANCE, ScheduledJob.PASSWORD_RESET_EMAIL_RECOVERY);
+        try {
+            assertSchedulerTopology(schedulers);
+            for (SchedulerSpec spec : recurring) {
+                ThreadPoolTaskScheduler scheduler = schedulers.get(spec.name());
+                ScheduledJob queuedJob = queuedJobs.get(spec.name());
+                int slots = spec.poolSize();
+                for (int index = 0; index < slots; index++) {
+                    scheduler.schedule(() -> runner.run(ScheduledJob.RETRY_PROMOTION, Duration.ofHours(1), () -> {
+                        blockersEntered.countDown();
+                        try {
+                            releaseBlockers.await();
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            blockersFinished.countDown();
+                        }
+                    }), Instant.now());
+                }
+                scheduler.schedule(() -> runner.run(queuedJob, Duration.ofHours(1), queuedBusinessWork::countDown),
+                        Instant.now());
+            }
+            assertTrue(blockersEntered.await(5, TimeUnit.SECONDS), "all recurring scheduler workers must be occupied");
+            for (SchedulerSpec spec : recurring) {
+                assertTrue(awaitCondition(() -> schedulers.get(spec.name()).getScheduledThreadPoolExecutor()
+                        .getQueue().size() >= 1, 1000), spec.name() + " ready callback must queue behind saturation");
+            }
+
+            context.publishEvent(new ContextClosedEvent(context));
+            assertFalse(admission.runIfOpen(() -> {}), "the owning close event must close callback admission");
+            for (SchedulerSpec spec : recurring) {
+                assertTrue(schedulers.get(spec.name()).getScheduledThreadPoolExecutor().isShutdown(),
+                        spec.name() + " must enter early shutdown while queued callbacks are ready");
+                assertThrows(RejectedExecutionException.class,
+                        () -> schedulers.get(spec.name()).schedule(() -> {}, Instant.now()));
+            }
+
+            releaseBlockers.countDown();
+            assertTrue(awaitCondition(() -> queuedJobs.values().stream().allMatch(job -> registry
+                    .find("relay.scheduler.admission.denied").tag("job", job.metricTag()).counter() != null
+                    && registry.find("relay.scheduler.admission.denied").tag("job", job.metricTag()).counter()
+                    .count() == 1.0), 5000), "each ready queued wrapper must be drained and denied");
+            assertTrue(blockersFinished.await(5, TimeUnit.SECONDS), "released blockers must finish before context close");
+            assertEquals(recurring.size(), queuedBusinessWork.getCount(),
+                    "closed queued callbacks must not enter business work");
+            for (ScheduledJob job : queuedJobs.values()) {
+                assertEquals(0, registry.find("relay.scheduler.callback.duration").tag("job", job.metricTag())
+                        .meters().size(), "denied " + job + " callback must not record duration");
+                assertEquals(0, registry.find("relay.scheduler.invocation.lag").tag("job", job.metricTag())
+                        .meters().size(), "denied " + job + " callback must not record lag");
+            }
+            assertTrue(awaitCondition(() -> schedulers.values().stream()
+                    .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()), 6000),
+                    "real context scheduler executors must terminate after the queued callbacks drain");
+        } finally {
+            releaseBlockers.countDown();
+            context.close();
+        }
+    }
+
+    @Test
     void contextCloseShutsDownEarlyThenDestroyInterruptsAndTerminatesRunningWork() throws Exception {
         AnnotationConfigApplicationContext firstContext = schedulerContext();
         AnnotationConfigApplicationContext secondContext = schedulerContext();
@@ -83,11 +159,12 @@ class ProductionSchedulerLifecycleTest {
         Map<String, Thread> firstContextThreads = new ConcurrentHashMap<>();
         List<ScheduledFuture<?>> queuedTasks = new ArrayList<>();
         CountDownLatch queuedTasksRan = new CountDownLatch(REAL_SCHEDULERS.size());
+        ScheduledCallbackRunner runner = firstContext.getBean(ScheduledCallbackRunner.class);
         for (SchedulerSpec spec : REAL_SCHEDULERS) {
             ThreadPoolTaskScheduler scheduler = firstSchedulers.get(spec.name());
             CountDownLatch interrupted = new CountDownLatch(1);
             taskInterrupted.put(spec.name(), interrupted);
-            scheduler.schedule(() -> {
+            Runnable alreadyAdmittedWork = () -> {
                 firstContextThreads.put(spec.name(), Thread.currentThread());
                 tasksEntered.countDown();
                 try {
@@ -96,7 +173,13 @@ class ProductionSchedulerLifecycleTest {
                     interrupted.countDown();
                     Thread.currentThread().interrupt();
                 }
-            }, Instant.now());
+            };
+            if (SchedulerNames.WEBHOOK_DEADLINE.equals(spec.name())) {
+                scheduler.schedule(alreadyAdmittedWork, Instant.now());
+            } else {
+                scheduler.schedule(() -> runner.run(jobForScheduler(spec.name()), Duration.ofHours(1),
+                        alreadyAdmittedWork), Instant.now());
+            }
             queuedTasks.add(scheduler.schedule(queuedTasksRan::countDown, Instant.now().plusSeconds(3600)));
         }
         assertTrue(tasksEntered.await(1, TimeUnit.SECONDS));
@@ -180,6 +263,8 @@ class ProductionSchedulerLifecycleTest {
             return processor;
         });
         context.register(ProductionSchedulerConfig.class);
+        context.registerBean(ScheduledCallbackAdmission.class);
+        context.registerBean(ScheduledCallbackRunner.class);
         context.refresh();
         return context;
     }
@@ -190,6 +275,15 @@ class ProductionSchedulerLifecycleTest {
             schedulers.put(spec.name(), context.getBean(spec.name(), ThreadPoolTaskScheduler.class));
         }
         return schedulers;
+    }
+
+    private static ScheduledJob jobForScheduler(String name) {
+        return switch (name) {
+            case SchedulerNames.DELIVERY_PROGRESS -> ScheduledJob.RETRY_PROMOTION;
+            case SchedulerNames.DELIVERY_RECONCILIATION -> ScheduledJob.DELIVERY_RECONCILIATION;
+            case SchedulerNames.PASSWORD_RESET_MAINTENANCE -> ScheduledJob.PASSWORD_RESET_TOKEN_CLEANUP;
+            default -> throw new IllegalArgumentException("No recurring callback gate for " + name);
+        };
     }
 
     private static void assertSchedulerTopology(Map<String, ThreadPoolTaskScheduler> schedulers) {

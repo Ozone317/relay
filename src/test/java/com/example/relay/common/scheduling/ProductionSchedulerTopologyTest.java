@@ -92,6 +92,21 @@ class ProductionSchedulerTopologyTest {
     }
 
     @Test
+    void everyProductionScheduledOwnerDependsOnTheAdmissionRunner() {
+        for (Callback callback : new Callback[] {
+                new Callback(RetryScheduler.class, "scheduledReleaseDueRetries"),
+                new Callback(ReadyWorkDispatcher.class, "scheduledDispatch"),
+                new Callback(ReconciliationSweeper.class, "scheduledSweep"),
+                new Callback(PasswordResetEmailRecoverySweeper.class, "scheduledSweep"),
+                new Callback(PasswordResetTokenCleanupTask.class, "scheduledCleanup") }) {
+            long runnerFields = java.util.Arrays.stream(callback.type().getDeclaredFields())
+                    .filter(field -> field.getType() == ScheduledCallbackRunner.class)
+                    .count();
+            assertEquals(1, runnerFields, () -> callback + " must use exactly one ScheduledCallbackRunner");
+        }
+    }
+
+    @Test
     void unqualifiedScheduledCallbackFailsContextRefreshThroughTheGuard() {
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.register(SchedulingEnabledConfiguration.class);

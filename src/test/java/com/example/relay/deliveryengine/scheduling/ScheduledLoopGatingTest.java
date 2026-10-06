@@ -30,6 +30,7 @@ import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.retry.RetryScheduler;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.deliveryengine.worker.ExecutionOwnershipMetrics;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 
@@ -41,7 +42,8 @@ class ScheduledLoopGatingTest {
         ReadyTaskPublisher publisher = mock(ReadyTaskPublisher.class);
         RetryProperties properties = new RetryProperties();
         properties.setSchedulingEnabled(false);
-        ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(repository, publisher, directExecutor(), properties);
+        ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(repository, publisher, directExecutor(), properties,
+                ScheduledCallbackTestSupport.openRunner());
 
         dispatcher.scheduledDispatch();
         verifyNoInteractions(repository, publisher);
@@ -57,7 +59,7 @@ class ScheduledLoopGatingTest {
         ReadyWorkRepository repository = mock(ReadyWorkRepository.class);
         RetryProperties properties = new RetryProperties();
         properties.setSchedulingEnabled(false);
-        RetryScheduler scheduler = new RetryScheduler(repository, properties);
+        RetryScheduler scheduler = new RetryScheduler(repository, properties, ScheduledCallbackTestSupport.openRunner());
 
         scheduler.scheduledReleaseDueRetries();
         verifyNoInteractions(repository);
@@ -80,7 +82,8 @@ class ScheduledLoopGatingTest {
                 .thenReturn(List.of());
         when(executionRepository.findStaleInFlight(any(), anyInt())).thenReturn(List.of());
         ReconciliationSweeper sweeper = new ReconciliationSweeper(
-                attemptRepository, executionRepository, attemptPublisher, attemptService, properties, metrics);
+                attemptRepository, executionRepository, attemptPublisher, attemptService, properties, metrics,
+                ScheduledCallbackTestSupport.openRunner());
         sweeper.scheduledSweep();
         verifyNoInteractions(attemptRepository, executionRepository, attemptPublisher, attemptService);
         sweeper.sweep();
@@ -107,7 +110,8 @@ class ScheduledLoopGatingTest {
                 .thenReturn(List.of());
 
         ReconciliationSweeper sweeper = new ReconciliationSweeper(
-                attemptRepository, executionRepository, attemptPublisher, attemptService, properties, metrics);
+                attemptRepository, executionRepository, attemptPublisher, attemptService, properties, metrics,
+                ScheduledCallbackTestSupport.openRunner());
 
         sweeper.sweep();
 

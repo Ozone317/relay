@@ -23,11 +23,30 @@ import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import com.example.relay.deliveryengine.worker.ExecutionOwnershipMetrics;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import org.junit.jupiter.api.Test;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 class ScheduledJobMetricsTest {
+
+    @Test
+    void admissionDenialHasOnlyOneBoundedCounterAndNoCallbackMetric() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry);
+
+        metrics.recordAdmissionDenied(ScheduledJob.READY_DISPATCH);
+
+        assertEquals(1.0, registry.get("relay.scheduler.admission.denied")
+                .tag("job", "ready-dispatch").counter().count());
+        assertTrue(registry.getMeters().stream().noneMatch(meter -> meter.getId().getName().equals(
+                "relay.scheduler.callback.duration")));
+        assertTrue(registry.getMeters().stream().noneMatch(meter -> meter.getId().getName().equals(
+                "relay.scheduler.invocation.lag")));
+        assertEquals(List.of("job"), registry.get("relay.scheduler.admission.denied")
+                .tag("job", "ready-dispatch").counter().getId().getTags().stream()
+                .map(tag -> tag.getKey()).toList());
+    }
 
     @Test
     void recordsFirstSuccessThenAdmissionLagFromPriorCompletionAndFixedDelay() {
@@ -36,7 +55,7 @@ class ScheduledJobMetricsTest {
         ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry, times::remove);
         Duration delay = Duration.ofMillis(10);
 
-        metrics.run("retry-promotion", delay, () -> {});
+        metrics.run(ScheduledJob.RETRY_PROMOTION, delay, () -> {});
 
         assertEquals(1.0, registry.get("relay.scheduler.callback.duration")
                 .tag("job", "retry-promotion").tag("outcome", "success").timer().count());
@@ -45,7 +64,7 @@ class ScheduledJobMetricsTest {
         assertEquals(0, registry.getMeters().stream().filter(meter -> meter.getId().getName()
                 .equals("relay.scheduler.invocation.lag")).count());
 
-        metrics.run("retry-promotion", delay, () -> {});
+        metrics.run(ScheduledJob.RETRY_PROMOTION, delay, () -> {});
 
         assertEquals(1, registry.get("relay.scheduler.invocation.lag")
                 .tag("job", "retry-promotion").timer().count());
@@ -64,18 +83,18 @@ class ScheduledJobMetricsTest {
         ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry, nanoTime);
         RuntimeException failure = new RuntimeException("boom");
 
-        metrics.run("reconciliation", Duration.ofNanos(20), () -> {});
+        metrics.run(ScheduledJob.DELIVERY_RECONCILIATION, Duration.ofNanos(20), () -> {});
         RuntimeException thrown = assertThrows(RuntimeException.class,
-                () -> metrics.run("reconciliation", Duration.ofNanos(20), () -> { throw failure; }));
+                () -> metrics.run(ScheduledJob.DELIVERY_RECONCILIATION, Duration.ofNanos(20), () -> { throw failure; }));
 
         assertSame(failure, thrown);
         assertEquals(1.0, registry.get("relay.scheduler.callback.duration")
-                .tag("job", "reconciliation").tag("outcome", "failure").timer().count());
-        metrics.run("reconciliation", Duration.ofNanos(20), () -> {});
+                .tag("job", "delivery-reconciliation").tag("outcome", "failure").timer().count());
+        metrics.run(ScheduledJob.DELIVERY_RECONCILIATION, Duration.ofNanos(20), () -> {});
         assertEquals(2.0, registry.get("relay.scheduler.invocation.lag")
-                .tag("job", "reconciliation").timer().count());
+                .tag("job", "delivery-reconciliation").timer().count());
         assertEquals(5.0, registry.get("relay.scheduler.invocation.lag")
-                .tag("job", "reconciliation").timer().totalTime(java.util.concurrent.TimeUnit.NANOSECONDS));
+                .tag("job", "delivery-reconciliation").timer().totalTime(java.util.concurrent.TimeUnit.NANOSECONDS));
     }
 
     @Test
@@ -87,13 +106,13 @@ class ScheduledJobMetricsTest {
         boolean enabled = false;
         AtomicLong businessWork = new AtomicLong();
 
-        metrics.run("ready-dispatch", delay, () -> {
+        metrics.run(ScheduledJob.READY_DISPATCH, delay, () -> {
             if (enabled) {
                 businessWork.incrementAndGet();
             }
         });
         now.set(8);
-        metrics.run("ready-dispatch", delay, () -> {});
+        metrics.run(ScheduledJob.READY_DISPATCH, delay, () -> {});
 
         assertEquals(2.0, registry.get("relay.scheduler.callback.duration")
                 .tag("job", "ready-dispatch").tag("outcome", "success").timer().count());
@@ -117,7 +136,7 @@ class ScheduledJobMetricsTest {
         properties.setSchedulingEnabled(false);
         properties.setDispatcherInterval(Duration.ofNanos(5));
         ReadyWorkDispatcher dispatcher = new ReadyWorkDispatcher(repository, publisher, Runnable::run, properties,
-                metrics);
+                ScheduledCallbackTestSupport.runner(metrics));
 
         dispatcher.scheduledDispatch();
         dispatcher.scheduledDispatch();
@@ -148,7 +167,7 @@ class ScheduledJobMetricsTest {
         properties.setSchedulingEnabled(false);
         properties.setInterval(Duration.ofNanos(5));
         ReconciliationSweeper sweeper = new ReconciliationSweeper(attempts, executions, publisher, service,
-                properties, mock(ExecutionOwnershipMetrics.class), metrics);
+                properties, mock(ExecutionOwnershipMetrics.class), ScheduledCallbackTestSupport.runner(metrics));
 
         sweeper.scheduledSweep();
         sweeper.scheduledSweep();

@@ -28,6 +28,7 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
@@ -327,7 +328,8 @@ public class ReconciliationSweeperIntegrationTest implements SharedPostgresConta
                 allocationRepository, new com.example.relay.attempt.application.AttemptAllocationMetrics(
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
         ReconciliationSweeper delayedSweeper = new ReconciliationSweeper(attemptRepository, spyingRepository,
-                attemptPublisher, delayedAttemptService, reconciliationProperties, executionOwnershipMetrics);
+                attemptPublisher, delayedAttemptService, reconciliationProperties, executionOwnershipMetrics,
+                ScheduledCallbackTestSupport.openRunner());
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<?> sweep = executor.submit(delayedSweeper::sweep);

@@ -12,7 +12,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.example.relay.common.scheduling.SchedulerNames;
-import com.example.relay.common.scheduling.ScheduledJobMetrics;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.common.scheduling.ScheduledJob;
 import com.example.relay.attempt.application.AttemptService;
 import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.attempt.domain.AttemptStatus;
@@ -33,19 +34,7 @@ public class ReconciliationSweeper {
     private AttemptService attemptService;
     private ReconciliationProperties reconciliationProperties;
     private ExecutionOwnershipMetrics executionOwnershipMetrics;
-    private ScheduledJobMetrics scheduledJobMetrics;
-
-    public ReconciliationSweeper(
-        AttemptRepository attemptRepository,
-        AttemptExecutionRepository executionRepository,
-        AttemptPublisher attemptPublisher,
-        AttemptService attemptService,
-        ReconciliationProperties reconciliationProperties,
-        ExecutionOwnershipMetrics executionOwnershipMetrics
-    ) {
-        this(attemptRepository, executionRepository, attemptPublisher, attemptService, reconciliationProperties,
-                executionOwnershipMetrics, null);
-    }
+    private ScheduledCallbackRunner scheduledCallbackRunner;
 
     @Autowired
     public ReconciliationSweeper(
@@ -55,7 +44,7 @@ public class ReconciliationSweeper {
         AttemptService attemptService,
         ReconciliationProperties reconciliationProperties,
         ExecutionOwnershipMetrics executionOwnershipMetrics,
-        ScheduledJobMetrics scheduledJobMetrics
+        ScheduledCallbackRunner scheduledCallbackRunner
     ) {
         this.attemptRepository = attemptRepository;
         this.executionRepository = executionRepository;
@@ -63,18 +52,16 @@ public class ReconciliationSweeper {
         this.attemptService = attemptService;
         this.reconciliationProperties = reconciliationProperties;
         this.executionOwnershipMetrics = executionOwnershipMetrics;
-        this.scheduledJobMetrics = scheduledJobMetrics;
+        this.scheduledCallbackRunner = scheduledCallbackRunner;
     }
 
     @Scheduled(fixedDelayString = "${relay.reconciliation.interval}", scheduler = SchedulerNames.DELIVERY_RECONCILIATION)
     public void scheduledSweep() {
-        Runnable callback = () -> {
+        scheduledCallbackRunner.run(ScheduledJob.DELIVERY_RECONCILIATION, reconciliationProperties.getInterval(), () -> {
             if (reconciliationProperties.isSchedulingEnabled()) {
                 sweep();
             }
-        };
-        if (scheduledJobMetrics == null) callback.run();
-        else scheduledJobMetrics.run("delivery-reconciliation", reconciliationProperties.getInterval(), callback);
+        });
     }
 
     public void sweep() {

@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
 import com.example.relay.common.scheduling.ProductionSchedulerConfig;
+import com.example.relay.common.scheduling.ScheduledCallbackAdmission;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
 import com.example.relay.deliveryengine.config.DeliveryEngineAsyncConfig;
 import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
@@ -65,7 +67,8 @@ class ScheduledLoopEnabledSmokeTest {
     @Configuration(proxyBeanMethods = false)
     @EnableScheduling
     @EnableConfigurationProperties(RetryProperties.class)
-    @Import({RetryScheduler.class, ReadyWorkDispatcher.class, ProductionSchedulerConfig.class,
+    @Import({RetryScheduler.class, ReadyWorkDispatcher.class, ScheduledCallbackAdmission.class,
+            ScheduledCallbackRunner.class, ProductionSchedulerConfig.class,
             DeliveryEngineAsyncConfig.class})
     static class TestConfig {
 

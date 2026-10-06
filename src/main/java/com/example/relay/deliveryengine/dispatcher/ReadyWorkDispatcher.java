@@ -2,7 +2,8 @@ package com.example.relay.deliveryengine.dispatcher;
 
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
 import com.example.relay.common.scheduling.SchedulerNames;
-import com.example.relay.common.scheduling.ScheduledJobMetrics;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.common.scheduling.ScheduledJob;
 import com.example.relay.deliveryengine.publisher.ReadyPublishOutcome;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
 import com.example.relay.deliveryengine.retry.RetryProperties;
@@ -26,34 +27,26 @@ public class ReadyWorkDispatcher {
     private final ReadyTaskPublisher readyTaskPublisher;
     private final Executor confirmationExecutor;
     private final RetryProperties retryProperties;
-    private final ScheduledJobMetrics scheduledJobMetrics;
-
-    public ReadyWorkDispatcher(ReadyWorkRepository readyWorkRepository, ReadyTaskPublisher readyTaskPublisher,
-            @Qualifier("readyWorkConfirmationExecutor") Executor confirmationExecutor,
-            RetryProperties retryProperties) {
-        this(readyWorkRepository, readyTaskPublisher, confirmationExecutor, retryProperties, null);
-    }
+    private final ScheduledCallbackRunner scheduledCallbackRunner;
 
     @Autowired
     public ReadyWorkDispatcher(ReadyWorkRepository readyWorkRepository, ReadyTaskPublisher readyTaskPublisher,
             @Qualifier("readyWorkConfirmationExecutor") Executor confirmationExecutor,
-            RetryProperties retryProperties, ScheduledJobMetrics scheduledJobMetrics) {
+            RetryProperties retryProperties, ScheduledCallbackRunner scheduledCallbackRunner) {
         this.readyWorkRepository = readyWorkRepository;
         this.readyTaskPublisher = readyTaskPublisher;
         this.confirmationExecutor = confirmationExecutor;
         this.retryProperties = retryProperties;
-        this.scheduledJobMetrics = scheduledJobMetrics;
+        this.scheduledCallbackRunner = scheduledCallbackRunner;
     }
 
     @Scheduled(fixedDelayString = "${relay.retry.dispatcher-interval}", scheduler = SchedulerNames.DELIVERY_PROGRESS)
     public void scheduledDispatch() {
-        Runnable callback = () -> {
+        scheduledCallbackRunner.run(ScheduledJob.READY_DISPATCH, retryProperties.getDispatcherInterval(), () -> {
             if (retryProperties.isSchedulingEnabled()) {
                 dispatchOnce();
             }
-        };
-        if (scheduledJobMetrics == null) callback.run();
-        else scheduledJobMetrics.run("ready-dispatch", retryProperties.getDispatcherInterval(), callback);
+        });
     }
 
     public void dispatchOnce() {

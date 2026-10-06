@@ -28,6 +28,7 @@ import com.example.relay.event.infrastructure.EventRepository;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
@@ -251,7 +252,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
         RecordingPublisher publisher = new RecordingPublisher(unresolved);
         ConfirmationTrackingExecutor executor = new ConfirmationTrackingExecutor(confirmationExecutor);
         ReadyWorkDispatcher dispatcher =
-                new ReadyWorkDispatcher(readyWorkRepository, publisher, executor, retryProperties);
+                new ReadyWorkDispatcher(readyWorkRepository, publisher, executor, retryProperties,
+                        ScheduledCallbackTestSupport.openRunner());
 
         dispatcher.dispatchOnce();
         await().atMost(Duration.ofSeconds(5))
@@ -278,7 +280,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
         assertThat(reload(attempt).getReadyPublishedAt()).isNull();
 
         Attempt scheduled = createScheduledAttempt(Instant.now().minusSeconds(1));
-        new RetryScheduler(readyWorkRepository, retryProperties).releaseDueRetries();
+        new RetryScheduler(readyWorkRepository, retryProperties, ScheduledCallbackTestSupport.openRunner())
+                .releaseDueRetries();
         assertThat(reload(scheduled).getStatus()).isEqualTo(AttemptStatus.CREATED);
     }
 
@@ -291,7 +294,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
             throw new RejectedExecutionException("confirmation executor is closed");
         };
         ReadyWorkDispatcher dispatcher =
-                new ReadyWorkDispatcher(readyWorkRepository, publisher, rejectingExecutor, retryProperties);
+                new ReadyWorkDispatcher(readyWorkRepository, publisher, rejectingExecutor, retryProperties,
+                        ScheduledCallbackTestSupport.openRunner());
 
         dispatcher.dispatchOnce();
 
@@ -319,7 +323,8 @@ class ReadyWorkDispatcherIntegrationTest implements SharedPostgresContainer {
     }
 
     private ReadyWorkDispatcher dispatcher(ReadyTaskPublisher publisher) {
-        return new ReadyWorkDispatcher(readyWorkRepository, publisher, confirmationExecutor, retryProperties);
+        return new ReadyWorkDispatcher(readyWorkRepository, publisher, confirmationExecutor, retryProperties,
+                ScheduledCallbackTestSupport.openRunner());
     }
 
     private Attempt createCreatedAttempt() {

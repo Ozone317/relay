@@ -16,6 +16,7 @@ import com.example.relay.user.application.PasswordResetTokenService;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -53,7 +54,7 @@ class PasswordResetEmailRecoverySweeperTest {
         properties.setMaxRecoveryWindow(Duration.ofHours(1));
 
         underTest = new PasswordResetEmailRecoverySweeper(passwordResetTokenRepository, passwordResetService,
-                passwordResetTokenService, properties);
+                passwordResetTokenService, properties, ScheduledCallbackTestSupport.openRunner());
 
         logAppender = new ListAppender<>();
         logAppender.start();

@@ -5,14 +5,14 @@ import com.example.relay.user.application.PasswordResetTokenService;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.common.scheduling.SchedulerNames;
-import com.example.relay.common.scheduling.ScheduledJobMetrics;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.common.scheduling.ScheduledJob;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Limit;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -50,23 +50,16 @@ public class PasswordResetEmailRecoverySweeper {
     private final PasswordResetService passwordResetService;
     private final PasswordResetTokenService passwordResetTokenService;
     private final PasswordResetEmailRecoveryProperties properties;
-    private final ScheduledJobMetrics scheduledJobMetrics;
+    private final ScheduledCallbackRunner scheduledCallbackRunner;
 
     public PasswordResetEmailRecoverySweeper(PasswordResetTokenRepository passwordResetTokenRepository,
             PasswordResetService passwordResetService, PasswordResetTokenService passwordResetTokenService,
-            PasswordResetEmailRecoveryProperties properties) {
-        this(passwordResetTokenRepository, passwordResetService, passwordResetTokenService, properties, null);
-    }
-
-    @Autowired
-    public PasswordResetEmailRecoverySweeper(PasswordResetTokenRepository passwordResetTokenRepository,
-            PasswordResetService passwordResetService, PasswordResetTokenService passwordResetTokenService,
-            PasswordResetEmailRecoveryProperties properties, ScheduledJobMetrics scheduledJobMetrics) {
+            PasswordResetEmailRecoveryProperties properties, ScheduledCallbackRunner scheduledCallbackRunner) {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.passwordResetService = passwordResetService;
         this.passwordResetTokenService = passwordResetTokenService;
         this.properties = properties;
-        this.scheduledJobMetrics = scheduledJobMetrics;
+        this.scheduledCallbackRunner = scheduledCallbackRunner;
     }
 
     public void sweep() {
@@ -76,7 +69,7 @@ public class PasswordResetEmailRecoverySweeper {
     @Scheduled(fixedDelayString = "${relay.password-reset.email-recovery.interval}",
             scheduler = SchedulerNames.PASSWORD_RESET_MAINTENANCE)
     public void scheduledSweep() {
-        scheduledJobMetrics.run("password-reset-email-recovery", properties.getInterval(), this::sweepOnce);
+        scheduledCallbackRunner.run(ScheduledJob.PASSWORD_RESET_EMAIL_RECOVERY, properties.getInterval(), this::sweep);
     }
 
     private void sweepOnce() {

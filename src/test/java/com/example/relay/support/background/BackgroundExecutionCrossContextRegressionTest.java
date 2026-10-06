@@ -12,6 +12,7 @@ import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
 import com.example.relay.attempt.infrastructure.ReadyWorkRepositoryImpl;
 import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
 import com.example.relay.common.scheduling.ProductionSchedulerConfig;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
 import com.example.relay.common.scheduling.SchedulerNames;
 import com.example.relay.deliveryengine.publisher.ReadyPublishOutcome;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
@@ -19,6 +20,7 @@ import com.example.relay.deliveryengine.reconciliation.ReconciliationSweeper;
 import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.retry.RetryScheduler;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import com.zaxxer.hikari.HikariDataSource;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -230,44 +232,69 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
     void schedulingOptInAfterClassCloseTerminatesOwnedExecutorsAndNextContextGetsDistinctExecutors()
             throws Exception {
         TestContextManager firstManager = new TestContextManager(RealSchedulerOptInFixtureOne.class);
-        firstManager.beforeTestClass();
-        ConfigurableApplicationContext firstContext =
-                (ConfigurableApplicationContext) firstManager.getTestContext().getApplicationContext();
-        Map<String, ThreadPoolTaskScheduler> firstSchedulers = productionSchedulers(firstContext);
-        Map<String, Thread> firstThreads = new ConcurrentHashMap<>();
-        CountDownLatch firstCallbacksStarted = new CountDownLatch(firstSchedulers.size());
-        firstSchedulers.forEach((name, scheduler) -> scheduler.schedule(() -> {
-            firstThreads.put(name, Thread.currentThread());
-            firstCallbacksStarted.countDown();
-        }, Instant.now()));
-        assertTrue(firstCallbacksStarted.await(1, TimeUnit.SECONDS));
+        boolean firstAfterClassCompleted = false;
+        try {
+            firstManager.beforeTestClass();
+            ConfigurableApplicationContext firstContext =
+                    (ConfigurableApplicationContext) firstManager.getTestContext().getApplicationContext();
+            Map<String, ThreadPoolTaskScheduler> firstSchedulers = productionSchedulers(firstContext);
+            Map<String, Thread> firstThreads = new ConcurrentHashMap<>();
+            CountDownLatch firstCallbacksStarted = new CountDownLatch(firstSchedulers.size());
+            firstSchedulers.forEach((name, scheduler) -> scheduler.schedule(() -> {
+                firstThreads.put(name, Thread.currentThread());
+                firstCallbacksStarted.countDown();
+            }, Instant.now()));
+            assertTrue(firstCallbacksStarted.await(1, TimeUnit.SECONDS));
 
-        firstManager.getTestContext().markApplicationContextDirty(null);
-        firstManager.afterTestClass();
-        assertFalse(firstContext.isActive(), "AFTER_CLASS must close the dirtied scheduling context");
-        assertTrue(firstSchedulers.values().stream()
-                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isShutdown()),
-                "context close must stop submissions before executor destruction");
-        assertTrue(firstSchedulers.values().stream()
-                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()),
-                "destruction must interrupt work and finish the bounded await for interruptible callbacks");
-        assertTrue(firstThreads.values().stream().noneMatch(Thread::isAlive),
-                "no first-context scheduler worker may remain after AFTER_CLASS");
+            firstManager.getTestContext().markApplicationContextDirty(null);
+            firstManager.afterTestClass();
+            firstAfterClassCompleted = true;
+            assertFalse(firstContext.isActive(), "AFTER_CLASS must close the dirtied scheduling context");
+            assertTrue(firstSchedulers.values().stream()
+                    .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isShutdown()),
+                    "context close must stop submissions before executor destruction");
+            assertTrue(firstSchedulers.values().stream()
+                    .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()),
+                    "destruction must interrupt work and finish the bounded await for interruptible callbacks");
+            assertTrue(firstThreads.values().stream().noneMatch(Thread::isAlive),
+                    "no first-context scheduler worker may remain after AFTER_CLASS");
 
-        TestContextManager secondManager = new TestContextManager(RealSchedulerOptInFixtureTwo.class);
-        secondManager.beforeTestClass();
-        ConfigurableApplicationContext secondContext =
-                (ConfigurableApplicationContext) secondManager.getTestContext().getApplicationContext();
-        Map<String, ThreadPoolTaskScheduler> secondSchedulers = productionSchedulers(secondContext);
-        for (String schedulerName : firstSchedulers.keySet()) {
-            assertNotSame(firstSchedulers.get(schedulerName).getScheduledThreadPoolExecutor(),
-                    secondSchedulers.get(schedulerName).getScheduledThreadPoolExecutor(),
-                    schedulerName + " must be recreated for the next opt-in context");
+            TestContextManager secondManager = new TestContextManager(RealSchedulerOptInFixtureTwo.class);
+            boolean secondAfterClassCompleted = false;
+            try {
+                secondManager.beforeTestClass();
+                ConfigurableApplicationContext secondContext =
+                        (ConfigurableApplicationContext) secondManager.getTestContext().getApplicationContext();
+                Map<String, ThreadPoolTaskScheduler> secondSchedulers = productionSchedulers(secondContext);
+
+                for (String schedulerName : firstSchedulers.keySet()) {
+                    assertNotSame(firstSchedulers.get(schedulerName).getScheduledThreadPoolExecutor(),
+                            secondSchedulers.get(schedulerName).getScheduledThreadPoolExecutor(),
+                            schedulerName + " must be recreated for the next opt-in context");
+                }
+                secondManager.getTestContext().markApplicationContextDirty(null);
+                secondManager.afterTestClass();
+                secondAfterClassCompleted = true;
+                assertTrue(secondSchedulers.values().stream()
+                        .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()));
+            } finally {
+                if (!secondAfterClassCompleted) {
+                    closeTestContext(secondManager);
+                }
+            }
+        } finally {
+            if (!firstAfterClassCompleted) {
+                closeTestContext(firstManager);
+            }
         }
-        secondManager.getTestContext().markApplicationContextDirty(null);
-        secondManager.afterTestClass();
-        assertTrue(secondSchedulers.values().stream()
-                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()));
+    }
+
+    private static void closeTestContext(TestContextManager manager) throws Exception {
+        try {
+            manager.getTestContext().markApplicationContextDirty(null);
+        } finally {
+            manager.afterTestClass();
+        }
     }
 
     private static Map<String, ThreadPoolTaskScheduler> productionSchedulers(
@@ -464,8 +491,14 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
         }
 
         @Bean
-        RetryScheduler retryScheduler(ReadyWorkRepository repository, RetryProperties properties) {
-            return new RetryScheduler(repository, properties);
+        ScheduledCallbackRunner scheduledCallbackRunner() {
+            return ScheduledCallbackTestSupport.openRunner();
+        }
+
+        @Bean
+        RetryScheduler retryScheduler(ReadyWorkRepository repository, RetryProperties properties,
+                ScheduledCallbackRunner runner) {
+            return new RetryScheduler(repository, properties, runner);
         }
 
         @Bean
@@ -473,8 +506,8 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
                 ReadyWorkRepository repository,
                 ReadyTaskPublisher publisher,
                 @Qualifier("readyWorkConfirmationExecutor") Executor confirmationExecutor,
-                RetryProperties properties) {
-            return new ReadyWorkDispatcher(repository, publisher, confirmationExecutor, properties);
+                RetryProperties properties, ScheduledCallbackRunner runner) {
+            return new ReadyWorkDispatcher(repository, publisher, confirmationExecutor, properties, runner);
         }
 
         @Bean
