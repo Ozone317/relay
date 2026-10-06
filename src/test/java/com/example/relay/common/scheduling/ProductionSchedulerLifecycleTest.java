@@ -40,38 +40,82 @@ class ProductionSchedulerLifecycleTest {
     private static final WebhookHeaders HEADERS = new WebhookHeaders("id", 1, "sig");
 
     @Test
-    void productionDeadlineSchedulerUsesDedicatedDaemonPoolAndTerminatesOnClose() throws Exception {
-        AtomicReference<ThreadPoolTaskScheduler> schedulerRef = new AtomicReference<>();
-        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
-            context.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
-            context.register(ProductionSchedulerConfig.class);
-            context.refresh();
-            ThreadPoolTaskScheduler scheduler = context.getBean("webhookDeadlineTaskScheduler",
-                    ThreadPoolTaskScheduler.class);
-            schedulerRef.set(scheduler);
-            assertEquals(1, scheduler.getScheduledThreadPoolExecutor().getCorePoolSize());
-            assertTrue(scheduler.getThreadNamePrefix().startsWith("relay-webhook-deadline-"));
-            assertTrue(scheduler.isDaemon());
-            assertTrue(scheduler.getScheduledThreadPoolExecutor().getRemoveOnCancelPolicy());
-            assertFalse(scheduler.getScheduledThreadPoolExecutor().getExecuteExistingDelayedTasksAfterShutdownPolicy());
-            assertFalse(scheduler.getScheduledThreadPoolExecutor().getContinueExistingPeriodicTasksAfterShutdownPolicy());
-            CountDownLatch threadStarted = new CountDownLatch(1);
-            AtomicReference<Boolean> daemon = new AtomicReference<>();
-            scheduler.schedule(() -> {
-                daemon.set(Thread.currentThread().isDaemon());
-                threadStarted.countDown();
-            }, Instant.now());
-            assertTrue(threadStarted.await(1, TimeUnit.SECONDS));
-            assertTrue(daemon.get());
+    void contextCloseOwnsAndIsolatesEachDeadlineScheduler() throws Exception {
+        AnnotationConfigApplicationContext firstContext = schedulerContext();
+        AnnotationConfigApplicationContext secondContext = schedulerContext();
+        ThreadPoolTaskScheduler first = firstContext.getBean("webhookDeadlineTaskScheduler",
+                ThreadPoolTaskScheduler.class);
+        ThreadPoolTaskScheduler second = secondContext.getBean("webhookDeadlineTaskScheduler",
+                ThreadPoolTaskScheduler.class);
+        assertSchedulerTopology(first);
+
+        CountDownLatch taskEntered = new CountDownLatch(1);
+        CountDownLatch releaseTask = new CountDownLatch(1);
+        CountDownLatch taskInterrupted = new CountDownLatch(1);
+        CountDownLatch closeStarted = new CountDownLatch(1);
+        AtomicReference<Throwable> closeFailure = new AtomicReference<>();
+        first.schedule(() -> {
+            taskEntered.countDown();
+            try {
+                releaseTask.await();
+            } catch (InterruptedException expected) {
+                taskInterrupted.countDown();
+                Thread.currentThread().interrupt();
+            }
+        }, Instant.now());
+        assertTrue(taskEntered.await(1, TimeUnit.SECONDS));
+
+        Thread closeThread = Thread.ofVirtual().start(() -> {
+            closeStarted.countDown();
+            try {
+                firstContext.close();
+            } catch (Throwable failure) {
+                closeFailure.set(failure);
+            }
+        });
+        try {
+            assertTrue(closeStarted.await(1, TimeUnit.SECONDS));
+            assertTrue(taskInterrupted.await(1, TimeUnit.SECONDS),
+                    "closing the owning context must interrupt its running deadline task");
+            closeThread.join(1000);
+            assertFalse(closeThread.isAlive(), "owning context close did not finish");
+            assertNull(closeFailure.get());
+            assertTrue(first.getScheduledThreadPoolExecutor().isTerminated());
             assertThrows(RejectedExecutionException.class,
-                    () -> {
-                        scheduler.schedule(() -> {}, Instant.now().plusSeconds(3600));
-                        scheduler.shutdown();
-                        scheduler.schedule(() -> {}, Instant.now().plusSeconds(1));
-                    });
+                    () -> first.schedule(() -> {}, Instant.now().plusSeconds(1)));
+
+            CountDownLatch secondStillRuns = new CountDownLatch(1);
+            second.schedule(secondStillRuns::countDown, Instant.now());
+            assertTrue(secondStillRuns.await(1, TimeUnit.SECONDS),
+                    "closing one context must leave the other context's scheduler operational");
+            assertFalse(second.getScheduledThreadPoolExecutor().isShutdown());
+        } finally {
+            releaseTask.countDown();
+            firstContext.close();
+            secondContext.close();
+            closeThread.join(6000);
         }
-        assertTrue(schedulerRef.get().getScheduledThreadPoolExecutor().isTerminated());
-        assertEquals(0, schedulerRef.get().getScheduledThreadPoolExecutor().getQueue().size());
+        assertTrue(first.getScheduledThreadPoolExecutor().isTerminated());
+        assertTrue(second.getScheduledThreadPoolExecutor().isTerminated());
+        assertEquals(0, first.getScheduledThreadPoolExecutor().getQueue().size());
+        assertEquals(0, second.getScheduledThreadPoolExecutor().getQueue().size());
+    }
+
+    private static AnnotationConfigApplicationContext schedulerContext() {
+        AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+        context.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
+        context.register(ProductionSchedulerConfig.class);
+        context.refresh();
+        return context;
+    }
+
+    private static void assertSchedulerTopology(ThreadPoolTaskScheduler scheduler) {
+        assertEquals(1, scheduler.getScheduledThreadPoolExecutor().getCorePoolSize());
+        assertTrue(scheduler.getThreadNamePrefix().startsWith("relay-webhook-deadline-"));
+        assertTrue(scheduler.isDaemon());
+        assertTrue(scheduler.getScheduledThreadPoolExecutor().getRemoveOnCancelPolicy());
+        assertFalse(scheduler.getScheduledThreadPoolExecutor().getExecuteExistingDelayedTasksAfterShutdownPolicy());
+        assertFalse(scheduler.getScheduledThreadPoolExecutor().getContinueExistingPeriodicTasksAfterShutdownPolicy());
     }
 
     @Test

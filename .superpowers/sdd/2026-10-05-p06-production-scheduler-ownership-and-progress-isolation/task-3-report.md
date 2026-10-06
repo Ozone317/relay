@@ -68,3 +68,49 @@ After a small test cleanup, the focused lifecycle/deadline pair also passed (17 
 
 The requested Maven command without environment settings fails because `JWT_SECRET` is not set in this checkout.
 With the documented test-only environment values, all requested classes pass. No code concern remains.
+
+## Fix round 1: Spring context ownership
+
+The original lifecycle test manually invoked `scheduler.shutdown()`, so it did not prove that the owning Spring context
+closed the scheduler. It was replaced with a two-context lifecycle test. The first context's active scheduler runs a
+controlled interruptible task; closing the context must interrupt that task, terminate the executor, empty its queue,
+and reject later scheduling. A second context's scheduler remains operational until its own context closes. Cleanup
+assertions use executor state and latches; daemon status is asserted only as a thread policy.
+
+### RED
+
+Before changing scheduler policy, the strengthened test failed at the intended ownership assertion:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest#contextCloseOwnsAndIsolatesEachDeadlineScheduler
+Tests run: 1, Failures: 1, Errors: 0
+AssertionFailedError: closing the owning context must interrupt its running deadline task
+```
+
+Setting `waitForTasksToCompleteOnShutdown(false)` alone still failed this assertion because Spring's coordinated
+lifecycle stop waits for executing work before bean destruction. The deadline scheduler now defers its close to bean
+destruction (`acceptTasksAfterContextClose=true`) and uses interrupting shutdown (`waitForTasksToCompleteOnShutdown=false`).
+This setting is scoped to the webhook deadline scheduler; the other production schedulers retain their existing policy.
+
+### GREEN
+
+The strengthened ownership test passed after the scoped scheduler policy update. The focused pair passed:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest,ApacheWebhookHttpTransportDeadlineTest
+17 tests, 0 failures, 0 errors
+```
+
+The full six-class selection passed again with documented test environment values:
+
+```text
+ProductionSchedulerLifecycleTest                   4 tests, 0 failures, 0 errors
+ApacheWebhookHttpTransportDeadlineTest             13 tests, 0 failures, 0 errors
+ApacheResponseConsumptionIntegrationTest            5 tests, 0 failures, 0 errors
+ApacheWebhookHttpTransportTest                      2 tests, 0 failures, 0 errors
+DeliveryWorkerIntegrationTest                     24 tests, 0 failures, 0 errors
+DeliveryReplayLifecycleIntegrationTest              3 tests, 0 failures, 0 errors
+Total                                                51 tests, 0 failures, 0 errors
+```
+
+`git diff --check` passed.
