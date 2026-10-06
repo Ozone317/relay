@@ -16,6 +16,7 @@ import com.example.relay.deliveryengine.http.WebhookResponseBodyConsumer;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
@@ -50,6 +51,16 @@ class ProductionSchedulerLifecycleTest {
             new SchedulerSpec(SchedulerNames.DELIVERY_RECONCILIATION, 1, "relay-delivery-reconciliation-"),
             new SchedulerSpec(SchedulerNames.PASSWORD_RESET_MAINTENANCE, 2, "relay-password-reset-maintenance-"),
             new SchedulerSpec(SchedulerNames.WEBHOOK_DEADLINE, 1, "relay-webhook-deadline-"));
+
+    @Test
+    void allRealSchedulersUseApprovedShutdownFlags() {
+        AnnotationConfigApplicationContext context = schedulerContext();
+        try {
+            assertSchedulerShutdownFlags(schedulers(context));
+        } finally {
+            context.close();
+        }
+    }
 
     @Test
     void contextCloseOwnsAndIsolatesEachDeadlineScheduler() throws Exception {
@@ -179,6 +190,27 @@ class ProductionSchedulerLifecycleTest {
             assertFalse(scheduler.getScheduledThreadPoolExecutor()
                     .getContinueExistingPeriodicTasksAfterShutdownPolicy(),
                     spec.name() + " continues periodic work after shutdown");
+        }
+    }
+
+    private static void assertSchedulerShutdownFlags(Map<String, ThreadPoolTaskScheduler> schedulers) {
+        for (SchedulerSpec spec : REAL_SCHEDULERS) {
+            ThreadPoolTaskScheduler scheduler = schedulers.get(spec.name());
+            assertFalse(schedulerFlag(scheduler, "acceptTasksAfterContextClose"),
+                    spec.name() + " accepts tasks after context close");
+            assertFalse(schedulerFlag(scheduler, "waitForTasksToCompleteOnShutdown"),
+                    spec.name() + " waits for tasks to complete during shutdown");
+        }
+    }
+
+    private static boolean schedulerFlag(ThreadPoolTaskScheduler scheduler, String fieldName) {
+        try {
+            Field field = org.springframework.scheduling.concurrent.ExecutorConfigurationSupport.class
+                    .getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.getBoolean(scheduler);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Could not inspect scheduler flag " + fieldName, failure);
         }
     }
 

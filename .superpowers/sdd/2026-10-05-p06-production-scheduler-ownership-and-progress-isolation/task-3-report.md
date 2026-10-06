@@ -118,6 +118,65 @@ Total                                                51 tests, 0 failures, 0 err
 
 `git diff --check` passed.
 
+## Fix round 3: explicit per-scheduler shutdown flag topology
+
+Added a separate `allRealSchedulersUseApprovedShutdownFlags` test that creates the real Spring scheduler context and
+checks both Spring shutdown flags for every scheduler, independently of the context-close behavior test. Spring
+6.2.19 exposes setters but no public getters for these flags, so the focused test helper reflects only the two
+`ExecutorConfigurationSupport` fields. The production factory remains unchanged and sets both flags to false.
+
+### RED
+
+The independent topology test was run with each production flag temporarily set to `true`, restoring the flag after
+each run. Both runs failed at their intended per-scheduler assertion:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest#allRealSchedulersUseApprovedShutdownFlags
+acceptTasksAfterContextClose=true:
+  Tests run: 1, Failures: 1, Errors: 0
+  AssertionFailedError: deliveryProgressTaskScheduler accepts tasks after context close
+waitForTasksToCompleteOnShutdown=true:
+  Tests run: 1, Failures: 1, Errors: 0
+  AssertionFailedError: deliveryProgressTaskScheduler waits for tasks to complete during shutdown
+```
+
+### GREEN
+
+Focused lifecycle and topology classes:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest,ProductionSchedulerTopologyTest
+ProductionSchedulerLifecycleTest: 5 tests, 0 failures, 0 errors
+ProductionSchedulerTopologyTest:   5 tests, 0 failures, 0 errors
+```
+
+Task 1 topology/progress/smoke selection:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerTopologyTest,ScheduledProgressIsolationTest,ScheduledLoopEnabledSmokeTest
+14 tests, 0 failures, 0 errors
+```
+
+The full Task 3 six-class selection passed with the previously documented test-only environment values:
+
+```text
+ProductionSchedulerLifecycleTest                   5 tests, 0 failures, 0 errors
+ApacheWebhookHttpTransportDeadlineTest             13 tests, 0 failures, 0 errors
+ApacheResponseConsumptionIntegrationTest            5 tests, 0 failures, 0 errors
+ApacheWebhookHttpTransportTest                      2 tests, 0 failures, 0 errors
+DeliveryWorkerIntegrationTest                     24 tests, 0 failures, 0 errors
+DeliveryReplayLifecycleIntegrationTest              3 tests, 0 failures, 0 errors
+Total                                                52 tests, 0 failures, 0 errors
+```
+
+Exact command:
+
+```bash
+env JWT_SECRET=0123456789abcdef0123456789abcdef RELAY_EMAIL_SENDER_EMAIL=test@example.com RELAY_EMAIL_SENDER_NAME=RelayTest BREVO_API_KEY=test-api-key ./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest,ApacheWebhookHttpTransportDeadlineTest,ApacheResponseConsumptionIntegrationTest,ApacheWebhookHttpTransportTest,DeliveryWorkerIntegrationTest,DeliveryReplayLifecycleIntegrationTest
+```
+
+No production behavior changed in this round. `git diff --check` passed.
+
 ## Fix round 2: shared scheduler close policy and Spring shutdown phases
 
 The approved invariant is now set once in the shared scheduler factory for every real scheduler:
