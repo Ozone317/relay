@@ -1201,8 +1201,9 @@ public class DeliveryWorkerIntegrationTest implements SharedPostgresContainer {
         @Bean
         @Primary
         WebhookHttpTransport loopbackWebhookHttpTransport(
-                @Qualifier("loopbackDeliveryApacheHttpClient") CloseableHttpClient client) {
-            return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer());
+                @Qualifier("loopbackDeliveryApacheHttpClient") CloseableHttpClient client,
+                @Qualifier("webhookDeadlineTaskScheduler") org.springframework.scheduling.TaskScheduler scheduler) {
+            return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer(), scheduler);
         }
 
         private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {

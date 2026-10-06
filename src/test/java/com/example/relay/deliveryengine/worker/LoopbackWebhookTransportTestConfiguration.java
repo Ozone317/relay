@@ -56,8 +56,9 @@ class LoopbackWebhookTransportTestConfiguration {
     @Bean
     @Primary
     WebhookHttpTransport loopbackTestWebhookHttpTransport(
-            @Qualifier("loopbackTestDeliveryApacheHttpClient") CloseableHttpClient client) {
-        return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer());
+            @Qualifier("loopbackTestDeliveryApacheHttpClient") CloseableHttpClient client,
+            @Qualifier("webhookDeadlineTaskScheduler") org.springframework.scheduling.TaskScheduler scheduler) {
+        return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer(), scheduler);
     }
 
     private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {

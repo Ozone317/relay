@@ -352,8 +352,9 @@ public class DeliveryReplayLifecycleIntegrationTest implements SharedPostgresCon
         @Bean
         @Primary
         WebhookHttpTransport replayWebhookHttpTransport(
-                @Qualifier("replayDeliveryApacheHttpClient") CloseableHttpClient client) {
-            return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer());
+                @Qualifier("replayDeliveryApacheHttpClient") CloseableHttpClient client,
+                @Qualifier("webhookDeadlineTaskScheduler") org.springframework.scheduling.TaskScheduler scheduler) {
+            return new ApacheWebhookHttpTransport(client, new BoundedApacheResponseBodyConsumer(), scheduler);
         }
 
         private static PublicDestinationAddressPolicy loopbackPermittingPolicy() {
