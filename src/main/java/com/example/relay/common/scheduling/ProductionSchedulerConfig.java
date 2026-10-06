@@ -29,11 +29,8 @@ public class ProductionSchedulerConfig {
 
     @Bean(name = SchedulerNames.WEBHOOK_DEADLINE)
     ThreadPoolTaskScheduler webhookDeadlineTaskScheduler(SchedulerErrorHandlerFactory errorHandlerFactory) {
-        ThreadPoolTaskScheduler scheduler = scheduler(1, "relay-webhook-deadline-",
+        return scheduler(1, "relay-webhook-deadline-",
                 errorHandlerFactory.forScheduler(SchedulerNames.WEBHOOK_DEADLINE));
-        scheduler.setAcceptTasksAfterContextClose(true);
-        scheduler.setWaitForTasksToCompleteOnShutdown(false);
-        return scheduler;
     }
 
     @Bean(name = SchedulerNames.UNCLASSIFIED_DEFAULT)
@@ -60,7 +57,8 @@ public class ProductionSchedulerConfig {
         scheduler.setRemoveOnCancelPolicy(true);
         scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         scheduler.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
-        scheduler.setWaitForTasksToCompleteOnShutdown(true);
+        scheduler.setAcceptTasksAfterContextClose(false);
+        scheduler.setWaitForTasksToCompleteOnShutdown(false);
         scheduler.setAwaitTerminationSeconds(5);
         scheduler.setErrorHandler(errorHandler);
         return scheduler;

@@ -18,6 +18,8 @@ import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.retry.RetryScheduler;
 import com.example.relay.support.background.EnableTestBackgroundExecution;
 import com.example.relay.support.background.TestBackgroundComponent;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,6 +68,11 @@ class ScheduledLoopEnabledSmokeTest {
     @Import({RetryScheduler.class, ReadyWorkDispatcher.class, ProductionSchedulerConfig.class,
             DeliveryEngineAsyncConfig.class})
     static class TestConfig {
+
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
 
         @Bean
         ReadyWorkRepository readyWorkRepository() {

@@ -71,6 +71,9 @@ With the documented test-only environment values, all requested classes pass. No
 
 ## Fix round 1: Spring context ownership
 
+The policy change described in this historical round was superseded by Fix round 2 below. The deadline scheduler no
+longer has `acceptTasksAfterContextClose=true`; all four real schedulers now use the shared explicit false/false policy.
+
 The original lifecycle test manually invoked `scheduler.shutdown()`, so it did not prove that the owning Spring context
 closed the scheduler. It was replaced with a two-context lifecycle test. The first context's active scheduler runs a
 controlled interruptible task; closing the context must interrupt that task, terminate the executor, empty its queue,
@@ -111,6 +114,68 @@ ApacheWebhookHttpTransportTest                      2 tests, 0 failures, 0 error
 DeliveryWorkerIntegrationTest                     24 tests, 0 failures, 0 errors
 DeliveryReplayLifecycleIntegrationTest              3 tests, 0 failures, 0 errors
 Total                                                51 tests, 0 failures, 0 errors
+```
+
+`git diff --check` passed.
+
+## Fix round 2: shared scheduler close policy and Spring shutdown phases
+
+The approved invariant is now set once in the shared scheduler factory for every real scheduler:
+`acceptTasksAfterContextClose=false` and `waitForTasksToCompleteOnShutdown=false`. The webhook deadline bean has no
+per-bean override. The lifecycle test creates two Spring contexts and checks all four real schedulers in the owning
+context. At context close it proves each executor rejects new scheduling before bean destruction, each queued delayed
+future is canceled and never runs, and each active interruptible task is interrupted during bean destruction. The
+executor then terminates. Meanwhile, the second context continues to schedule work successfully. A test-only
+`DefaultLifecycleProcessor` timeout of 1500ms lets the test reach bean destruction deterministically; it does not alter
+production shutdown policy.
+
+### RED
+
+Against the incorrect lifecycle flags from the previous round, the strengthened test failed before bean destruction:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest#contextCloseOwnsAndIsolatesEachDeadlineScheduler
+Tests run: 1, Failures: 1, Errors: 0
+AssertionFailedError: all real schedulers must reject new work as context close begins
+```
+
+The policy was then moved to the shared factory and made explicitly false for all four production schedulers.
+
+### GREEN
+
+Focused lifecycle/deadline pair:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest,ApacheWebhookHttpTransportDeadlineTest
+17 tests, 0 failures, 0 errors
+```
+
+Task 1 topology/progress selection, including the scheduled-loop smoke fixture:
+
+```text
+./mvnw -q test -Dtest=ProductionSchedulerTopologyTest,ScheduledProgressIsolationTest,ScheduledLoopEnabledSmokeTest
+14 tests, 0 failures, 0 errors
+```
+
+The tests exposed that Task 2's metrics dependency had left the two Task 1 bare Spring fixtures without a
+`MeterRegistry`. Added a test-local `SimpleMeterRegistry` in each fixture; application behavior was not changed.
+
+Full Task 3 selection, with documented test-only environment values:
+
+```text
+ProductionSchedulerLifecycleTest                   4 tests, 0 failures, 0 errors
+ApacheWebhookHttpTransportDeadlineTest             13 tests, 0 failures, 0 errors
+ApacheResponseConsumptionIntegrationTest            5 tests, 0 failures, 0 errors
+ApacheWebhookHttpTransportTest                      2 tests, 0 failures, 0 errors
+DeliveryWorkerIntegrationTest                     24 tests, 0 failures, 0 errors
+DeliveryReplayLifecycleIntegrationTest              3 tests, 0 failures, 0 errors
+Total                                                51 tests, 0 failures, 0 errors
+```
+
+Exact command:
+
+```bash
+env JWT_SECRET=0123456789abcdef0123456789abcdef RELAY_EMAIL_SENDER_EMAIL=test@example.com RELAY_EMAIL_SENDER_NAME=RelayTest BREVO_API_KEY=test-api-key ./mvnw -q test -Dtest=ProductionSchedulerLifecycleTest,ApacheWebhookHttpTransportDeadlineTest,ApacheResponseConsumptionIntegrationTest,ApacheWebhookHttpTransportTest,DeliveryWorkerIntegrationTest,DeliveryReplayLifecycleIntegrationTest
 ```
 
 `git diff --check` passed.

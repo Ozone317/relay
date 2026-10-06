@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Field;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -209,6 +211,7 @@ class ScheduledProgressIsolationTest {
     private static AnnotationConfigApplicationContext productionContext() throws Exception {
         Class<?> configuration = Class.forName("com.example.relay.common.scheduling.ProductionSchedulerConfig");
         AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+        context.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
         context.register(configuration);
         context.refresh();
         return context;

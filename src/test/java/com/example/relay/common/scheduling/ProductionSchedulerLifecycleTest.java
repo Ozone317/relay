@@ -13,18 +13,24 @@ import com.example.relay.deliveryengine.http.WebhookDeliveryException;
 import com.example.relay.deliveryengine.http.WebhookFailureCode;
 import com.example.relay.deliveryengine.http.WebhookHeaders;
 import com.example.relay.deliveryengine.http.WebhookResponseBodyConsumer;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.net.UnknownHostException;
-import javax.net.ssl.SSLHandshakeException;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import javax.net.ssl.SSLHandshakeException;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.apache.hc.core5.http.ClassicHttpRequest;
@@ -33,38 +39,50 @@ import org.apache.hc.core5.http.message.BasicClassicHttpResponse;
 import org.apache.hc.core5.io.CloseMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.support.DefaultLifecycleProcessor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 class ProductionSchedulerLifecycleTest {
 
     private static final WebhookHeaders HEADERS = new WebhookHeaders("id", 1, "sig");
+    private static final List<SchedulerSpec> REAL_SCHEDULERS = List.of(
+            new SchedulerSpec(SchedulerNames.DELIVERY_PROGRESS, 2, "relay-delivery-progress-"),
+            new SchedulerSpec(SchedulerNames.DELIVERY_RECONCILIATION, 1, "relay-delivery-reconciliation-"),
+            new SchedulerSpec(SchedulerNames.PASSWORD_RESET_MAINTENANCE, 2, "relay-password-reset-maintenance-"),
+            new SchedulerSpec(SchedulerNames.WEBHOOK_DEADLINE, 1, "relay-webhook-deadline-"));
 
     @Test
     void contextCloseOwnsAndIsolatesEachDeadlineScheduler() throws Exception {
         AnnotationConfigApplicationContext firstContext = schedulerContext();
         AnnotationConfigApplicationContext secondContext = schedulerContext();
-        ThreadPoolTaskScheduler first = firstContext.getBean("webhookDeadlineTaskScheduler",
-                ThreadPoolTaskScheduler.class);
-        ThreadPoolTaskScheduler second = secondContext.getBean("webhookDeadlineTaskScheduler",
-                ThreadPoolTaskScheduler.class);
-        assertSchedulerTopology(first);
+        Map<String, ThreadPoolTaskScheduler> firstSchedulers = schedulers(firstContext);
+        Map<String, ThreadPoolTaskScheduler> secondSchedulers = schedulers(secondContext);
+        assertSchedulerTopology(firstSchedulers);
 
-        CountDownLatch taskEntered = new CountDownLatch(1);
+        CountDownLatch tasksEntered = new CountDownLatch(REAL_SCHEDULERS.size());
         CountDownLatch releaseTask = new CountDownLatch(1);
-        CountDownLatch taskInterrupted = new CountDownLatch(1);
+        Map<String, CountDownLatch> taskInterrupted = new LinkedHashMap<>();
+        List<ScheduledFuture<?>> queuedTasks = new ArrayList<>();
+        CountDownLatch queuedTasksRan = new CountDownLatch(REAL_SCHEDULERS.size());
+        for (SchedulerSpec spec : REAL_SCHEDULERS) {
+            ThreadPoolTaskScheduler scheduler = firstSchedulers.get(spec.name());
+            CountDownLatch interrupted = new CountDownLatch(1);
+            taskInterrupted.put(spec.name(), interrupted);
+            scheduler.schedule(() -> {
+                tasksEntered.countDown();
+                try {
+                    releaseTask.await();
+                } catch (InterruptedException expected) {
+                    interrupted.countDown();
+                    Thread.currentThread().interrupt();
+                }
+            }, Instant.now());
+            queuedTasks.add(scheduler.schedule(queuedTasksRan::countDown, Instant.now().plusSeconds(3600)));
+        }
+        assertTrue(tasksEntered.await(1, TimeUnit.SECONDS));
+
         CountDownLatch closeStarted = new CountDownLatch(1);
         AtomicReference<Throwable> closeFailure = new AtomicReference<>();
-        first.schedule(() -> {
-            taskEntered.countDown();
-            try {
-                releaseTask.await();
-            } catch (InterruptedException expected) {
-                taskInterrupted.countDown();
-                Thread.currentThread().interrupt();
-            }
-        }, Instant.now());
-        assertTrue(taskEntered.await(1, TimeUnit.SECONDS));
-
         Thread closeThread = Thread.ofVirtual().start(() -> {
             closeStarted.countDown();
             try {
@@ -75,47 +93,107 @@ class ProductionSchedulerLifecycleTest {
         });
         try {
             assertTrue(closeStarted.await(1, TimeUnit.SECONDS));
-            assertTrue(taskInterrupted.await(1, TimeUnit.SECONDS),
-                    "closing the owning context must interrupt its running deadline task");
-            closeThread.join(1000);
+            assertTrue(awaitCondition(() -> firstSchedulers.values().stream()
+                    .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isShutdown()), 500),
+                    "all real schedulers must reject new work as context close begins");
+            for (SchedulerSpec spec : REAL_SCHEDULERS) {
+                ThreadPoolTaskScheduler scheduler = firstSchedulers.get(spec.name());
+                assertThrows(RejectedExecutionException.class,
+                        () -> scheduler.schedule(() -> {}, Instant.now().plusSeconds(1)),
+                        spec.name() + " accepted work after context close began");
+            }
+            assertTrue(queuedTasks.stream().allMatch(ScheduledFuture::isCancelled),
+                    "queued delayed work must be canceled at early shutdown");
+            assertEquals((long) REAL_SCHEDULERS.size(), queuedTasksRan.getCount(),
+                    "queued work must not run after close begins");
+            for (SchedulerSpec spec : REAL_SCHEDULERS) {
+                assertEquals(0, firstSchedulers.get(spec.name()).getScheduledThreadPoolExecutor().getQueue().size());
+            }
+
+            for (SchedulerSpec spec : REAL_SCHEDULERS) {
+                assertTrue(taskInterrupted.get(spec.name()).await(3, TimeUnit.SECONDS),
+                        () -> spec.name() + " was not interrupted during bean destruction");
+            }
+            closeThread.join(3000);
             assertFalse(closeThread.isAlive(), "owning context close did not finish");
             assertNull(closeFailure.get());
-            assertTrue(first.getScheduledThreadPoolExecutor().isTerminated());
-            assertThrows(RejectedExecutionException.class,
-                    () -> first.schedule(() -> {}, Instant.now().plusSeconds(1)));
+            for (SchedulerSpec spec : REAL_SCHEDULERS) {
+                ThreadPoolTaskScheduler scheduler = firstSchedulers.get(spec.name());
+                assertTrue(scheduler.getScheduledThreadPoolExecutor().isTerminated());
+                assertThrows(RejectedExecutionException.class,
+                        () -> scheduler.schedule(() -> {}, Instant.now().plusSeconds(1)));
+            }
 
-            CountDownLatch secondStillRuns = new CountDownLatch(1);
-            second.schedule(secondStillRuns::countDown, Instant.now());
-            assertTrue(secondStillRuns.await(1, TimeUnit.SECONDS),
-                    "closing one context must leave the other context's scheduler operational");
-            assertFalse(second.getScheduledThreadPoolExecutor().isShutdown());
+            CountDownLatch secondContextRuns = new CountDownLatch(REAL_SCHEDULERS.size());
+            for (SchedulerSpec spec : REAL_SCHEDULERS) {
+                secondSchedulers.get(spec.name()).schedule(secondContextRuns::countDown, Instant.now());
+            }
+            assertTrue(secondContextRuns.await(1, TimeUnit.SECONDS),
+                    "closing one context must leave every scheduler in the other context operational");
+            assertTrue(secondSchedulers.values().stream()
+                    .noneMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isShutdown()));
         } finally {
             releaseTask.countDown();
+            closeThread.join(6000);
             firstContext.close();
             secondContext.close();
-            closeThread.join(6000);
         }
-        assertTrue(first.getScheduledThreadPoolExecutor().isTerminated());
-        assertTrue(second.getScheduledThreadPoolExecutor().isTerminated());
-        assertEquals(0, first.getScheduledThreadPoolExecutor().getQueue().size());
-        assertEquals(0, second.getScheduledThreadPoolExecutor().getQueue().size());
+        assertTrue(firstSchedulers.values().stream()
+                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()));
+        assertTrue(secondSchedulers.values().stream()
+                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()));
+        assertEquals((long) REAL_SCHEDULERS.size(), queuedTasksRan.getCount());
     }
 
     private static AnnotationConfigApplicationContext schedulerContext() {
         AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
         context.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
+        context.registerBean("lifecycleProcessor", DefaultLifecycleProcessor.class, () -> {
+            DefaultLifecycleProcessor processor = new DefaultLifecycleProcessor();
+            processor.setTimeoutPerShutdownPhase(1500);
+            return processor;
+        });
         context.register(ProductionSchedulerConfig.class);
         context.refresh();
         return context;
     }
 
-    private static void assertSchedulerTopology(ThreadPoolTaskScheduler scheduler) {
-        assertEquals(1, scheduler.getScheduledThreadPoolExecutor().getCorePoolSize());
-        assertTrue(scheduler.getThreadNamePrefix().startsWith("relay-webhook-deadline-"));
-        assertTrue(scheduler.isDaemon());
-        assertTrue(scheduler.getScheduledThreadPoolExecutor().getRemoveOnCancelPolicy());
-        assertFalse(scheduler.getScheduledThreadPoolExecutor().getExecuteExistingDelayedTasksAfterShutdownPolicy());
-        assertFalse(scheduler.getScheduledThreadPoolExecutor().getContinueExistingPeriodicTasksAfterShutdownPolicy());
+    private static Map<String, ThreadPoolTaskScheduler> schedulers(AnnotationConfigApplicationContext context) {
+        Map<String, ThreadPoolTaskScheduler> schedulers = new LinkedHashMap<>();
+        for (SchedulerSpec spec : REAL_SCHEDULERS) {
+            schedulers.put(spec.name(), context.getBean(spec.name(), ThreadPoolTaskScheduler.class));
+        }
+        return schedulers;
+    }
+
+    private static void assertSchedulerTopology(Map<String, ThreadPoolTaskScheduler> schedulers) {
+        for (SchedulerSpec spec : REAL_SCHEDULERS) {
+            ThreadPoolTaskScheduler scheduler = schedulers.get(spec.name());
+            assertEquals(spec.poolSize(), scheduler.getScheduledThreadPoolExecutor().getCorePoolSize());
+            assertTrue(scheduler.getThreadNamePrefix().startsWith(spec.threadPrefix()));
+            assertTrue(scheduler.isDaemon());
+            assertTrue(scheduler.getScheduledThreadPoolExecutor().getRemoveOnCancelPolicy());
+            assertFalse(scheduler.getScheduledThreadPoolExecutor()
+                    .getExecuteExistingDelayedTasksAfterShutdownPolicy(),
+                    spec.name() + " executes delayed work after shutdown");
+            assertFalse(scheduler.getScheduledThreadPoolExecutor()
+                    .getContinueExistingPeriodicTasksAfterShutdownPolicy(),
+                    spec.name() + " continues periodic work after shutdown");
+        }
+    }
+
+    private static boolean awaitCondition(BooleanSupplier condition, long timeoutMillis) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) {
+                return true;
+            }
+            Thread.yield();
+        }
+        return condition.getAsBoolean();
+    }
+
+    private record SchedulerSpec(String name, int poolSize, String threadPrefix) {
     }
 
     @Test
