@@ -33,7 +33,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -42,6 +41,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
@@ -68,7 +68,7 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
     @Autowired
     private PasswordResetTokenCleanupProperties cleanupProperties;
 
-    @Autowired
+    @MockitoSpyBean
     private PasswordResetTokenService passwordResetTokenService;
 
     @Autowired
@@ -90,6 +90,7 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
     private EmailDispatchPublisher emailDispatchPublisher;
 
     private final ConcurrentLinkedQueue<EmailDispatchMessage> publications = new ConcurrentLinkedQueue<>();
+    private final ThreadLocal<IssuanceBackendObservation> issuanceBackendObservation = new ThreadLocal<>();
 
     @BeforeEach
     void setUp() {
@@ -101,6 +102,18 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
                 })
                 .when(emailDispatchPublisher)
                 .publish(any(EmailDispatchMessage.class));
+        doAnswer(invocation -> {
+                    captureIssuanceBackend();
+                    return invocation.callRealMethod();
+                })
+                .when(passwordResetTokenService)
+                .issue(any(User.class), any(Instant.class));
+        doAnswer(invocation -> {
+                    captureIssuanceBackend();
+                    return invocation.callRealMethod();
+                })
+                .when(passwordResetTokenService)
+                .reissueForRecovery(any(User.class), any(Instant.class), any(Instant.class));
     }
 
     @Test
@@ -187,6 +200,10 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         CountDownLatch releaseBlocker = new CountDownLatch(1);
         CountDownLatch recoverySelectedCandidate = new CountDownLatch(1);
         CountDownLatch releaseRecovery = new CountDownLatch(1);
+        AtomicInteger recoveryBackendPid = new AtomicInteger();
+        AtomicInteger ordinaryBackendPid = new AtomicInteger();
+        CountDownLatch recoveryEnteredIssuance = new CountDownLatch(1);
+        CountDownLatch ordinaryEnteredIssuance = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(3);
         AtomicInteger blockerPid = new AtomicInteger();
         Future<?> blocker = null;
@@ -204,15 +221,23 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
 
             PasswordResetEmailRecoverySweeper selectedRecovery = gatedRecoverySweeper(
                     recoverySelectedCandidate, releaseRecovery);
-            recovery = executor.submit(selectedRecovery::sweep);
+            recovery = withIssuanceObservation(executor, recoveryBackendPid, recoveryEnteredIssuance,
+                    selectedRecovery::sweep);
             assertTrue(recoverySelectedCandidate.await(10, TimeUnit.SECONDS),
                     "recovery must have selected the stale candidate before issuance starts");
             releaseRecovery.countDown();
-            ordinaryRequest = executor.submit(() -> passwordResetService.issueAndDispatch(user));
+            ordinaryRequest = withIssuanceObservation(executor, ordinaryBackendPid, ordinaryEnteredIssuance,
+                    () -> passwordResetService.issueAndDispatch(user));
 
-            Set<Integer> blockedIssuancePids = awaitTwoBlockedUserLockWaiters(blockerPid.get());
-            assertThat(blockedIssuancePids).hasSize(2);
-            assertThat(blockedIssuancePids).doesNotContain(blockerPid.get());
+            assertTrue(recoveryEnteredIssuance.await(10, TimeUnit.SECONDS),
+                    "recovery must enter its real transactional issuance method");
+            assertTrue(ordinaryEnteredIssuance.await(10, TimeUnit.SECONDS),
+                    "ordinary reset must enter its real transactional issuance method");
+            Set<Integer> intendedIssuancePids = Set.of(recoveryBackendPid.get(), ordinaryBackendPid.get());
+            assertThat(intendedIssuancePids).as("the issuance paths must use separate database connections")
+                    .hasSize(2).doesNotContain(blockerPid.get());
+            assertBothExactIssuancePidsBlockedOnUserLock(
+                    intendedIssuancePids, blockerPid.get());
 
             // Keep the independent transaction's user-row lock until both real issuance transactions are queued.
             releaseBlocker.countDown();
@@ -258,29 +283,53 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         assertThat(reloadedUser.isEmailVerified()).isFalse();
     }
 
-    private Set<Integer> awaitTwoBlockedUserLockWaiters(int blockerBackendPid) {
-        AtomicReference<Set<Integer>> waitingPids = new AtomicReference<>(Set.of());
+    private Future<?> withIssuanceObservation(ExecutorService executor, AtomicInteger backendPid,
+            CountDownLatch enteredIssuance, Runnable operation) {
+        return executor.submit(() -> {
+            issuanceBackendObservation.set(new IssuanceBackendObservation(backendPid, enteredIssuance));
+            try {
+                operation.run();
+            } finally {
+                issuanceBackendObservation.remove();
+            }
+        });
+    }
+
+    private void captureIssuanceBackend() {
+        IssuanceBackendObservation observation = issuanceBackendObservation.get();
+        if (observation == null) {
+            return;
+        }
+        assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                "issuance backend PID must be captured inside its real transaction");
+        observation.backendPid().set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+        observation.enteredIssuance().countDown();
+    }
+
+    private void assertBothExactIssuancePidsBlockedOnUserLock(Set<Integer> expectedIssuancePids,
+            int blockerBackendPid) {
+        List<Integer> expectedPids = List.copyOf(expectedIssuancePids);
         Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10)).untilAsserted(() -> {
             List<Map<String, Object>> activities = jdbcTemplate.queryForList("""
                     SELECT pid, query, wait_event_type, cardinality(pg_blocking_pids(pid)) AS blocker_count,
                            ? = ANY(pg_blocking_pids(pid)) AS blocked_by_test_holder
                     FROM pg_stat_activity
-                    WHERE wait_event_type = 'Lock'
-                      AND lower(query) LIKE '%from users%'
-                      AND (lower(query) LIKE '%for update%' OR lower(query) LIKE '%for no key update%')
-                    """, blockerBackendPid);
-            List<Map<String, Object>> blocked = activities.stream()
-                    .filter(activity -> ((Number) activity.get("blocker_count")).intValue() > 0)
-                    .toList();
-            Set<Integer> pids = blocked.stream().map(activity -> ((Number) activity.get("pid")).intValue())
+                    WHERE pid IN (?, ?)
+                    """, blockerBackendPid, expectedPids.get(0), expectedPids.get(1));
+            Set<Integer> observedPids = activities.stream()
+                    .map(activity -> ((Number) activity.get("pid")).intValue())
                     .collect(Collectors.toSet());
-            waitingPids.set(pids);
-            assertThat(blocked).as("both issuance connections must wait on the users row lock: " + activities)
-                    .hasSize(2);
-            assertThat(blocked).anyMatch(activity -> Boolean.TRUE.equals(activity.get("blocked_by_test_holder")));
-            assertThat(blocked).allMatch(activity -> "Lock".equals(activity.get("wait_event_type")));
+            assertThat(observedPids).as("pg_stat_activity must contain these exact issuance backends")
+                    .containsExactlyInAnyOrderElementsOf(expectedIssuancePids);
+            assertThat(activities).hasSize(2).allSatisfy(activity -> {
+                assertThat(activity.get("wait_event_type")).isEqualTo("Lock");
+                String query = activity.get("query").toString().toLowerCase();
+                assertThat(query).contains("from users");
+                assertThat(query.contains("for update") || query.contains("for no key update")).isTrue();
+                assertThat(((Number) activity.get("blocker_count")).intValue()).isPositive();
+            });
+            assertThat(activities).anyMatch(activity -> Boolean.TRUE.equals(activity.get("blocked_by_test_holder")));
         });
-        return waitingPids.get();
     }
 
     private Instant persistedFirstRequestedAt(UUID tokenId) {
@@ -374,4 +423,6 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
             throw new AssertionError("maintenance test gate was interrupted", interrupted);
         }
     }
+
+    private record IssuanceBackendObservation(AtomicInteger backendPid, CountDownLatch enteredIssuance) {}
 }
