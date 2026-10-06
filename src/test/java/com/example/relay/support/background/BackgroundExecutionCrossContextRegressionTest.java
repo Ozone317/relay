@@ -3,6 +3,7 @@ package com.example.relay.support.background;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,6 +11,8 @@ import com.example.relay.RelayApplication;
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
 import com.example.relay.attempt.infrastructure.ReadyWorkRepositoryImpl;
 import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
+import com.example.relay.common.scheduling.ProductionSchedulerConfig;
+import com.example.relay.common.scheduling.SchedulerNames;
 import com.example.relay.deliveryengine.publisher.ReadyPublishOutcome;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
 import com.example.relay.deliveryengine.reconciliation.ReconciliationSweeper;
@@ -17,14 +20,18 @@ import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.retry.RetryScheduler;
 import com.example.relay.support.SharedPostgresContainer;
 import com.zaxxer.hikari.HikariDataSource;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
@@ -44,17 +51,21 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.scheduling.TaskScheduler;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.scheduling.Trigger;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestContextManager;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 
 @Tag("integration")
 @SpringBootTest(classes = RelayApplication.class)
@@ -70,6 +81,14 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
     private final JdbcTemplate jdbcTemplate;
     private final ReconciliationSweeper reconciliationSweeper;
     private final List<UUID> victimUserIds = new ArrayList<>();
+
+    @DynamicPropertySource
+    static void inertApplicationSecrets(DynamicPropertyRegistry registry) {
+        registry.add("JWT_SECRET", () -> "test-only-jwt-secret-not-for-signing");
+        registry.add("RELAY_EMAIL_SENDER_EMAIL", () -> "test@example.invalid");
+        registry.add("RELAY_EMAIL_SENDER_NAME", () -> "Test Only");
+        registry.add("BREVO_API_KEY", () -> "test-only-api-key");
+    }
 
     @Autowired
     BackgroundExecutionCrossContextRegressionTest(
@@ -207,6 +226,63 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
         assertFalse(context.isActive());
     }
 
+    @Test
+    void schedulingOptInAfterClassCloseTerminatesOwnedExecutorsAndNextContextGetsDistinctExecutors()
+            throws Exception {
+        TestContextManager firstManager = new TestContextManager(RealSchedulerOptInFixtureOne.class);
+        firstManager.beforeTestClass();
+        ConfigurableApplicationContext firstContext =
+                (ConfigurableApplicationContext) firstManager.getTestContext().getApplicationContext();
+        Map<String, ThreadPoolTaskScheduler> firstSchedulers = productionSchedulers(firstContext);
+        Map<String, Thread> firstThreads = new ConcurrentHashMap<>();
+        CountDownLatch firstCallbacksStarted = new CountDownLatch(firstSchedulers.size());
+        firstSchedulers.forEach((name, scheduler) -> scheduler.schedule(() -> {
+            firstThreads.put(name, Thread.currentThread());
+            firstCallbacksStarted.countDown();
+        }, Instant.now()));
+        assertTrue(firstCallbacksStarted.await(1, TimeUnit.SECONDS));
+
+        firstManager.getTestContext().markApplicationContextDirty(null);
+        firstManager.afterTestClass();
+        assertFalse(firstContext.isActive(), "AFTER_CLASS must close the dirtied scheduling context");
+        assertTrue(firstSchedulers.values().stream()
+                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isShutdown()),
+                "context close must stop submissions before executor destruction");
+        assertTrue(firstSchedulers.values().stream()
+                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()),
+                "destruction must interrupt work and finish the bounded await for interruptible callbacks");
+        assertTrue(firstThreads.values().stream().noneMatch(Thread::isAlive),
+                "no first-context scheduler worker may remain after AFTER_CLASS");
+
+        TestContextManager secondManager = new TestContextManager(RealSchedulerOptInFixtureTwo.class);
+        secondManager.beforeTestClass();
+        ConfigurableApplicationContext secondContext =
+                (ConfigurableApplicationContext) secondManager.getTestContext().getApplicationContext();
+        Map<String, ThreadPoolTaskScheduler> secondSchedulers = productionSchedulers(secondContext);
+        for (String schedulerName : firstSchedulers.keySet()) {
+            assertNotSame(firstSchedulers.get(schedulerName).getScheduledThreadPoolExecutor(),
+                    secondSchedulers.get(schedulerName).getScheduledThreadPoolExecutor(),
+                    schedulerName + " must be recreated for the next opt-in context");
+        }
+        secondManager.getTestContext().markApplicationContextDirty(null);
+        secondManager.afterTestClass();
+        assertTrue(secondSchedulers.values().stream()
+                .allMatch(scheduler -> scheduler.getScheduledThreadPoolExecutor().isTerminated()));
+    }
+
+    private static Map<String, ThreadPoolTaskScheduler> productionSchedulers(
+            ConfigurableApplicationContext context) {
+        return Map.of(
+                SchedulerNames.DELIVERY_PROGRESS,
+                context.getBean(SchedulerNames.DELIVERY_PROGRESS, ThreadPoolTaskScheduler.class),
+                SchedulerNames.DELIVERY_RECONCILIATION,
+                context.getBean(SchedulerNames.DELIVERY_RECONCILIATION, ThreadPoolTaskScheduler.class),
+                SchedulerNames.PASSWORD_RESET_MAINTENANCE,
+                context.getBean(SchedulerNames.PASSWORD_RESET_MAINTENANCE, ThreadPoolTaskScheduler.class),
+                SchedulerNames.WEBHOOK_DEADLINE,
+                context.getBean(SchedulerNames.WEBHOOK_DEADLINE, ThreadPoolTaskScheduler.class));
+    }
+
     private ControllableTaskScheduler ordinaryScheduler() {
         return ORDINARY_SOURCE
                 .getTestContext()
@@ -313,6 +389,25 @@ class BackgroundExecutionCrossContextRegressionTest implements SharedPostgresCon
     })
     @EnableTestBackgroundExecution(TestBackgroundComponent.SCHEDULING)
     private static class OptInSourceFixture {}
+
+    @SpringJUnitConfig(RealSchedulerLifecycleConfiguration.class)
+    @EnableTestBackgroundExecution(TestBackgroundComponent.SCHEDULING)
+    private static class RealSchedulerOptInFixtureOne {}
+
+    @SpringJUnitConfig(RealSchedulerLifecycleConfiguration.class)
+    @EnableTestBackgroundExecution(TestBackgroundComponent.SCHEDULING)
+    private static class RealSchedulerOptInFixtureTwo {}
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableScheduling
+    @Import(ProductionSchedulerConfig.class)
+    static class RealSchedulerLifecycleConfiguration {
+
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
 
     @Configuration(proxyBeanMethods = false)
     @EnableScheduling

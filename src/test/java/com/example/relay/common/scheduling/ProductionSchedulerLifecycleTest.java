@@ -3,6 +3,7 @@ package com.example.relay.common.scheduling;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
@@ -53,7 +55,7 @@ class ProductionSchedulerLifecycleTest {
             new SchedulerSpec(SchedulerNames.WEBHOOK_DEADLINE, 1, "relay-webhook-deadline-"));
 
     @Test
-    void allRealSchedulersUseApprovedShutdownFlags() {
+    void destructionUsesFiveSecondBoundedAwaitAndApprovedShutdownFlags() {
         AnnotationConfigApplicationContext context = schedulerContext();
         try {
             assertSchedulerShutdownFlags(schedulers(context));
@@ -63,16 +65,22 @@ class ProductionSchedulerLifecycleTest {
     }
 
     @Test
-    void contextCloseOwnsAndIsolatesEachDeadlineScheduler() throws Exception {
+    void contextCloseShutsDownEarlyThenDestroyInterruptsAndTerminatesRunningWork() throws Exception {
         AnnotationConfigApplicationContext firstContext = schedulerContext();
         AnnotationConfigApplicationContext secondContext = schedulerContext();
         Map<String, ThreadPoolTaskScheduler> firstSchedulers = schedulers(firstContext);
         Map<String, ThreadPoolTaskScheduler> secondSchedulers = schedulers(secondContext);
         assertSchedulerTopology(firstSchedulers);
+        for (SchedulerSpec spec : REAL_SCHEDULERS) {
+            assertNotSame(firstSchedulers.get(spec.name()).getScheduledThreadPoolExecutor(),
+                    secondSchedulers.get(spec.name()).getScheduledThreadPoolExecutor(),
+                    spec.name() + " executor must be owned by its own application context");
+        }
 
         CountDownLatch tasksEntered = new CountDownLatch(REAL_SCHEDULERS.size());
         CountDownLatch releaseTask = new CountDownLatch(1);
         Map<String, CountDownLatch> taskInterrupted = new LinkedHashMap<>();
+        Map<String, Thread> firstContextThreads = new ConcurrentHashMap<>();
         List<ScheduledFuture<?>> queuedTasks = new ArrayList<>();
         CountDownLatch queuedTasksRan = new CountDownLatch(REAL_SCHEDULERS.size());
         for (SchedulerSpec spec : REAL_SCHEDULERS) {
@@ -80,6 +88,7 @@ class ProductionSchedulerLifecycleTest {
             CountDownLatch interrupted = new CountDownLatch(1);
             taskInterrupted.put(spec.name(), interrupted);
             scheduler.schedule(() -> {
+                firstContextThreads.put(spec.name(), Thread.currentThread());
                 tasksEntered.countDown();
                 try {
                     releaseTask.await();
@@ -91,6 +100,10 @@ class ProductionSchedulerLifecycleTest {
             queuedTasks.add(scheduler.schedule(queuedTasksRan::countDown, Instant.now().plusSeconds(3600)));
         }
         assertTrue(tasksEntered.await(1, TimeUnit.SECONDS));
+        for (SchedulerSpec spec : REAL_SCHEDULERS) {
+            assertTrue(firstContextThreads.get(spec.name()).getName().startsWith(spec.threadPrefix()),
+                    spec.name() + " did not execute on its owned named worker thread");
+        }
 
         CountDownLatch closeStarted = new CountDownLatch(1);
         AtomicReference<Throwable> closeFailure = new AtomicReference<>();
@@ -131,6 +144,8 @@ class ProductionSchedulerLifecycleTest {
             for (SchedulerSpec spec : REAL_SCHEDULERS) {
                 ThreadPoolTaskScheduler scheduler = firstSchedulers.get(spec.name());
                 assertTrue(scheduler.getScheduledThreadPoolExecutor().isTerminated());
+                assertFalse(firstContextThreads.get(spec.name()).isAlive(),
+                        spec.name() + " worker thread remained alive after executor termination");
                 assertThrows(RejectedExecutionException.class,
                         () -> scheduler.schedule(() -> {}, Instant.now().plusSeconds(1)));
             }
@@ -200,6 +215,19 @@ class ProductionSchedulerLifecycleTest {
                     spec.name() + " accepts tasks after context close");
             assertFalse(schedulerFlag(scheduler, "waitForTasksToCompleteOnShutdown"),
                     spec.name() + " waits for tasks to complete during shutdown");
+            assertEquals(5_000L, schedulerLongSetting(scheduler, "awaitTerminationMillis"),
+                    spec.name() + " must bound destruction's await to five seconds");
+        }
+    }
+
+    private static long schedulerLongSetting(ThreadPoolTaskScheduler scheduler, String fieldName) {
+        try {
+            Field field = org.springframework.scheduling.concurrent.ExecutorConfigurationSupport.class
+                    .getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.getLong(scheduler);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Could not inspect scheduler setting " + fieldName, failure);
         }
     }
 

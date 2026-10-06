@@ -34,10 +34,14 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.SchedulingAwareRunnable;
 import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.scheduling.config.TaskManagementConfigUtils;
+import org.springframework.scheduling.config.ScheduledTask;
+import org.springframework.scheduling.support.ScheduledMethodRunnable;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.context.ContextConfigurationAttributes;
 import org.springframework.test.context.ContextCustomizer;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -51,11 +55,16 @@ class BackgroundExecutionContextPolicyTest {
     private static final RabbitMQContainer RABBIT = startRabbit();
 
     private static final Set<ScheduledDescriptor> PRODUCTION_SCHEDULED_METHODS = Set.of(
-            new ScheduledDescriptor("RetryScheduler", "scheduledReleaseDueRetries"),
-            new ScheduledDescriptor("ReadyWorkDispatcher", "scheduledDispatch"),
-            new ScheduledDescriptor("ReconciliationSweeper", "scheduledSweep"),
-            new ScheduledDescriptor("PasswordResetTokenCleanupTask", "cleanup"),
-            new ScheduledDescriptor("PasswordResetEmailRecoverySweeper", "sweep"));
+            new ScheduledDescriptor("RetryScheduler", "scheduledReleaseDueRetries", "${relay.retry.scheduler-interval}",
+                    "deliveryProgressTaskScheduler"),
+            new ScheduledDescriptor("ReadyWorkDispatcher", "scheduledDispatch", "${relay.retry.dispatcher-interval}",
+                    "deliveryProgressTaskScheduler"),
+            new ScheduledDescriptor("ReconciliationSweeper", "scheduledSweep", "${relay.reconciliation.interval}",
+                    "deliveryReconciliationTaskScheduler"),
+            new ScheduledDescriptor("PasswordResetTokenCleanupTask", "scheduledCleanup",
+                    "${relay.password-reset.cleanup.interval}", "passwordResetMaintenanceTaskScheduler"),
+            new ScheduledDescriptor("PasswordResetEmailRecoverySweeper", "scheduledSweep",
+                    "${relay.password-reset.email-recovery.interval}", "passwordResetMaintenanceTaskScheduler"));
 
     private static final Set<ListenerDescriptor> PRODUCTION_LISTENERS = Set.of(
             new ListenerDescriptor("DeliveryWorker", "onMessage", "deliveryWorker", "deliveryListenerContainerFactory"),
@@ -130,6 +139,52 @@ class BackgroundExecutionContextPolicyTest {
             await().atMost(Duration.ofSeconds(3)).untilAsserted(() -> assertEquals(0, scheduledCallback.getCount()));
             assertFalse(applicationContext
                     .containsBean("org.springframework.amqp.rabbit.config.internalRabbitListenerEndpointRegistry"));
+        }
+    }
+
+    @Nested
+    @SpringBootTest(properties = {
+            "relay.retry.scheduler-interval=1h",
+            "relay.retry.dispatcher-interval=1h",
+            "relay.reconciliation.interval=1h",
+            "relay.reconciliation.dead-letter-grace=1h",
+            "relay.password-reset.cleanup.interval=1h",
+            "relay.password-reset.email-recovery.interval=1h",
+            "relay.password-reset.email-recovery.grace=1h",
+            "relay.password-reset.email-recovery.max-recovery-window=3h"
+    })
+    @EnableTestBackgroundExecution(TestBackgroundComponent.SCHEDULING)
+    class ProductionSchedulingOptInContext implements SharedPostgresContainer {
+
+        @Autowired
+        private ApplicationContext applicationContext;
+
+        @DynamicPropertySource
+        static void productionSchedulingProperties(DynamicPropertyRegistry registry) {
+            registerInertEnvironmentProperties(registry);
+        }
+
+        @Test
+        void schedulingOptInRegistersAllFiveProductionCallbacksOnTheirQualifiedSchedulers() {
+            assertEquals(PRODUCTION_SCHEDULED_METHODS, scheduledInventory(applicationContext));
+            assertTrue(applicationContext
+                    .containsBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
+
+            Set<ScheduledDescriptor> registeredCallbacks = applicationContext
+                    .getBeansOfType(ScheduledTaskHolder.class).values().stream()
+                    .flatMap(holder -> holder.getScheduledTasks().stream())
+                    .map(BackgroundExecutionContextPolicyTest::scheduledDescriptor)
+                    .collect(Collectors.toSet());
+            assertEquals(PRODUCTION_SCHEDULED_METHODS, registeredCallbacks,
+                    "scheduling opt-in must register every production callback on its declared scheduler");
+            assertEquals(Set.of(
+                            "deliveryProgressTaskScheduler",
+                            "deliveryReconciliationTaskScheduler",
+                            "passwordResetMaintenanceTaskScheduler",
+                            "webhookDeadlineTaskScheduler"),
+                    applicationContext.getBeansOfType(
+                            org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler.class).keySet(),
+                    "production opt-in must use the four approved scheduler domains");
         }
     }
 
@@ -247,8 +302,33 @@ class BackgroundExecutionContextPolicyTest {
         return applicationMethods(applicationContext).stream()
                 .filter(method -> !AnnotatedElementUtils.getMergedRepeatableAnnotations(method, Scheduled.class)
                         .isEmpty())
-                .map(method -> new ScheduledDescriptor(method.getDeclaringClass().getSimpleName(), method.getName()))
+                .map(method -> {
+                    Scheduled scheduled = scheduledAnnotation(method);
+                    return new ScheduledDescriptor(method.getDeclaringClass().getSimpleName(), method.getName(),
+                            scheduled.fixedDelayString(), scheduled.scheduler());
+                })
                 .collect(Collectors.toSet());
+    }
+
+    private static ScheduledDescriptor scheduledDescriptor(ScheduledTask scheduledTask) {
+        Runnable runnable = scheduledTask.getTask().getRunnable();
+        if (!(runnable instanceof SchedulingAwareRunnable awareRunnable)) {
+            throw new AssertionError("Expected a scheduling-aware runnable, got " + runnable.getClass());
+        }
+        Object delegate = ReflectionTestUtils.getField(runnable, "runnable");
+        if (!(delegate instanceof ScheduledMethodRunnable scheduledMethodRunnable)) {
+            throw new AssertionError("Expected a real scheduled method delegate, got "
+                    + (delegate == null ? "null" : delegate.getClass()));
+        }
+        Method method = scheduledMethodRunnable.getMethod();
+        return new ScheduledDescriptor(method.getDeclaringClass().getSimpleName(), method.getName(),
+                scheduledAnnotation(method).fixedDelayString(), awareRunnable.getQualifier());
+    }
+
+    private static Scheduled scheduledAnnotation(Method method) {
+        Set<Scheduled> annotations = AnnotatedElementUtils.getMergedRepeatableAnnotations(method, Scheduled.class);
+        assertEquals(1, annotations.size(), () -> "Expected one @Scheduled on " + method);
+        return annotations.iterator().next();
     }
 
     private static Set<ListenerDescriptor> rabbitListenerInventory(ApplicationContext applicationContext) {
@@ -347,7 +427,7 @@ class BackgroundExecutionContextPolicyTest {
     private @interface SchedulingEnabledTest {
     }
 
-    private record ScheduledDescriptor(String component, String method) {}
+    private record ScheduledDescriptor(String component, String method, String fixedDelayProperty, String scheduler) {}
 
     private record ListenerDescriptor(
             String component, String method, String listenerId, String containerFactory) {}
