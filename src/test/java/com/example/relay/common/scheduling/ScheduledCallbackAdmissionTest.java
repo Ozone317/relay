@@ -164,6 +164,7 @@ class ScheduledCallbackAdmissionTest {
 
     @Test
     void approvedScheduledJobMetricIdentitiesAreClosedAndExact() {
+        assertEquals(5, ScheduledJob.values().length);
         assertEquals(Set.of(
                         "retry-promotion",
                         "ready-dispatch",

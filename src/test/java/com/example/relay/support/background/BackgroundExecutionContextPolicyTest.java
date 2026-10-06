@@ -170,9 +170,13 @@ class BackgroundExecutionContextPolicyTest {
             assertTrue(applicationContext
                     .containsBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME));
 
-            Set<ScheduledDescriptor> registeredCallbacks = applicationContext
+            List<ScheduledTask> registeredTasks = applicationContext
                     .getBeansOfType(ScheduledTaskHolder.class).values().stream()
                     .flatMap(holder -> holder.getScheduledTasks().stream())
+                    .toList();
+            assertEquals(5, registeredTasks.size(),
+                    "scheduling opt-in must register exactly five production callback tasks");
+            Set<ScheduledDescriptor> registeredCallbacks = registeredTasks.stream()
                     .map(BackgroundExecutionContextPolicyTest::scheduledDescriptor)
                     .collect(Collectors.toSet());
             assertEquals(PRODUCTION_SCHEDULED_METHODS, registeredCallbacks,

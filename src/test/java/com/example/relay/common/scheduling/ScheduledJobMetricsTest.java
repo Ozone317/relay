@@ -1,6 +1,7 @@
 package com.example.relay.common.scheduling;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,11 +25,62 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import com.example.relay.deliveryengine.worker.ExecutionOwnershipMetrics;
 import com.example.relay.support.ScheduledCallbackTestSupport;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
 import org.junit.jupiter.api.Test;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 class ScheduledJobMetricsTest {
+
+    @Test
+    void admissionDenialDoesNotAdvanceExpectedStartBetweenAdmittedInvocations() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AtomicLong clock = new AtomicLong(100);
+        ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry, () -> clock.getAndAdd(5));
+        AnnotationConfigApplicationContext owner = new AnnotationConfigApplicationContext();
+        ScheduledCallbackAdmission admission = new ScheduledCallbackAdmission(owner);
+        ScheduledCallbackRunner runner = new ScheduledCallbackRunner(admission, metrics);
+        Duration delay = Duration.ofNanos(10);
+
+        metrics.run(ScheduledJob.READY_DISPATCH, delay, () -> {});
+        clock.set(1_000);
+        admission.onApplicationEvent(new ContextClosedEvent(owner));
+        runner.run(ScheduledJob.READY_DISPATCH, delay, () -> fail("denied work must not run"));
+        clock.set(200);
+        metrics.run(ScheduledJob.READY_DISPATCH, delay, () -> {});
+
+        assertEquals(1.0, registry.get("relay.scheduler.invocation.lag")
+                .tag("job", "ready-dispatch").timer().count());
+        assertEquals(85.0, registry.get("relay.scheduler.invocation.lag")
+                .tag("job", "ready-dispatch").timer()
+                .totalTime(java.util.concurrent.TimeUnit.NANOSECONDS));
+        assertEquals(1.0, registry.get("relay.scheduler.admission.denied")
+                .tag("job", "ready-dispatch").counter().count());
+        assertEquals(2.0, registry.get("relay.scheduler.callback.duration")
+                .tag("job", "ready-dispatch").tag("outcome", "success").timer().count());
+    }
+
+    @Test
+    void admissionDenialBeforeFirstInvocationDoesNotCreateInitialLag() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AtomicLong clock = new AtomicLong(900);
+        ScheduledJobMetrics metrics = new ScheduledJobMetrics(registry, () -> clock.getAndAdd(5));
+        AnnotationConfigApplicationContext owner = new AnnotationConfigApplicationContext();
+        ScheduledCallbackAdmission admission = new ScheduledCallbackAdmission(owner);
+        ScheduledCallbackRunner runner = new ScheduledCallbackRunner(admission, metrics);
+        Duration delay = Duration.ofNanos(10);
+
+        admission.onApplicationEvent(new ContextClosedEvent(owner));
+        runner.run(ScheduledJob.PASSWORD_RESET_EMAIL_RECOVERY, delay, () -> fail("denied work must not run"));
+        clock.set(1_000);
+        metrics.run(ScheduledJob.PASSWORD_RESET_EMAIL_RECOVERY, delay, () -> {});
+
+        assertEquals(0, registry.getMeters().stream()
+                .filter(meter -> meter.getId().getName().equals("relay.scheduler.invocation.lag")).count());
+        assertEquals(1.0, registry.get("relay.scheduler.callback.duration")
+                .tag("job", "password-reset-email-recovery").tag("outcome", "success").timer().count());
+    }
 
     @Test
     void admissionDenialHasOnlyOneBoundedCounterAndNoCallbackMetric() {
