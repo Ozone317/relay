@@ -4,6 +4,9 @@ import com.example.relay.user.application.PasswordResetService;
 import com.example.relay.user.application.PasswordResetTokenService;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
+import com.example.relay.common.scheduling.SchedulerNames;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.common.scheduling.ScheduledJob;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -47,18 +50,29 @@ public class PasswordResetEmailRecoverySweeper {
     private final PasswordResetService passwordResetService;
     private final PasswordResetTokenService passwordResetTokenService;
     private final PasswordResetEmailRecoveryProperties properties;
+    private final ScheduledCallbackRunner scheduledCallbackRunner;
 
     public PasswordResetEmailRecoverySweeper(PasswordResetTokenRepository passwordResetTokenRepository,
             PasswordResetService passwordResetService, PasswordResetTokenService passwordResetTokenService,
-            PasswordResetEmailRecoveryProperties properties) {
+            PasswordResetEmailRecoveryProperties properties, ScheduledCallbackRunner scheduledCallbackRunner) {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.passwordResetService = passwordResetService;
         this.passwordResetTokenService = passwordResetTokenService;
         this.properties = properties;
+        this.scheduledCallbackRunner = scheduledCallbackRunner;
     }
 
-    @Scheduled(fixedDelayString = "${relay.password-reset.email-recovery.interval}")
     public void sweep() {
+        sweepOnce();
+    }
+
+    @Scheduled(fixedDelayString = "${relay.password-reset.email-recovery.interval}",
+            scheduler = SchedulerNames.PASSWORD_RESET_MAINTENANCE)
+    public void scheduledSweep() {
+        scheduledCallbackRunner.run(ScheduledJob.PASSWORD_RESET_EMAIL_RECOVERY, properties.getInterval(), this::sweep);
+    }
+
+    private void sweepOnce() {
         Instant now = Instant.now();
         Instant threshold = now.minus(properties.getGrace());
 

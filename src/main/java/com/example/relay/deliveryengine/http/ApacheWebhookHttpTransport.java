@@ -13,7 +13,6 @@ import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import org.apache.hc.client5.http.ConnectTimeoutException;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
@@ -26,6 +25,8 @@ import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.util.Timeout;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ConcurrentTaskScheduler;
 
 /** Delivery-only Apache exchange orchestration. */
 public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
@@ -34,26 +35,38 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
 
     private final CloseableHttpClient client;
     private final WebhookResponseBodyConsumer responseBodyConsumer;
-    private final ScheduledExecutorService deadlineScheduler;
+    private final TaskScheduler deadlineScheduler;
     private final WebhookUriParser uriParser;
     private final Duration deadlineBudget;
 
-    public ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer) {
-        this(client, responseBodyConsumer, DeadlineSchedulerHolder.INSTANCE);
-    }
-
     public ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer,
-            ScheduledExecutorService deadlineScheduler) {
+            TaskScheduler deadlineScheduler) {
         this(client, responseBodyConsumer, deadlineScheduler, new WebhookUriParser());
     }
 
     ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer,
-            ScheduledExecutorService deadlineScheduler, WebhookUriParser uriParser) {
+            TaskScheduler deadlineScheduler, WebhookUriParser uriParser) {
         this(client, responseBodyConsumer, deadlineScheduler, uriParser, DELIVERY_DEADLINE);
     }
 
     ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer,
+            ScheduledExecutorService deadlineScheduler) {
+        this(client, responseBodyConsumer, new ConcurrentTaskScheduler(deadlineScheduler), new WebhookUriParser());
+    }
+
+    ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer,
+            ScheduledExecutorService deadlineScheduler, WebhookUriParser uriParser) {
+        this(client, responseBodyConsumer, new ConcurrentTaskScheduler(deadlineScheduler), uriParser,
+                DELIVERY_DEADLINE);
+    }
+
+    ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer,
             ScheduledExecutorService deadlineScheduler, WebhookUriParser uriParser, Duration deadlineBudget) {
+        this(client, responseBodyConsumer, new ConcurrentTaskScheduler(deadlineScheduler), uriParser, deadlineBudget);
+    }
+
+    ApacheWebhookHttpTransport(CloseableHttpClient client, WebhookResponseBodyConsumer responseBodyConsumer,
+            TaskScheduler deadlineScheduler, WebhookUriParser uriParser, Duration deadlineBudget) {
         this.client = client;
         this.responseBodyConsumer = Objects.requireNonNull(responseBodyConsumer, "responseBodyConsumer");
         this.deadlineScheduler = Objects.requireNonNull(deadlineScheduler, "deadlineScheduler");
@@ -211,8 +224,10 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
     }
 
     private ScheduledFuture<?> scheduleCancellation(HttpUriRequestBase request, DeliveryDeadline deadline) {
-        long remainingNanos = deadline.remaining().toNanos();
-        return deadlineScheduler.schedule(request::cancel, Math.max(0, remainingNanos), TimeUnit.NANOSECONDS);
+        Duration remaining = deadline.remaining();
+        return Objects.requireNonNull(deadlineScheduler.schedule(request::cancel,
+                deadlineScheduler.getClock().instant().plus(remaining)),
+                "deadline scheduler must return a future");
     }
 
     private static void applyTimeouts(HttpUriRequestBase request, Duration remaining) {
@@ -259,12 +274,4 @@ public final class ApacheWebhookHttpTransport implements WebhookHttpTransport {
         return new WebhookDeliveryException(code, diagnostic, cause);
     }
 
-    private static final class DeadlineSchedulerHolder {
-        private static final ScheduledExecutorService INSTANCE =
-                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
-                    Thread thread = new Thread(runnable, "relay-webhook-deadline");
-                    thread.setDaemon(true);
-                    return thread;
-                });
-    }
 }

@@ -34,6 +34,7 @@ import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
 import com.example.relay.message.domain.Message;
 import com.example.relay.support.SharedPostgresContainer;
+import com.example.relay.support.ScheduledCallbackTestSupport;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -78,7 +79,8 @@ class RetrySchedulerPostgresTest implements SharedPostgresContainer {
         setReadyFields(due);
         testEntityManager.flush();
 
-        new RetryScheduler(readyWorkRepository, validProperties()).releaseDueRetries();
+        new RetryScheduler(readyWorkRepository, validProperties(), ScheduledCallbackTestSupport.openRunner())
+                .releaseDueRetries();
 
         Attempt promoted = reload(due);
         assertThat(promoted.getStatus()).isEqualTo(AttemptStatus.CREATED);
@@ -102,8 +104,8 @@ class RetrySchedulerPostgresTest implements SharedPostgresContainer {
         properties.setSchedulerBatchSize(10);
         RecordingReadyWorkRepository firstRepository = new RecordingReadyWorkRepository(readyWorkRepository);
         RecordingReadyWorkRepository secondRepository = new RecordingReadyWorkRepository(readyWorkRepository);
-        RetryScheduler first = new RetryScheduler(firstRepository, properties);
-        RetryScheduler second = new RetryScheduler(secondRepository, properties);
+        RetryScheduler first = new RetryScheduler(firstRepository, properties, ScheduledCallbackTestSupport.openRunner());
+        RetryScheduler second = new RetryScheduler(secondRepository, properties, ScheduledCallbackTestSupport.openRunner());
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<?> firstRun = executor.submit(first::releaseDueRetries);

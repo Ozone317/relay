@@ -13,6 +13,8 @@ import org.apache.hc.core5.http.io.SocketConfig;
 import org.apache.hc.core5.util.TimeValue;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.TaskScheduler;
 
 import com.example.relay.deliveryengine.destination.PolicyEnforcingDnsResolver;
 import com.example.relay.deliveryengine.destination.PublicDestinationAddressPolicy;
@@ -72,7 +74,8 @@ public class DeliveryHttpClientConfig {
 
     @Bean
     public WebhookHttpTransport webhookHttpTransport(CloseableHttpClient client,
-            BoundedApacheResponseBodyConsumer responseBodyConsumer) {
-        return new ApacheWebhookHttpTransport(client, responseBodyConsumer);
+            BoundedApacheResponseBodyConsumer responseBodyConsumer,
+            @Qualifier("webhookDeadlineTaskScheduler") TaskScheduler deadlineScheduler) {
+        return new ApacheWebhookHttpTransport(client, responseBodyConsumer, deadlineScheduler);
     }
 }

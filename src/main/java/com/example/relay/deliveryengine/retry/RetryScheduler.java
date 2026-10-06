@@ -8,7 +8,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.example.relay.common.scheduling.SchedulerNames;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.common.scheduling.ScheduledJob;
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Component
 public class RetryScheduler {
@@ -17,18 +21,23 @@ public class RetryScheduler {
 
     private final ReadyWorkRepository readyWorkRepository;
     private final RetryProperties retryProperties;
+    private final ScheduledCallbackRunner scheduledCallbackRunner;
 
-    public RetryScheduler(ReadyWorkRepository readyWorkRepository, RetryProperties retryProperties) {
+    @Autowired
+    public RetryScheduler(ReadyWorkRepository readyWorkRepository, RetryProperties retryProperties,
+            ScheduledCallbackRunner scheduledCallbackRunner) {
         this.readyWorkRepository = readyWorkRepository;
         this.retryProperties = retryProperties;
+        this.scheduledCallbackRunner = scheduledCallbackRunner;
     }
 
-    @Scheduled(fixedDelayString = "${relay.retry.scheduler-interval}", scheduler = "retryTaskScheduler")
+    @Scheduled(fixedDelayString = "${relay.retry.scheduler-interval}", scheduler = SchedulerNames.DELIVERY_PROGRESS)
     public void scheduledReleaseDueRetries() {
-        if (!retryProperties.isSchedulingEnabled()) {
-            return;
-        }
-        releaseDueRetries();
+        scheduledCallbackRunner.run(ScheduledJob.RETRY_PROMOTION, retryProperties.getSchedulerInterval(), () -> {
+            if (retryProperties.isSchedulingEnabled()) {
+                releaseDueRetries();
+            }
+        });
     }
 
     public void releaseDueRetries() {

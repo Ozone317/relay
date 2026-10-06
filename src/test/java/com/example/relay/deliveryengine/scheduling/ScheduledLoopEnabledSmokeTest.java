@@ -10,13 +10,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.relay.attempt.infrastructure.ReadyWorkRepository;
-import com.example.relay.deliveryengine.config.RetrySchedulingConfig;
+import com.example.relay.common.scheduling.ProductionSchedulerConfig;
+import com.example.relay.common.scheduling.ScheduledCallbackAdmission;
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.deliveryengine.config.DeliveryEngineAsyncConfig;
 import com.example.relay.deliveryengine.dispatcher.ReadyWorkDispatcher;
 import com.example.relay.deliveryengine.publisher.ReadyTaskPublisher;
 import com.example.relay.deliveryengine.retry.RetryProperties;
 import com.example.relay.deliveryengine.retry.RetryScheduler;
 import com.example.relay.support.background.EnableTestBackgroundExecution;
 import com.example.relay.support.background.TestBackgroundComponent;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,8 +67,15 @@ class ScheduledLoopEnabledSmokeTest {
     @Configuration(proxyBeanMethods = false)
     @EnableScheduling
     @EnableConfigurationProperties(RetryProperties.class)
-    @Import({RetryScheduler.class, ReadyWorkDispatcher.class, RetrySchedulingConfig.class})
+    @Import({RetryScheduler.class, ReadyWorkDispatcher.class, ScheduledCallbackAdmission.class,
+            ScheduledCallbackRunner.class, ProductionSchedulerConfig.class,
+            DeliveryEngineAsyncConfig.class})
     static class TestConfig {
+
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
 
         @Bean
         ReadyWorkRepository readyWorkRepository() {
