@@ -274,7 +274,7 @@ No production code, test code, migration, build configuration, or runtime config
 
 ## P07 implementation verification and rollout gate (2026-10-07; Task 8 review correction)
 
-**Implementation code revision:** `c2f436d1db76b36eebc9b68c6d350f802d85fdd6`.
+**Production implementation:** behavior-bearing feature commits through `0df1142abd434967cfca8eaa245559ccce782cf0`; `10bd383d75dd8e7431d24f6926a0e57f34fb8d90` later made mechanical formatting-only edits. **Latest P07 tests-only review revision:** `25ea5f4a66a39a947533940aa17dfe5ec80b7981`. The branch HEAD also includes subsequent documentation evidence-sync commits and is distinct from the production implementation revision.
 
 ### Verification commands and outcomes
 
@@ -292,7 +292,7 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw spotless:apply "-DspotlessFi
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw spotless:check "-DspotlessFiles=$p07_files_regex"
 ```
 
-The selector matched 21 of 21 Java files changed since the base. `spotless:apply` reported 21 selected, 12 changed to clean and 9 cache-skipped. The same-scope `spotless:check` reported 21 clean, 0 needing changes, and 21 cache-skipped (`BUILD SUCCESS`). The post-format P07 regression selection passed 46 tests with zero failures/errors/skips. The 12 formatter edits are mechanical only.
+The selector matched 21 of 21 Java files changed since the base. `spotless:apply` reported 21 selected, 12 changed to clean and 9 cache-skipped. The same-scope `spotless:check` reported 21 clean, 0 needing changes, and 21 cache-skipped (`BUILD SUCCESS`). The post-format nine-class P07 regression selection passed 46 tests with zero failures/errors/skips. The 12 formatter edits are mechanical only.
 
 Full test suite:
 
@@ -304,13 +304,25 @@ env JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef 
 
 The command was started at 16:50 IST and interrupted at 16:58 IST with exit 130 after more than two minutes without progress. It hung in the existing non-P07 test `BrevoEmailSenderTest.send_throwsEmailSendException_on429RateLimited`. The test enqueues one HTTP 429 response at `BrevoEmailSenderTest.java:120`; Apache HttpClient retries after the 429, and the main test thread blocks in `DefaultBHttpClientConnection.receiveResponseHeader` → `BrevoEmailSender.send(BrevoEmailSender.java:48)` → `BrevoEmailSenderTest.java:124`, waiting for another MockWebServer response. No Surefire report was produced for that class. The completed reports at interruption covered 169 test classes and 877 tests, all with 0 failures, 0 errors, and 0 skipped. This is not a full-suite pass. Earlier baseline verification had already observed the same pre-existing email-phase hang.
 
-Focused regression results from completed tasks:
+Focused regression results from completed tasks (these selections differ):
 
 | Selection | Tests | Failures | Errors | Skipped |
 |---|---:|---:|---:|---:|
 | Full P07 selection | 42 | 0 | 0 | 0 |
 | P04/P05 regression selection | 49 | 0 | 0 | 0 |
 | P00/P06 regression selection | 18 | 0 | 0 | 0 |
+
+After review commit `25ea5f4a66a39a947533940aa17dfe5ec80b7981` added an aged-authority/no-expiry test and strengthened the acquired-ID sentinel assertion, the exact original seven-class P07 gate was rerun with 43 tests, 0 failures, 0 errors, and 0 skipped (`BUILD SUCCESS`). The added PostgreSQL-backed test aged `created_at` and `accepted_at` to 2000, retried the same key, and verified the original Message replayed with the same authority and unchanged fan-out cardinality; it also asserted no expiry/deletion/cleanup column exists. This 43-test gate is distinct from the original 42-test Task 6 run and the broader 46-test post-format selection.
+
+Exact review-fix gate:
+
+```bash
+env JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  RELAY_EMAIL_SENDER_EMAIL=test@example.com RELAY_EMAIL_SENDER_NAME=Relay BREVO_API_KEY=test-key \
+  JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw \
+  -Dtest=MessageIdempotencyKeyTest,MessageControllerTest,MessageServiceTest,MessageServiceTransactionIntegrationTest,MessageIdempotencyMigrationPostgresTest,MessageIdempotencyRepositoryPostgresTest,MessageIdempotencyPostgresTest \
+  -Drelay.retry.scheduling-enabled=false test
+```
 
 The precise command lines and selected class lists are in `task-6-report.md` and `task-7-report.md` in the SDD evidence directory. Task 6's service test exercised the real `MessageService.create → MessageIdempotencyRepository.tryAcquire` transaction and queried `SHOW transaction_isolation` through its transaction-bound JDBC connection. Both transactions observed `read committed`; owner PID 109 and contender PID 110 were distinct. PostgreSQL reported `wait_event_type=Lock`, `wait_event=transactionid`, `pg_blocking_pids(110)={109}`. This observation was made for winner commit/replay, fingerprint conflict, and winner rollback/takeover. The winner-commit loser's next statement in the same transaction read and reused the committed authority. The rollback waiter acquired the identity and committed one coherent graph.
 
@@ -363,6 +375,6 @@ This local smoke proves cross-process behavior on the P07 artifact. It is not a 
 
 ### Review and remaining notes
 
-Task 6 adversarial review approved the service/concurrency regression diff with no findings. Task 7 adversarial review approved the invariant inventory and P00/P04/P05/P06 gates with no findings. One parked Task 5 Minor remains: `MessageServiceTest`'s keyed-owner mock returns the proposed UUID instead of a distinct acquired-ID sentinel. Production code correctly uses the acquired result; this is a test-strength improvement. It is not a Task 8 contract deviation.
+Task 6 adversarial review approved the service/concurrency regression diff with no findings. Task 7 adversarial review approved the invariant inventory and P00/P04/P05/P06 gates with no findings. The earlier Task 5 Minor about `MessageServiceTest` returning the proposed UUID rather than a distinct acquired-ID sentinel was resolved by review commit `25ea5f4a66a39a947533940aa17dfe5ec80b7981`; the test now returns and asserts a distinct acquired ID. The same tests-only commit adds the aged-authority/no-expiry replay regression described above.
 
 The initial Task 8 commit (`db0fdfdfb2a556b09c56f0eddf45ea26825a3fcf`) was documentation-only and contained only the spec and this report. A separate review-correction commit (`10bd383d75dd8e7431d24f6926a0e57f34fb8d90`) mechanically formatted 12 Java files already modified by P07; it made no behavior changes. No migration, build file, or runtime configuration changed. The build produced only ignored `target/` artifacts, and temporary infrastructure was removed.
