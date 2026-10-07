@@ -113,8 +113,8 @@ class MessageServiceTest {
         Instant acceptedAt = Instant.parse("2026-10-06T12:30:00Z");
         UUID acquiredMessageId = UUID.fromString("7368a3da-367c-44c9-8cb0-3a15d2237401");
         when(subscriptionRepository.findAllByEventIdAndEndpointActiveTrue(event.getId())).thenReturn(subscriptions);
-        when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class))).thenAnswer(
-                invocation -> {
+        when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class)))
+                .thenAnswer(invocation -> {
                     UUID proposedMessageId = invocation.getArgument(3);
                     assertNotEquals(acquiredMessageId, proposedMessageId);
                     return Optional.of(new MessageIdempotencyAcquisition(acquiredMessageId, acceptedAt));
@@ -127,8 +127,7 @@ class MessageServiceTest {
 
         assertEquals(acceptedAt, result.message().getCreatedAt());
         assertEquals(acquiredMessageId, result.message().getId());
-        verify(idempotencyRepository).tryAcquire(eq(user.getId()), eq(app.getId()), eq(key),
-                any(UUID.class));
+        verify(idempotencyRepository).tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class));
         verify(messageMapper).toEntity(eq(request), eq(app), eq(event), eq(acquiredMessageId), eq(acceptedAt));
         verify(messageRepository).save(result.message());
         verify(attemptService).createFromSubscriptionList(subscriptions, result.message());
