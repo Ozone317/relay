@@ -1,9 +1,11 @@
 package com.example.relay.message.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.infrastructure.AppRepository;
@@ -15,7 +17,10 @@ import com.example.relay.environment.domain.Environment;
 import com.example.relay.environment.infrastructure.EnvironmentRepository;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.infrastructure.EventRepository;
+import com.example.relay.message.api.MessageIdempotencyKey;
 import com.example.relay.message.api.dto.MessageCreateDto;
+import com.example.relay.message.domain.Message;
+import com.example.relay.message.exception.NoActiveSubscribersException;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
@@ -26,6 +31,9 @@ import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.RefreshTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -37,142 +45,186 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @Tag("integration")
 @SpringBootTest
-public class MessageServiceTransactionIntegrationTest implements SharedPostgresContainer {
+class MessageServiceTransactionIntegrationTest implements SharedPostgresContainer {
 
-    @Autowired
-    private MessageService underTest;
-
-    @Autowired
-    private MessageRepository messageRepository;
-
-    @MockitoSpyBean
-    private AttemptRepository attemptRepository;
-
-    @Autowired
-    private DeliveryRepository deliveryRepository;
-
-    @Autowired
-    private EnvironmentRepository environmentRepository;
-
-    @Autowired
-    private AppRepository appRepository;
-
-    @Autowired
-    private EventRepository eventRepository;
-
-    @Autowired
-    private EndpointRepository endpointRepository;
-
-    @Autowired
-    private SubscriptionRepository subscriptionRepository;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private RefreshTokenRepository refreshTokenRepository;
-
-    @Autowired
-    private PasswordResetTokenRepository passwordResetTokenRepository;
-
-    @Autowired
-    private EmailVerificationTokenRepository emailVerificationTokenRepository;
-
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
+    @Autowired private MessageService underTest;
+    @Autowired private MessageRepository messageRepository;
+    @MockitoSpyBean private AttemptRepository attemptRepository;
+    @Autowired private DeliveryRepository deliveryRepository;
+    @Autowired private EnvironmentRepository environmentRepository;
+    @Autowired private AppRepository appRepository;
+    @Autowired private EventRepository eventRepository;
+    @Autowired private EndpointRepository endpointRepository;
+    @Autowired private SubscriptionRepository subscriptionRepository;
+    @Autowired private UserRepository userRepository;
+    @Autowired private RefreshTokenRepository refreshTokenRepository;
+    @Autowired private PasswordResetTokenRepository passwordResetTokenRepository;
+    @Autowired private EmailVerificationTokenRepository emailVerificationTokenRepository;
+    @Autowired private ObjectMapper objectMapper;
+    @Autowired private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void setUp() {
-        // Remove prior attempt rows before their parent messages.
-        // deliveries must go before messages too - it FK-references messages directly, and
-        // AttemptService now creates one real Delivery row per (message, endpoint) pair.
-        jdbcTemplate.update("DELETE FROM attempts");
-        deliveryRepository.deleteAll();
-        messageRepository.deleteAll();
+        clearMessageGraph();
     }
 
     @Test
-    void create_shouldRollbackMessage_whenAttemptCreationFails() throws Exception {
-        // Arrange
-        User user = new User("test@mail.com", "passwordHash");
-        Environment env = new Environment("Env 1", "Desc 1", user);
-        App app = new App("App 1", env);
-        Event event = new Event("payment.created", app);
-        Endpoint endpoint = new Endpoint("endpoint 1", "https://example.com/webhook", "whsec_some_scret", app);
-        Subscription subscription = new Subscription(app, event, endpoint);
-        MessageCreateDto request = new MessageCreateDto(event.getId(), objectMapper.readTree("""
-                    {
-                        "message": "Hello",
-                        "count": 42,
-                        "active": true
-                    }
-                """));
+    void keyedSuccessCommitsIdentityMessageDeliveriesAndAttemptsCoherently() throws Exception {
+        Fixture fixture = persistFixture("keyed-success@mail.com", true);
+        MessageCreateDto request = request(fixture.event());
+        MessageIdempotencyKey key = new MessageIdempotencyKey("success-key");
 
-        // Persist requisite data
-        userRepository.save(user);
-        environmentRepository.save(env);
-        appRepository.save(app);
-        eventRepository.save(event);
-        endpointRepository.save(endpoint);
-        subscriptionRepository.save(subscription);
+        Message result = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
+                fixture.user().getId()).message();
 
-        // Make attempt persistence fail
+        assertCounts(1, 1, 1, 1);
+        assertKeyedCoherence(fixture, key, result);
+    }
+
+    @Test
+    void attemptFailureRollsBackAllRowsAndRetryWithSameKeySucceeds() throws Exception {
+        Fixture fixture = persistFixture("retry@mail.com", true);
+        MessageCreateDto request = request(fixture.event());
+        MessageIdempotencyKey key = new MessageIdempotencyKey("retry-key");
         doThrow(new RuntimeException("Attempt persistence failed")).when(attemptRepository).saveAll(anyList());
 
-        // Act
-        assertThrows(RuntimeException.class, () -> underTest.create(request, app.getId(), env.getId(), user.getId()));
+        assertThrows(RuntimeException.class, () -> underTest.create(request, Optional.of(key), fixture.app().getId(),
+                fixture.env().getId(), fixture.user().getId()));
+        assertCounts(0, 0, 0, 0);
 
-        // Assert
-        assertEquals(0, messageRepository.count());
-        assertEquals(0, deliveryRepository.count());
-        assertEquals(0, attemptRepository.count());
+        reset(attemptRepository);
+        Message retry = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
+                fixture.user().getId()).message();
+        assertCounts(1, 1, 1, 1);
+        assertKeyedCoherence(fixture, key, retry);
     }
 
     @Test
-    void create_commitsOneDeliveryAndAttemptOnePerActiveSubscription() throws Exception {
-        User user = userRepository.save(new User("fanout@mail.com", "passwordHash"));
+    void noSubscriberKeyedRequestRollsBackIdentityAcquisition() throws Exception {
+        Fixture fixture = persistFixture("no-subscribers@mail.com", false);
+        MessageIdempotencyKey key = new MessageIdempotencyKey("no-subscriber-key");
+
+        assertThrows(NoActiveSubscribersException.class, () -> underTest.create(request(fixture.event()), Optional.of(key),
+                fixture.app().getId(), fixture.env().getId(), fixture.user().getId()));
+
+        assertCounts(0, 0, 0, 0);
+    }
+
+    @Test
+    void committedReplayReturnsOriginalMessageWithoutChangingGraphCounts() throws Exception {
+        Fixture fixture = persistFixture("replay@mail.com", true);
+        MessageCreateDto request = request(fixture.event());
+        MessageIdempotencyKey key = new MessageIdempotencyKey("replay-key");
+        Message first = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
+                fixture.user().getId()).message();
+        Instant originalCreatedAt = first.getCreatedAt();
+        long[] countsBeforeReplay = counts();
+
+        Message replay = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
+                fixture.user().getId()).message();
+
+        assertEquals(first.getId(), replay.getId());
+        assertEquals(originalCreatedAt, replay.getCreatedAt());
+        assertEquals(countsBeforeReplay[0], counts()[0]);
+        assertEquals(countsBeforeReplay[1], counts()[1]);
+        assertEquals(countsBeforeReplay[2], counts()[2]);
+        assertEquals(countsBeforeReplay[3], counts()[3]);
+        assertKeyedCoherence(fixture, key, replay);
+    }
+
+    @Test
+    void keylessIdenticalSubmissionsCreateIndependentGraphsWithoutIdentityRows() throws Exception {
+        Fixture fixture = persistFixture("keyless@mail.com", true);
+        MessageCreateDto request = request(fixture.event());
+
+        Message first = underTest.create(request, Optional.empty(), fixture.app().getId(), fixture.env().getId(),
+                fixture.user().getId()).message();
+        Message second = underTest.create(request, Optional.empty(), fixture.app().getId(), fixture.env().getId(),
+                fixture.user().getId()).message();
+
+        assertNotEquals(first.getId(), second.getId());
+        assertCounts(0, 2, 2, 2);
+    }
+
+    private Fixture persistFixture(String email, boolean withSubscriber) {
+        User user = userRepository.save(new User(email, "passwordHash"));
         Environment env = environmentRepository.save(new Environment("Env 1", "Desc 1", user));
         App app = appRepository.save(new App("App 1", env));
         Event event = eventRepository.save(new Event("payment.created", app));
-        Endpoint first = endpointRepository.save(new Endpoint("first", "https://example.com/first", "secret", app));
-        Endpoint second = endpointRepository.save(new Endpoint("second", "https://example.com/second", "secret", app));
-        subscriptionRepository.save(new Subscription(app, event, first));
-        subscriptionRepository.save(new Subscription(app, event, second));
+        if (withSubscriber) {
+            Endpoint endpoint = endpointRepository.save(
+                    new Endpoint("endpoint", "https://example.com/webhook", "secret", app));
+            subscriptionRepository.save(new Subscription(app, event, endpoint));
+        }
+        return new Fixture(user, env, app, event);
+    }
 
-        underTest.create(new MessageCreateDto(event.getId(), objectMapper.readTree("{\"amount\":1}")),
-                app.getId(), env.getId(), user.getId());
+    private MessageCreateDto request(Event event) throws Exception {
+        return new MessageCreateDto(event.getId(), objectMapper.readTree("{\"amount\":1}"));
+    }
 
-        assertEquals(1, messageRepository.count());
-        assertEquals(2, deliveryRepository.count());
-        assertEquals(2, attemptRepository.count());
-        assertEquals(2, attemptRepository.findAll().stream().filter(attempt -> attempt.getAttemptNo() == 1
-                && attempt.getExecutionGeneration() == 0 && attempt.getExecutionClaimedAt() == null).count());
-        assertEquals(2, jdbcTemplate.queryForObject("SELECT COUNT(*) FROM delivery_status WHERE attempt_no = 1 "
-                + "AND attempt_count = 1", Long.class));
+    private void assertKeyedCoherence(Fixture fixture, MessageIdempotencyKey key, Message message) {
+        Long coherent = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM message_idempotency i
+                JOIN messages m ON m.id = i.message_id
+                JOIN apps a ON a.id = m.app_id
+                JOIN environments e ON e.id = a.environment_id
+                WHERE i.user_id = e.user_id
+                  AND i.app_id = m.app_id
+                  AND i.user_id = ?
+                  AND i.app_id = ?
+                  AND i.idempotency_key = ?
+                  AND i.message_id = ?
+                """, Long.class, fixture.user().getId(), fixture.app().getId(), key.value(), message.getId());
+        assertEquals(1L, coherent);
+        Message scoped = messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(message.getId(),
+                fixture.app().getId(), fixture.env().getId(), fixture.user().getId()).orElseThrow();
+        assertEquals(message.getId(), scoped.getId());
+
+        Instant acceptedAt = jdbcTemplate.queryForObject("SELECT accepted_at FROM message_idempotency "
+                + "WHERE user_id = ? AND app_id = ? AND idempotency_key = ?", (rs, rowNum) -> rs.getTimestamp(1).toInstant(),
+                fixture.user().getId(), fixture.app().getId(), key.value());
+        assertEquals(scoped.getCreatedAt(), acceptedAt);
+    }
+
+    private void assertCounts(long identities, long messages, long deliveries, long attempts) {
+        long[] actual = counts();
+        assertEquals(identities, actual[0]);
+        assertEquals(messages, actual[1]);
+        assertEquals(deliveries, actual[2]);
+        assertEquals(attempts, actual[3]);
+    }
+
+    private long[] counts() {
+        return new long[] {
+            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM message_idempotency", Long.class),
+            messageRepository.count(),
+            deliveryRepository.count(),
+            attemptRepository.count()
+        };
+    }
+
+    private void clearMessageGraph() {
+        jdbcTemplate.update("DELETE FROM attempts");
+        jdbcTemplate.update("DELETE FROM deliveries");
+        jdbcTemplate.update("DELETE FROM message_idempotency");
+        jdbcTemplate.update("DELETE FROM messages");
     }
 
     @AfterEach
     void cleanUp() {
-        // Explicit cleanup to remove this test's created fixtures. This test is not @Transactional,
-        // so manual cleanup ensures no data persists to affect subsequent tests.
         subscriptionRepository.deleteAll();
-        jdbcTemplate.update("DELETE FROM attempts");
-        deliveryRepository.deleteAll();
-        messageRepository.deleteAll();
+        clearMessageGraph();
         endpointRepository.deleteAll();
         eventRepository.deleteAll();
         appRepository.deleteAll();
         environmentRepository.deleteAll();
         refreshTokenRepository.deleteAll();
-        // password_reset_tokens FKs to users (added in Task 4, after this test was written) - must be
-        // cleared before userRepository.deleteAll() below, same as refreshTokenRepository above.
         passwordResetTokenRepository.deleteAll();
-        // email_verification_tokens FKs to users (added in Task 1, after this test was written) - must
-        // be cleared before userRepository.deleteAll() below, same as passwordResetTokenRepository above.
         emailVerificationTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
+
+    private record Fixture(User user, Environment env, App app, Event event) { }
 }

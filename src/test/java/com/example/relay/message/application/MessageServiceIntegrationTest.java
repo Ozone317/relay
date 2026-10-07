@@ -21,6 +21,7 @@ import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Optional;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -98,7 +99,7 @@ public class MessageServiceIntegrationTest implements SharedPostgresContainer {
         subscriptionRepository.save(subscription);
 
         // Act
-        underTest.create(request, app.getId(), env.getId(), user.getId());
+        underTest.create(request, Optional.empty(), app.getId(), env.getId(), user.getId());
 
         // Assert
         assertEquals(1, messageRepository.count());

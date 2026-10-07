@@ -5,6 +5,8 @@ import com.example.relay.event.domain.Event;
 import com.example.relay.message.api.dto.MessageCreateDto;
 import com.example.relay.message.api.dto.MessageResponseDto;
 import com.example.relay.message.domain.Message;
+import java.time.Instant;
+import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -12,6 +14,10 @@ public class MessageMapper {
 
     public Message toEntity(MessageCreateDto request, App app, Event event) {
         return new Message(app, event, request.body());
+    }
+
+    public Message toEntity(MessageCreateDto request, App app, Event event, UUID messageId, Instant acceptedAt) {
+        return new Message(messageId, app, event, request.body(), acceptedAt);
     }
 
     public MessageResponseDto toResponseDto(Message message) {
