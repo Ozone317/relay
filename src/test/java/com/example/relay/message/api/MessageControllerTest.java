@@ -285,6 +285,9 @@ public class MessageControllerTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message")
                         .value("Idempotency-Key is already associated with a different message request"))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.timestamp").exists())
+                .andExpect(jsonPath("$.fieldErrors").doesNotExist())
                 .andReturn().getResponse().getContentAsString();
 
         org.assertj.core.api.Assertions.assertThat(response).doesNotContain(key, payload);

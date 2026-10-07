@@ -78,7 +78,24 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
                 fixture.user().getId()).message();
 
         assertCounts(1, 1, 1, 1);
-        assertKeyedCoherence(fixture, key, result);
+        assertKeyedCoherence(fixture, key, result, 1);
+    }
+
+    @Test
+    void keyedFanoutToThreeSubscribersStartsEveryAttemptInCreatedGenerationZero() throws Exception {
+        Fixture fixture = persistFixture("three-subscriber@mail.com", true);
+        for (int i = 2; i <= 3; i++) {
+            Endpoint endpoint = endpointRepository.save(new Endpoint("endpoint-" + i,
+                    "https://example.com/webhook/" + i, "secret-" + i, fixture.app()));
+            subscriptionRepository.save(new Subscription(fixture.app(), fixture.event(), endpoint));
+        }
+        MessageIdempotencyKey key = new MessageIdempotencyKey("three-subscriber-key");
+
+        Message accepted = underTest.create(request(fixture.event()), Optional.of(key), fixture.app().getId(),
+                fixture.env().getId(), fixture.user().getId()).message();
+
+        assertCounts(1, 1, 3, 3);
+        assertKeyedCoherence(fixture, key, accepted, 3);
     }
 
     @Test
@@ -96,7 +113,7 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         Message retry = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
                 fixture.user().getId()).message();
         assertCounts(1, 1, 1, 1);
-        assertKeyedCoherence(fixture, key, retry);
+        assertKeyedCoherence(fixture, key, retry, 1);
     }
 
     @Test
@@ -129,7 +146,7 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         assertEquals(countsBeforeReplay[1], counts()[1]);
         assertEquals(countsBeforeReplay[2], counts()[2]);
         assertEquals(countsBeforeReplay[3], counts()[3]);
-        assertKeyedCoherence(fixture, key, replay);
+        assertKeyedCoherence(fixture, key, replay, 1);
     }
 
     @Test
@@ -163,7 +180,8 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         return new MessageCreateDto(event.getId(), objectMapper.readTree("{\"amount\":1}"));
     }
 
-    private void assertKeyedCoherence(Fixture fixture, MessageIdempotencyKey key, Message message) {
+    private void assertKeyedCoherence(Fixture fixture, MessageIdempotencyKey key, Message message,
+            int subscriberCount) {
         Long coherent = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
                 FROM message_idempotency i
@@ -178,6 +196,17 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
                   AND i.message_id = ?
                 """, Long.class, fixture.user().getId(), fixture.app().getId(), key.value(), message.getId());
         assertEquals(1L, coherent);
+        assertEquals((long) subscriberCount, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM deliveries WHERE message_id = ?", Long.class, message.getId()));
+        assertEquals((long) subscriberCount, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE message_id = ?", Long.class, message.getId()));
+        Long invalidAttemptStateCount = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM attempts
+                WHERE message_id = ?
+                  AND (attempt_no <> 1 OR status <> 'CREATED' OR execution_generation <> 0
+                       OR execution_claimed_at IS NOT NULL)
+                """, Long.class, message.getId());
+        assertEquals(0L, invalidAttemptStateCount);
         Message scoped = messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(message.getId(),
                 fixture.app().getId(), fixture.env().getId(), fixture.user().getId()).orElseThrow();
         assertEquals(message.getId(), scoped.getId());
