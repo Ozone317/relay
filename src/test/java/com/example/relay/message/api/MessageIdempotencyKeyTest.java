@@ -17,8 +17,8 @@ class MessageIdempotencyKeyTest {
 
     @Test
     void parseHeaderValues_preservesValidTokenAndCase() {
-        assertThat(MessageIdempotencyKey.parseHeaderValues(List.of("A-z_09.~!#$%&'*+^`|-"))).hasValueSatisfying(
-                key -> assertThat(key.value()).isEqualTo("A-z_09.~!#$%&'*+^`|-"));
+        assertThat(MessageIdempotencyKey.parseHeaderValues(List.of("A-z_09.~!#$%&'*+^`|-")))
+                .hasValueSatisfying(key -> assertThat(key.value()).isEqualTo("A-z_09.~!#$%&'*+^`|-"));
     }
 
     @Test

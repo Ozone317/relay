@@ -22,11 +22,9 @@ public class MessageIdempotencyRepository {
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<MessageIdempotencyAcquisition> tryAcquire(UUID userId, UUID appId, MessageIdempotencyKey key,
             UUID proposedMessageId) {
-        MapSqlParameterSource parameters = new MapSqlParameterSource()
-                .addValue("userId", userId)
-                .addValue("appId", appId)
-                .addValue("idempotencyKey", key.value())
-                .addValue("messageId", proposedMessageId);
+        MapSqlParameterSource parameters =
+                new MapSqlParameterSource().addValue("userId", userId).addValue("appId", appId)
+                        .addValue("idempotencyKey", key.value()).addValue("messageId", proposedMessageId);
         return jdbc.query("""
                 INSERT INTO message_idempotency (
                     user_id, app_id, idempotency_key, fingerprint_version, message_id, accepted_at
@@ -39,20 +37,16 @@ public class MessageIdempotencyRepository {
             if (!rows.next()) {
                 return Optional.empty();
             }
-            return Optional.of(new MessageIdempotencyAcquisition(
-                    rows.getObject("message_id", UUID.class), rows.getTimestamp("accepted_at").toInstant()));
+            return Optional.of(new MessageIdempotencyAcquisition(rows.getObject("message_id", UUID.class),
+                    rows.getTimestamp("accepted_at").toInstant()));
         });
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
     public CommittedMessageIdempotency findCommittedAndCompare(UUID userId, UUID appId, MessageIdempotencyKey key,
             UUID eventId, JsonNode body) {
-        Map<String, ?> parameters = Map.of(
-                "userId", userId,
-                "appId", appId,
-                "idempotencyKey", key.value(),
-                "eventId", eventId,
-                "body", body.toString());
+        Map<String, ?> parameters = Map.of("userId", userId, "appId", appId, "idempotencyKey", key.value(), "eventId",
+                eventId, "body", body.toString());
         return jdbc.query("""
                 SELECT i.message_id,
                        i.accepted_at,

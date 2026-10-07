@@ -1,7 +1,7 @@
 # P07 Idempotent Message Admission Design
 
 **Date:** 2026-10-06
-**Status:** IMPLEMENTED; coordinated deployment gate remains
+**Status:** Implementation is present; full-suite verification and coordinated deployment remain outstanding
 **Scope:** PostgreSQL-authoritative idempotency for `POST /api/v1/environments/{environmentId}/apps/{appId}/messages`
 **Out of scope:** tiers, entitlements, quotas, billing, API-key issuance, generic deduplication, replay-operation idempotency, payload limits, retention cleanup, and production implementation in this design task
 
@@ -606,15 +606,15 @@ No unresolved owner/product decision blocks P07 implementation. Future decisions
 11. A real PostgreSQL test observes `read committed` inside the actual acquisition transaction and proves both winner-commit replay and winner-rollback takeover without sleeps.
 12. PostgreSQL-backed tests prove every protocol-created authority has coherent User/App/Message ownership, while a corruption-oriented test documents the narrower boundary of the database constraints and preserves fail-loud replay behavior.
 
-## 19. Implementation verification (2026-10-07)
+## 19. Implementation verification (2026-10-07; Task 8 review correction)
 
 P07 production implementation is present at code revision `c2f436d1db76b36eebc9b68c6d350f802d85fdd6`. The additive V15 migration, service protocol, optional header, and regression tests implement the contract above without changing it.
 
 Verification evidence:
 
 - The complete P07 selection passed: 42 tests, 0 failures, 0 errors, 0 skipped. The P04/P05 regression selection passed 49 tests, and the P00/P06 selection passed 18 tests, all with zero failures/errors/skips. Exact commands and class lists are preserved in the implementation report and task evidence.
-- The full `./mvnw test` suite was started with the repository's inert test-only JWT/email variables but did not complete. It reached `BrevoEmailSenderTest.send_throwsEmailSendException_on429RateLimited`, where the main test thread remained blocked reading an automatic HttpClient retry response from MockWebServer after its test queued one 429 response. After more than two minutes without new Surefire reports, the run was interrupted (exit 130). 169 completed class reports accounted for 870 tests, all with zero failures/errors/skips. This is a pre-existing non-P07 email-test hang; full-suite success is not claimed.
-- Repository-wide `spotless:check` fails because 201 Java files require formatting. Its output names `AttemptMapperTest.java` and `AttemptExecutionRepositoryPostgresTest.java`, then summarizes 199 other files. A targeted Spotless check of every P07 message Java source/test file passes.
+- The full `./mvnw test` suite was started with the repository's inert test-only JWT/email variables but did not complete. It reached `BrevoEmailSenderTest.send_throwsEmailSendException_on429RateLimited`, where the main test thread remained blocked reading an automatic HttpClient retry response from MockWebServer after its test queued one 429 response. After more than two minutes without new Surefire reports, the run was interrupted (exit 130). The 169 completed class reports contain 877 tests, all with zero failures/errors/skips. This is a pre-existing non-P07 email-test hang; full-suite success is not claimed.
+- Repository-wide `spotless:check` fails because 201 Java files require formatting. Its output names `AttemptMapperTest.java` and `AttemptExecutionRepositoryPostgresTest.java`, then summarizes 199 other files. The first documented P07-scoped selector was incorrect and selected zero files; it is not evidence of a pass. For the review correction, the selector was generated from the 21 Java files changed since base `761b539d66b14fb09ceff150fc4ccb60e855170b` (including `GlobalExceptionHandler.java`): `p07_files_regex=$(git diff --name-only 761b539d -- '*.java' | sed 's/[.]/[.]/g' | sed 's|^|.*/|' | paste -sd '|' -)`. Scoped `spotless:apply` reported 21 selected, 12 changed to clean and 9 cache-skipped; scoped `spotless:check` with the identical selector reported 21 clean, 0 needing changes, and 21 cache-skipped. The post-format P07 regression selection passed 46 tests with zero failures/errors/skips.
 - The actual migrated PostgreSQL 16 catalog contains seven constraints and two indexes on `message_idempotency`; the Message FK is `DEFERRABLE INITIALLY DEFERRED`. The rollout coherence query returned zero mismatches. On the local smoke graph, both `user_id = App owner` and `app_id = Message app` evaluated true.
 - The actual service concurrency tests report `SHOW transaction_isolation = read committed` for owner and contender on distinct backend PIDs. PostgreSQL observed the contender waiting on the owner's transaction ID lock. Winner commit caused the loser to reuse the authority; winner rollback let the loser acquire it.
 - A local disposable two-instance HTTP smoke used the same P07 jar against one PostgreSQL 16 database. Instance 1 accepted a keyed request with `201`; instance 2 replayed `201` with the same Message ID; changed content returned `409`; keyless identical submissions through the two instances returned `201` with distinct IDs. Stable post-smoke cardinality was one authority, three Messages, three Deliveries, and three Attempt #1 rows. All temporary application processes and containers were removed.

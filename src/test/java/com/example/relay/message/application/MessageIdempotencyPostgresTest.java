@@ -74,19 +74,32 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
 
     private static final String BODY = "{\"amount\":1}";
 
-    @Autowired private MessageService service;
-    @Autowired private MockMvc mockMvc;
-    @Autowired private ObjectMapper objectMapper;
-    @Autowired private JdbcTemplate jdbc;
-    @Autowired private UserRepository userRepository;
-    @Autowired private EnvironmentRepository environmentRepository;
-    @Autowired private AppRepository appRepository;
-    @Autowired private EventRepository eventRepository;
-    @Autowired private EndpointRepository endpointRepository;
-    @Autowired private SubscriptionRepository subscriptionRepository;
-    @Autowired private MessageRepository messageRepository;
-    @MockitoSpyBean private MessageIdempotencyRepository idempotencyRepository;
-    @MockitoSpyBean private MessageMapper messageMapper;
+    @Autowired
+    private MessageService service;
+    @Autowired
+    private MockMvc mockMvc;
+    @Autowired
+    private ObjectMapper objectMapper;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private UserRepository userRepository;
+    @Autowired
+    private EnvironmentRepository environmentRepository;
+    @Autowired
+    private AppRepository appRepository;
+    @Autowired
+    private EventRepository eventRepository;
+    @Autowired
+    private EndpointRepository endpointRepository;
+    @Autowired
+    private SubscriptionRepository subscriptionRepository;
+    @Autowired
+    private MessageRepository messageRepository;
+    @MockitoSpyBean
+    private MessageIdempotencyRepository idempotencyRepository;
+    @MockitoSpyBean
+    private MessageMapper messageMapper;
 
     private final List<UUID> fixtureUsers = new ArrayList<>();
 
@@ -169,24 +182,26 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
 
         Message first = service.create(request(fixture.event()), Optional.of(key), fixture.app().getId(),
                 fixture.environment().getId(), fixture.user().getId()).message();
-        Message sameCredentialsDifferentApp = service.create(request(secondEvent), Optional.of(key),
-                secondApp.getId(), fixture.environment().getId(), fixture.user().getId()).message();
+        Message sameCredentialsDifferentApp = service.create(request(secondEvent), Optional.of(key), secondApp.getId(),
+                fixture.environment().getId(), fixture.user().getId()).message();
         Message otherEnvironment = service.create(request(thirdEvent), Optional.of(key), thirdApp.getId(),
                 thirdApp.getEnvironment().getId(), fixture.user().getId()).message();
-        Message sameDurableIdentity = service.create(request(fixture.event()), Optional.of(key),
-                fixture.app().getId(), fixture.environment().getId(), fixture.user().getId()).message();
+        Message sameDurableIdentity = service.create(request(fixture.event()), Optional.of(key), fixture.app().getId(),
+                fixture.environment().getId(), fixture.user().getId()).message();
 
         assertThat(sameCredentialsDifferentApp.getId()).isNotEqualTo(first.getId());
         assertThat(otherEnvironment.getId()).isNotEqualTo(first.getId());
         assertThat(sameDurableIdentity.getId()).isEqualTo(first.getId());
         assertGraph(fixture, key, first.getId(), 1, 1, 1);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND idempotency_key = ?",
-                Long.class, fixture.user().getId(), key.value())).isEqualTo(3L);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND idempotency_key = ?", Long.class,
+                fixture.user().getId(), key.value())).isEqualTo(3L);
 
         Authentication alternatePresentation = principalAuth(fixture.user().getId(), "renamed@example.test");
-        mockMvc.perform(post(path(fixture)).with(authentication(alternatePresentation)).header("Idempotency-Key", key.value())
-                        .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request(fixture.event()))))
-                .andExpect(status().isCreated()).andExpect(jsonPath("$.id").value(first.getId().toString()));
+        mockMvc.perform(post(path(fixture)).with(authentication(alternatePresentation))
+                .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request(fixture.event())))).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(first.getId().toString()));
     }
 
     @Test
@@ -209,9 +224,9 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         String value = "race-" + UUID.randomUUID();
         MessageIdempotencyKey key = new MessageIdempotencyKey(value);
         MessageCreateDto ownerRequest = request(fixture.event());
-        MessageCreateDto contenderRequest = conflictingBody
-                ? new MessageCreateDto(fixture.event().getId(), objectMapper.readTree("{\"amount\":2}"))
-                : ownerRequest;
+        MessageCreateDto contenderRequest =
+                conflictingBody ? new MessageCreateDto(fixture.event().getId(), objectMapper.readTree("{\"amount\":2}"))
+                        : ownerRequest;
         AtomicInteger calls = new AtomicInteger();
         AtomicInteger ownerPid = new AtomicInteger();
         AtomicInteger contenderPid = new AtomicInteger();
@@ -250,12 +265,10 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
                 contenderAcquisition.set(acquired);
             }
             return acquired;
-        }).when(repositoryTarget).tryAcquire(org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any());
+        }).when(repositoryTarget).tryAcquire(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         doAnswer(invocation -> {
-            CommittedMessageIdempotency result =
-                    (CommittedMessageIdempotency) invocation.callRealMethod();
+            CommittedMessageIdempotency result = (CommittedMessageIdempotency) invocation.callRealMethod();
             committedReplay.set(result);
             return result;
         }).when(repositoryTarget).findCommittedAndCompare(org.mockito.ArgumentMatchers.any(),
@@ -302,9 +315,10 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
                 assertThat(failure.getCause()).isInstanceOf(IdempotencyConflictException.class);
                 assertThat(contenderAcquisition.get()).isEmpty();
                 assertThat(committedReplay.get().fingerprintMatches()).isFalse();
-                UUID messageId = jdbc.queryForObject("SELECT message_id FROM message_idempotency "
-                        + "WHERE user_id = ? AND app_id = ? AND idempotency_key = ?", UUID.class,
-                        fixture.user().getId(), fixture.app().getId(), key.value());
+                UUID messageId = jdbc.queryForObject(
+                        "SELECT message_id FROM message_idempotency "
+                                + "WHERE user_id = ? AND app_id = ? AND idempotency_key = ?",
+                        UUID.class, fixture.user().getId(), fixture.app().getId(), key.value());
                 assertGraph(fixture, key, messageId, 1, 3, 3);
             } else {
                 UUID first = owner.get(10, TimeUnit.SECONDS);
@@ -318,7 +332,8 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
             }
             assertThat(ownerIsolation.get()).isEqualTo("read committed");
             assertThat(contenderIsolation.get()).isEqualTo("read committed");
-            System.out.printf("Service admission isolation: owner=%s pid=%d; contender=%s pid=%d; rollback=%s conflict=%s%n",
+            System.out.printf(
+                    "Service admission isolation: owner=%s pid=%d; contender=%s pid=%d; rollback=%s conflict=%s%n",
                     ownerIsolation.get(), ownerPid.get(), contenderIsolation.get(), contenderPid.get(), rollbackOwner,
                     conflictingBody);
         } finally {
@@ -334,24 +349,26 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         Fixture fixture = fixture(0);
         MessageCreateDto request = request(fixture.event());
         MessageIdempotencyKey key = new MessageIdempotencyKey("later-subscriber-" + UUID.randomUUID());
-        mockMvc.perform(post(path(fixture)).with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
-                        .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.status").value(422));
+        mockMvc.perform(post(path(fixture))
+                .with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
+                .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))).andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.status").value(422));
         assertEquals(0L, scalar("SELECT COUNT(*) FROM message_idempotency WHERE idempotency_key = ?", key.value()));
         subscribe(fixture.app(), fixture.event(), 1);
 
-        mockMvc.perform(post(path(fixture)).with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
-                        .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isCreated());
+        mockMvc.perform(post(path(fixture))
+                .with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
+                .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))).andExpect(status().isCreated());
 
         MessageCreateDto missingEventRequest = new MessageCreateDto(UUID.randomUUID(), request.body());
         reset(idempotencyRepository);
-        mockMvc.perform(post(path(fixture)).with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
-                        .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(missingEventRequest)))
-                .andExpect(status().isNotFound()).andExpect(jsonPath("$.status").value(404));
+        mockMvc.perform(post(path(fixture))
+                .with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
+                .header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(missingEventRequest))).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404));
         verify(idempotencyRepository, never()).tryAcquire(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
@@ -359,16 +376,18 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         User other = user("unrelated");
         Authentication unauthorizedOwner = principalAuth(other.getId(), other.getEmail());
         reset(idempotencyRepository);
-        mockMvc.perform(post(path(fixture)).with(authentication(unauthorizedOwner)).header("Idempotency-Key", key.value())
+        mockMvc.perform(
+                post(path(fixture)).with(authentication(unauthorizedOwner)).header("Idempotency-Key", key.value())
                         .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isNotFound()).andExpect(jsonPath("$.status").value(404));
         verify(idempotencyRepository, never()).tryAcquire(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
-        mockMvc.perform(post(path(fixture)).header("Idempotency-Key", key.value()).contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
+        mockMvc.perform(post(path(fixture)).header("Idempotency-Key", key.value())
+                .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isUnauthorized());
-        assertEquals(1L, scalar("SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND app_id = ? AND idempotency_key = ?",
+        assertEquals(1L, scalar(
+                "SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND app_id = ? AND idempotency_key = ?",
                 fixture.user().getId(), fixture.app().getId(), key.value()));
     }
 
@@ -377,11 +396,15 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         Fixture fixture = fixture(1);
         MessageCreateDto request = request(fixture.event());
         String key = "http-" + UUID.randomUUID();
-        var first = mockMvc.perform(post(path(fixture)).with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
+        var first = mockMvc
+                .perform(post(path(fixture))
+                        .with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
                         .header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated()).andReturn().getResponse();
-        var replay = mockMvc.perform(post(path(fixture)).with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
+        var replay = mockMvc
+                .perform(post(path(fixture))
+                        .with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
                         .header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated()).andReturn().getResponse();
@@ -393,12 +416,15 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         assertThat(replayJson.get("body")).isEqualTo(firstJson.get("body"));
         assertThat(replayJson.get("createdAt")).isEqualTo(firstJson.get("createdAt"));
 
-        MessageCreateDto mismatch = new MessageCreateDto(fixture.event().getId(), objectMapper.readTree("{\"amount\":2}"));
-        mockMvc.perform(post(path(fixture)).with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
-                        .header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(mismatch)))
-                .andExpect(status().isConflict()).andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.message").value("Idempotency-Key is already associated with a different message request"))
+        MessageCreateDto mismatch =
+                new MessageCreateDto(fixture.event().getId(), objectMapper.readTree("{\"amount\":2}"));
+        mockMvc.perform(post(path(fixture))
+                .with(authentication(principalAuth(fixture.user().getId(), fixture.user().getEmail())))
+                .header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(mismatch))).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.message")
+                        .value("Idempotency-Key is already associated with a different message request"))
                 .andExpect(jsonPath("$.timestamp").exists()).andExpect(jsonPath("$.fieldErrors").doesNotExist());
     }
 
@@ -410,18 +436,21 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         subscribe(appB, eventB, 1);
         UUID messageId = UUID.randomUUID();
         String key = "corrupt-" + UUID.randomUUID();
-        jdbc.update("INSERT INTO messages(id, app_id, event_id, body, created_at) "
-                + "VALUES (?, ?, ?, CAST(? AS jsonb), ?)", messageId, fixture.app().getId(), eventB.getId(), BODY,
-                Timestamp.from(Instant.now()));
-        jdbc.update("INSERT INTO message_idempotency(user_id, app_id, idempotency_key, fingerprint_version, message_id, accepted_at) "
-                + "VALUES (?, ?, ?, 1, ?, ?)", fixture.user().getId(), appB.getId(), key, messageId,
-                Timestamp.from(Instant.now()));
-        assertThat(scalar("SELECT COUNT(*) FROM message_idempotency i JOIN messages m ON m.id=i.message_id "
+        jdbc.update(
+                "INSERT INTO messages(id, app_id, event_id, body, created_at) "
+                        + "VALUES (?, ?, ?, CAST(? AS jsonb), ?)",
+                messageId, fixture.app().getId(), eventB.getId(), BODY, Timestamp.from(Instant.now()));
+        jdbc.update(
+                "INSERT INTO message_idempotency(user_id, app_id, idempotency_key, fingerprint_version, message_id, accepted_at) "
+                        + "VALUES (?, ?, ?, 1, ?, ?)",
+                fixture.user().getId(), appB.getId(), key, messageId, Timestamp.from(Instant.now()));
+        assertThat(scalar(
+                "SELECT COUNT(*) FROM message_idempotency i JOIN messages m ON m.id=i.message_id "
                         + "WHERE i.user_id=? AND i.app_id=? AND i.message_id=? AND i.app_id <> m.app_id",
                 fixture.user().getId(), appB.getId(), messageId)).isEqualTo(1L);
-        assertThrows(IllegalStateException.class, () -> service.create(request(eventB),
-                Optional.of(new MessageIdempotencyKey(key)), appB.getId(), fixture.environment().getId(),
-                fixture.user().getId()));
+        assertThrows(IllegalStateException.class,
+                () -> service.create(request(eventB), Optional.of(new MessageIdempotencyKey(key)), appB.getId(),
+                        fixture.environment().getId(), fixture.user().getId()));
         assertEquals(1L, scalar("SELECT COUNT(*) FROM messages WHERE app_id = ?", fixture.app().getId()));
         assertEquals(0L, scalar("SELECT COUNT(*) FROM messages WHERE app_id = ?", appB.getId()));
         assertEquals(0L, scalar("SELECT COUNT(*) FROM deliveries WHERE app_id = ?", appB.getId()));
@@ -429,13 +458,17 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
 
         User wrongAuthorityUser = user("corrupt-authority");
         UUID secondMessageId = UUID.randomUUID();
-        jdbc.update("INSERT INTO messages(id, app_id, event_id, body, created_at) "
-                + "VALUES (?, ?, ?, CAST(? AS jsonb), ?)", secondMessageId, fixture.app().getId(),
-                fixture.event().getId(), BODY, Timestamp.from(Instant.now()));
-        jdbc.update("INSERT INTO message_idempotency(user_id, app_id, idempotency_key, fingerprint_version, message_id, accepted_at) "
-                + "VALUES (?, ?, ?, 1, ?, ?)", wrongAuthorityUser.getId(), fixture.app().getId(),
-                "wrong-user-" + UUID.randomUUID(), secondMessageId, Timestamp.from(Instant.now()));
-        assertThat(scalar("SELECT COUNT(*) FROM message_idempotency i JOIN apps a ON a.id=i.app_id "
+        jdbc.update(
+                "INSERT INTO messages(id, app_id, event_id, body, created_at) "
+                        + "VALUES (?, ?, ?, CAST(? AS jsonb), ?)",
+                secondMessageId, fixture.app().getId(), fixture.event().getId(), BODY, Timestamp.from(Instant.now()));
+        jdbc.update(
+                "INSERT INTO message_idempotency(user_id, app_id, idempotency_key, fingerprint_version, message_id, accepted_at) "
+                        + "VALUES (?, ?, ?, 1, ?, ?)",
+                wrongAuthorityUser.getId(), fixture.app().getId(), "wrong-user-" + UUID.randomUUID(), secondMessageId,
+                Timestamp.from(Instant.now()));
+        assertThat(scalar(
+                "SELECT COUNT(*) FROM message_idempotency i JOIN apps a ON a.id=i.app_id "
                         + "JOIN environments e ON e.id=a.environment_id "
                         + "WHERE i.user_id=? AND i.app_id=? AND i.message_id=? AND i.user_id <> e.user_id",
                 wrongAuthorityUser.getId(), fixture.app().getId(), secondMessageId)).isEqualTo(1L);
@@ -457,7 +490,8 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
     }
 
     private Environment newEnvironment(User user, String suffix) {
-        return environmentRepository.saveAndFlush(new Environment(suffix + "-" + UUID.randomUUID(), "description", user));
+        return environmentRepository
+                .saveAndFlush(new Environment(suffix + "-" + UUID.randomUUID(), "description", user));
     }
 
     private App app(Environment environment, String suffix) {
@@ -480,38 +514,44 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         return new MessageCreateDto(event.getId(), objectMapper.readTree(BODY));
     }
 
-    private void assertGraph(Fixture fixture, MessageIdempotencyKey key, UUID messageId,
-            long messages, long deliveries, long attempts) {
+    private void assertGraph(Fixture fixture, MessageIdempotencyKey key, UUID messageId, long messages, long deliveries,
+            long attempts) {
         assertThat(scalar("SELECT COUNT(*) FROM messages WHERE app_id = ?", fixture.app().getId())).isEqualTo(messages);
-        assertThat(scalar("SELECT COUNT(*) FROM deliveries WHERE app_id = ?", fixture.app().getId())).isEqualTo(deliveries);
+        assertThat(scalar("SELECT COUNT(*) FROM deliveries WHERE app_id = ?", fixture.app().getId()))
+                .isEqualTo(deliveries);
         assertThat(scalar("SELECT COUNT(*) FROM attempts WHERE app_id = ?", fixture.app().getId())).isEqualTo(attempts);
         assertThat(scalar("SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND app_id = ?",
                 fixture.user().getId(), fixture.app().getId())).isEqualTo(1L);
-        assertThat(scalar("SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND app_id = ? "
-                        + "AND idempotency_key = ? AND message_id = ?", fixture.user().getId(), fixture.app().getId(),
-                key.value(), messageId)).isEqualTo(1L);
+        assertThat(scalar(
+                "SELECT COUNT(*) FROM message_idempotency WHERE user_id = ? AND app_id = ? "
+                        + "AND idempotency_key = ? AND message_id = ?",
+                fixture.user().getId(), fixture.app().getId(), key.value(), messageId)).isEqualTo(1L);
         assertThat(scalar("SELECT COUNT(*) FROM attempts WHERE message_id = ? AND "
                 + "(attempt_no <> 1 OR status <> 'CREATED' OR execution_generation <> 0 "
                 + "OR execution_claimed_at IS NOT NULL)", messageId)).isZero();
         assertThat(scalar("SELECT COUNT(*) FROM attempts WHERE message_id = ?", messageId)).isEqualTo(attempts);
         assertThat(scalar("SELECT COUNT(*) FROM deliveries WHERE message_id = ?", messageId)).isEqualTo(deliveries);
-        assertThat(scalar("SELECT COUNT(*) FROM message_idempotency i JOIN messages m ON m.id=i.message_id "
-                + "JOIN apps a ON a.id=i.app_id JOIN environments e ON e.id=a.environment_id "
-                + "WHERE i.user_id=e.user_id AND i.app_id=m.app_id AND i.user_id=? AND i.app_id=? "
-                + "AND i.idempotency_key=? AND i.message_id=?", fixture.user().getId(), fixture.app().getId(),
-                key.value(), messageId)).isEqualTo(1L);
-        Message scoped = messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(messageId,
-                fixture.app().getId(), fixture.environment().getId(), fixture.user().getId()).orElseThrow();
+        assertThat(scalar(
+                "SELECT COUNT(*) FROM message_idempotency i JOIN messages m ON m.id=i.message_id "
+                        + "JOIN apps a ON a.id=i.app_id JOIN environments e ON e.id=a.environment_id "
+                        + "WHERE i.user_id=e.user_id AND i.app_id=m.app_id AND i.user_id=? AND i.app_id=? "
+                        + "AND i.idempotency_key=? AND i.message_id=?",
+                fixture.user().getId(), fixture.app().getId(), key.value(), messageId)).isEqualTo(1L);
+        Message scoped = messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(messageId, fixture.app().getId(),
+                fixture.environment().getId(), fixture.user().getId()).orElseThrow();
         assertThat(scoped.getId()).isEqualTo(messageId);
     }
 
     private void assertCounts(Fixture fixture, long identities, long messages, long deliveries, long attempts) {
-        assertThat(scalar("SELECT COUNT(*) FROM message_idempotency WHERE user_id IN "
-                + "(SELECT id FROM users WHERE id = ?)", fixture.user().getId())).isEqualTo(identities);
+        assertThat(scalar(
+                "SELECT COUNT(*) FROM message_idempotency WHERE user_id IN " + "(SELECT id FROM users WHERE id = ?)",
+                fixture.user().getId())).isEqualTo(identities);
         assertThat(scalar("SELECT COUNT(*) FROM messages WHERE app_id IN (SELECT a.id FROM apps a JOIN environments e "
                 + "ON e.id=a.environment_id WHERE e.user_id=?)", fixture.user().getId())).isEqualTo(messages);
-        assertThat(scalar("SELECT COUNT(*) FROM deliveries WHERE app_id IN (SELECT a.id FROM apps a JOIN environments e "
-                + "ON e.id=a.environment_id WHERE e.user_id=?)", fixture.user().getId())).isEqualTo(deliveries);
+        assertThat(
+                scalar("SELECT COUNT(*) FROM deliveries WHERE app_id IN (SELECT a.id FROM apps a JOIN environments e "
+                        + "ON e.id=a.environment_id WHERE e.user_id=?)", fixture.user().getId()))
+                .isEqualTo(deliveries);
         assertThat(scalar("SELECT COUNT(*) FROM attempts WHERE app_id IN (SELECT a.id FROM apps a JOIN environments e "
                 + "ON e.id=a.environment_id WHERE e.user_id=?)", fixture.user().getId())).isEqualTo(attempts);
     }
@@ -529,7 +569,8 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
             if (Boolean.TRUE.equals(row.get("blocked_by_expected"))) {
                 assertThat(row.get("wait_event_type")).isEqualTo("Lock");
                 assertThat(row.get("wait_event")).isEqualTo("transactionid");
-                System.out.printf("Observed service insert blocker: owner_pid=%d contender_pid=%d blockers=%s wait=%s/%s%n",
+                System.out.printf(
+                        "Observed service insert blocker: owner_pid=%d contender_pid=%d blockers=%s wait=%s/%s%n",
                         ownerPid, contenderPid, row.get("blockers"), row.get("wait_event_type"), row.get("wait_event"));
                 return;
             }
@@ -556,5 +597,6 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
         }
     }
 
-    private record Fixture(User user, Environment environment, App app, Event event) { }
+    private record Fixture(User user, Environment environment, App app, Event event) {
+    }
 }

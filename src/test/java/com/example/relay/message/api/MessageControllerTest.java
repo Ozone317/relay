@@ -180,8 +180,8 @@ public class MessageControllerTest {
         MessageCreateDto request = new MessageCreateDto(eventId, body);
 
         // Stub
-        doThrow(new EventNotFoundException(eventId)).when(messageService).create(request, Optional.empty(), appId, envId,
-                user.getId());
+        doThrow(new EventNotFoundException(eventId)).when(messageService).create(request, Optional.empty(), appId,
+                envId, user.getId());
 
         // Act + Assert
         mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
@@ -225,13 +225,13 @@ public class MessageControllerTest {
                 org.mockito.ArgumentMatchers.eq(user.getId()))).thenReturn(result);
 
         mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
-                .with(authentication(authFor(user))).header("Idempotency-Key", "Case-Sensitive_09").contentType(
-                        MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
+                .with(authentication(authFor(user))).header("Idempotency-Key", "Case-Sensitive_09")
+                .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated());
 
         verify(messageService).create(org.mockito.ArgumentMatchers.eq(request),
-                org.mockito.ArgumentMatchers.argThat(key -> key.isPresent()
-                        && key.orElseThrow().value().equals("Case-Sensitive_09")),
+                org.mockito.ArgumentMatchers
+                        .argThat(key -> key.isPresent() && key.orElseThrow().value().equals("Case-Sensitive_09")),
                 org.mockito.ArgumentMatchers.eq(appId), org.mockito.ArgumentMatchers.eq(envId),
                 org.mockito.ArgumentMatchers.eq(user.getId()));
     }
@@ -258,9 +258,11 @@ public class MessageControllerTest {
         ObjectNode body = objectMapper.createObjectNode().put("amount", 4999);
         String payload = objectMapper.writeValueAsString(new MessageCreateDto(UUID.randomUUID(), body));
 
-        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", UUID.randomUUID(),
-                UUID.randomUUID()).with(authentication(authFor(user))).header("Idempotency-Key", "first", "second")
-                .contentType(MediaType.APPLICATION_JSON).content(payload)).andExpect(status().isBadRequest())
+        mockMvc.perform(
+                post("/api/v1/environments/{environmentId}/apps/{appId}/messages", UUID.randomUUID(), UUID.randomUUID())
+                        .with(authentication(authFor(user))).header("Idempotency-Key", "first", "second")
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Idempotency-Key must be a 1-255 character RFC token"));
 
         verify(messageService, never()).create(any(), any(), any(), any(), any());
@@ -275,20 +277,20 @@ public class MessageControllerTest {
         String payload = "sensitive-payload-value";
         ObjectNode body = objectMapper.createObjectNode().put("amount", payload);
         MessageCreateDto request = new MessageCreateDto(UUID.randomUUID(), body);
-        doThrow(new IdempotencyConflictException()).when(messageService).create(org.mockito.ArgumentMatchers.eq(request),
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(appId),
-                org.mockito.ArgumentMatchers.eq(envId), org.mockito.ArgumentMatchers.eq(user.getId()));
+        doThrow(new IdempotencyConflictException()).when(messageService).create(
+                org.mockito.ArgumentMatchers.eq(request), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(appId), org.mockito.ArgumentMatchers.eq(envId),
+                org.mockito.ArgumentMatchers.eq(user.getId()));
 
-        String response = mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId,
-                appId).with(authentication(authFor(user))).header("Idempotency-Key", key)
-                .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
+        String response = mockMvc
+                .perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
+                        .with(authentication(authFor(user))).header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message")
                         .value("Idempotency-Key is already associated with a different message request"))
-                .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.timestamp").exists())
-                .andExpect(jsonPath("$.fieldErrors").doesNotExist())
-                .andReturn().getResponse().getContentAsString();
+                .andExpect(jsonPath("$.status").value(409)).andExpect(jsonPath("$.timestamp").exists())
+                .andExpect(jsonPath("$.fieldErrors").doesNotExist()).andReturn().getResponse().getContentAsString();
 
         org.assertj.core.api.Assertions.assertThat(response).doesNotContain(key, payload);
     }

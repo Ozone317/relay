@@ -37,8 +37,7 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
             try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
                 statement.execute("SET search_path TO " + schema);
                 seedV14Graph(connection);
-                assertNull(regclass(statement, "message_idempotency"),
-                        "V14 must not contain the V15 authority table");
+                assertNull(regclass(statement, "message_idempotency"), "V14 must not contain the V15 authority table");
                 before = v14Snapshot(statement);
             }
 
@@ -68,17 +67,17 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
     }
 
     private static void seedV14Graph(Connection connection) throws SQLException {
-        insert(connection, "INSERT INTO users(id,email,password,email_verified) VALUES (?,?,?,true)",
-                USER_ID, "p07@example.com", "hash");
+        insert(connection, "INSERT INTO users(id,email,password,email_verified) VALUES (?,?,?,true)", USER_ID,
+                "p07@example.com", "hash");
         insert(connection, "INSERT INTO environments(id,user_id,name,description,created_at,updated_at) "
-                + "VALUES (?,?,?,'desc',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
-                ENVIRONMENT_ID, USER_ID, "env");
+                + "VALUES (?,?,?,'desc',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)", ENVIRONMENT_ID, USER_ID, "env");
         insert(connection, "INSERT INTO apps(id,name,environment_id,created_at) VALUES (?,?,?,CURRENT_TIMESTAMP)",
                 APP_ID, "app", ENVIRONMENT_ID);
-        insert(connection, "INSERT INTO events(id,name,app_id,created_at) VALUES (?,?,?,CURRENT_TIMESTAMP)",
-                EVENT_ID, "event", APP_ID);
-        insert(connection, "INSERT INTO messages(id,app_id,event_id,body,created_at) "
-                + "VALUES (?,?,?,'{}',CURRENT_TIMESTAMP)", MESSAGE_ID, APP_ID, EVENT_ID);
+        insert(connection, "INSERT INTO events(id,name,app_id,created_at) VALUES (?,?,?,CURRENT_TIMESTAMP)", EVENT_ID,
+                "event", APP_ID);
+        insert(connection,
+                "INSERT INTO messages(id,app_id,event_id,body,created_at) " + "VALUES (?,?,?,'{}',CURRENT_TIMESTAMP)",
+                MESSAGE_ID, APP_ID, EVENT_ID);
     }
 
     private static void assertCatalogConstraints(Statement statement) throws SQLException {
@@ -90,14 +89,10 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
                         + rows.getBoolean("condeferrable") + ":" + rows.getBoolean("condeferred"));
             }
         }
-        assertEquals(List.of(
-                "ck_message_idempotency_fingerprint_version:c:false:false",
-                "ck_message_idempotency_key_length:c:false:false",
-                "fk_message_idempotency_message:f:true:true",
-                "message_idempotency_app_id_fkey:f:false:false",
-                "message_idempotency_user_id_fkey:f:false:false",
-                "pk_message_idempotency:p:false:false",
-                "uk_message_idempotency_message:u:false:false"), constraints);
+        assertEquals(List.of("ck_message_idempotency_fingerprint_version:c:false:false",
+                "ck_message_idempotency_key_length:c:false:false", "fk_message_idempotency_message:f:true:true",
+                "message_idempotency_app_id_fkey:f:false:false", "message_idempotency_user_id_fkey:f:false:false",
+                "pk_message_idempotency:p:false:false", "uk_message_idempotency_message:u:false:false"), constraints);
     }
 
     private static void assertPrimaryKeyColumns(Statement statement) throws SQLException {
@@ -170,12 +165,12 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
     }
 
     private static void assertLegacyMessageNeedsNoIdentity(Connection connection) throws SQLException {
-        assertEquals(0, scalar(connection,
-                "SELECT count(*) FROM message_idempotency WHERE message_id = ?", LEGACY_MESSAGE_ID));
-        insert(connection, "INSERT INTO messages(id,app_id,event_id,body,created_at) "
-                + "VALUES (?,?,?,'{}',CURRENT_TIMESTAMP)", id(107), APP_ID, EVENT_ID);
-        assertEquals(0, scalar(connection,
-                "SELECT count(*) FROM message_idempotency WHERE message_id = ?", id(107)));
+        assertEquals(0,
+                scalar(connection, "SELECT count(*) FROM message_idempotency WHERE message_id = ?", LEGACY_MESSAGE_ID));
+        insert(connection,
+                "INSERT INTO messages(id,app_id,event_id,body,created_at) " + "VALUES (?,?,?,'{}',CURRENT_TIMESTAMP)",
+                id(107), APP_ID, EVENT_ID);
+        assertEquals(0, scalar(connection, "SELECT count(*) FROM message_idempotency WHERE message_id = ?", id(107)));
     }
 
     private static String v14Snapshot(Statement statement) throws SQLException {
@@ -186,8 +181,7 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
 
     private static String tableSnapshot(Statement statement, String table) throws SQLException {
         List<String> rows = new ArrayList<>();
-        try (var result = statement.executeQuery("SELECT row_to_json(t)::text FROM " + table
-                + " t ORDER BY id")) {
+        try (var result = statement.executeQuery("SELECT row_to_json(t)::text FROM " + table + " t ORDER BY id")) {
             while (result.next()) {
                 rows.add(result.getString(1));
             }
@@ -197,8 +191,9 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
 
     private static void insertIdentity(Connection connection, UUID userId, UUID appId, String key,
             int fingerprintVersion, UUID messageId) throws SQLException {
-        insert(connection, "INSERT INTO message_idempotency(user_id,app_id,idempotency_key,fingerprint_version,"
-                + "message_id,accepted_at) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)",
+        insert(connection,
+                "INSERT INTO message_idempotency(user_id,app_id,idempotency_key,fingerprint_version,"
+                        + "message_id,accepted_at) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)",
                 userId, appId, key, fingerprintVersion, messageId);
     }
 
@@ -249,9 +244,9 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
     }
 
     private static void migrate(String schema, String target) {
-        var configuration = Flyway.configure()
-                .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
-                .schemas(schema).defaultSchema(schema).locations("classpath:db/migration");
+        var configuration =
+                Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                        .schemas(schema).defaultSchema(schema).locations("classpath:db/migration");
         if (target != null) {
             configuration.target(target);
         }

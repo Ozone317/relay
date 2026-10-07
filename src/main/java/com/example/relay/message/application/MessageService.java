@@ -41,8 +41,7 @@ public class MessageService {
 
     public MessageService(AppRepository appRepository, AttemptService attemptService, EventService eventService,
             MessageIdempotencyRepository idempotencyRepository, MessageRepository messageRepository,
-            MessageMapper messageMapper,
-            SubscriptionRepository subscriptionRepository) {
+            MessageMapper messageMapper, SubscriptionRepository subscriptionRepository) {
         this.appRepository = appRepository;
         this.attemptService = attemptService;
         this.eventService = eventService;
@@ -67,8 +66,8 @@ public class MessageService {
 
         MessageIdempotencyKey key = idempotencyKey.orElseThrow();
         UUID proposedMessageId = UUID.randomUUID();
-        Optional<MessageIdempotencyAcquisition> acquired = idempotencyRepository.tryAcquire(
-                userId, appId, key, proposedMessageId);
+        Optional<MessageIdempotencyAcquisition> acquired =
+                idempotencyRepository.tryAcquire(userId, appId, key, proposedMessageId);
         if (acquired.isEmpty()) {
             return replayCommitted(request, appId, environmentId, userId, key);
         }
@@ -87,20 +86,20 @@ public class MessageService {
 
     MessageCreateResult replayCommitted(MessageCreateDto request, UUID appId, UUID environmentId, UUID userId,
             MessageIdempotencyKey key) {
-        CommittedMessageIdempotency committed = idempotencyRepository.findCommittedAndCompare(
-                userId, appId, key, request.eventId(), request.body());
+        CommittedMessageIdempotency committed =
+                idempotencyRepository.findCommittedAndCompare(userId, appId, key, request.eventId(), request.body());
         if (!committed.fingerprintMatches()) {
             throw new IdempotencyConflictException();
         }
-        Message message = messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(
-                        committed.messageId(), appId, environmentId, userId)
+        Message message = messageRepository
+                .findByIdAndAppIdAndEnvironmentIdAndUserId(committed.messageId(), appId, environmentId, userId)
                 .orElseThrow(() -> new IllegalStateException(
                         "committed idempotency authority does not resolve to a scoped Message"));
         return new MessageCreateResult(message);
     }
 
-    MessageCreateResult createFanout(MessageCreateDto request, App app, Event event, UUID messageId,
-            Instant acceptedAt) throws NoActiveSubscribersException {
+    MessageCreateResult createFanout(MessageCreateDto request, App app, Event event, UUID messageId, Instant acceptedAt)
+            throws NoActiveSubscribersException {
         List<Subscription> subscriptions =
                 subscriptionRepository.findAllByEventIdAndEndpointActiveTrue(request.eventId());
         if (subscriptions.isEmpty()) {

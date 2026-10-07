@@ -33,7 +33,6 @@ import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -47,21 +46,36 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @SpringBootTest
 class MessageServiceTransactionIntegrationTest implements SharedPostgresContainer {
 
-    @Autowired private MessageService underTest;
-    @Autowired private MessageRepository messageRepository;
-    @MockitoSpyBean private AttemptRepository attemptRepository;
-    @Autowired private DeliveryRepository deliveryRepository;
-    @Autowired private EnvironmentRepository environmentRepository;
-    @Autowired private AppRepository appRepository;
-    @Autowired private EventRepository eventRepository;
-    @Autowired private EndpointRepository endpointRepository;
-    @Autowired private SubscriptionRepository subscriptionRepository;
-    @Autowired private UserRepository userRepository;
-    @Autowired private RefreshTokenRepository refreshTokenRepository;
-    @Autowired private PasswordResetTokenRepository passwordResetTokenRepository;
-    @Autowired private EmailVerificationTokenRepository emailVerificationTokenRepository;
-    @Autowired private ObjectMapper objectMapper;
-    @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private MessageService underTest;
+    @Autowired
+    private MessageRepository messageRepository;
+    @MockitoSpyBean
+    private AttemptRepository attemptRepository;
+    @Autowired
+    private DeliveryRepository deliveryRepository;
+    @Autowired
+    private EnvironmentRepository environmentRepository;
+    @Autowired
+    private AppRepository appRepository;
+    @Autowired
+    private EventRepository eventRepository;
+    @Autowired
+    private EndpointRepository endpointRepository;
+    @Autowired
+    private SubscriptionRepository subscriptionRepository;
+    @Autowired
+    private UserRepository userRepository;
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
+    @Autowired
+    private PasswordResetTokenRepository passwordResetTokenRepository;
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
+    @Autowired
+    private ObjectMapper objectMapper;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void setUp() {
@@ -74,8 +88,9 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         MessageCreateDto request = request(fixture.event());
         MessageIdempotencyKey key = new MessageIdempotencyKey("success-key");
 
-        Message result = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
-                fixture.user().getId()).message();
+        Message result = underTest
+                .create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(), fixture.user().getId())
+                .message();
 
         assertCounts(1, 1, 1, 1);
         assertKeyedCoherence(fixture, key, result, 1);
@@ -85,8 +100,8 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
     void keyedFanoutToThreeSubscribersStartsEveryAttemptInCreatedGenerationZero() throws Exception {
         Fixture fixture = persistFixture("three-subscriber@mail.com", true);
         for (int i = 2; i <= 3; i++) {
-            Endpoint endpoint = endpointRepository.save(new Endpoint("endpoint-" + i,
-                    "https://example.com/webhook/" + i, "secret-" + i, fixture.app()));
+            Endpoint endpoint = endpointRepository.save(
+                    new Endpoint("endpoint-" + i, "https://example.com/webhook/" + i, "secret-" + i, fixture.app()));
             subscriptionRepository.save(new Subscription(fixture.app(), fixture.event(), endpoint));
         }
         MessageIdempotencyKey key = new MessageIdempotencyKey("three-subscriber-key");
@@ -110,8 +125,9 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         assertCounts(0, 0, 0, 0);
 
         reset(attemptRepository);
-        Message retry = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
-                fixture.user().getId()).message();
+        Message retry = underTest
+                .create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(), fixture.user().getId())
+                .message();
         assertCounts(1, 1, 1, 1);
         assertKeyedCoherence(fixture, key, retry, 1);
     }
@@ -121,8 +137,8 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         Fixture fixture = persistFixture("no-subscribers@mail.com", false);
         MessageIdempotencyKey key = new MessageIdempotencyKey("no-subscriber-key");
 
-        assertThrows(NoActiveSubscribersException.class, () -> underTest.create(request(fixture.event()), Optional.of(key),
-                fixture.app().getId(), fixture.env().getId(), fixture.user().getId()));
+        assertThrows(NoActiveSubscribersException.class, () -> underTest.create(request(fixture.event()),
+                Optional.of(key), fixture.app().getId(), fixture.env().getId(), fixture.user().getId()));
 
         assertCounts(0, 0, 0, 0);
     }
@@ -132,13 +148,15 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         Fixture fixture = persistFixture("replay@mail.com", true);
         MessageCreateDto request = request(fixture.event());
         MessageIdempotencyKey key = new MessageIdempotencyKey("replay-key");
-        Message first = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
-                fixture.user().getId()).message();
+        Message first = underTest
+                .create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(), fixture.user().getId())
+                .message();
         Instant originalCreatedAt = first.getCreatedAt();
         long[] countsBeforeReplay = counts();
 
-        Message replay = underTest.create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(),
-                fixture.user().getId()).message();
+        Message replay = underTest
+                .create(request, Optional.of(key), fixture.app().getId(), fixture.env().getId(), fixture.user().getId())
+                .message();
 
         assertEquals(first.getId(), replay.getId());
         assertEquals(originalCreatedAt, replay.getCreatedAt());
@@ -154,10 +172,12 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         Fixture fixture = persistFixture("keyless@mail.com", true);
         MessageCreateDto request = request(fixture.event());
 
-        Message first = underTest.create(request, Optional.empty(), fixture.app().getId(), fixture.env().getId(),
-                fixture.user().getId()).message();
-        Message second = underTest.create(request, Optional.empty(), fixture.app().getId(), fixture.env().getId(),
-                fixture.user().getId()).message();
+        Message first = underTest
+                .create(request, Optional.empty(), fixture.app().getId(), fixture.env().getId(), fixture.user().getId())
+                .message();
+        Message second = underTest
+                .create(request, Optional.empty(), fixture.app().getId(), fixture.env().getId(), fixture.user().getId())
+                .message();
 
         assertNotEquals(first.getId(), second.getId());
         assertCounts(0, 2, 2, 2);
@@ -169,8 +189,8 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         App app = appRepository.save(new App("App 1", env));
         Event event = eventRepository.save(new Event("payment.created", app));
         if (withSubscriber) {
-            Endpoint endpoint = endpointRepository.save(
-                    new Endpoint("endpoint", "https://example.com/webhook", "secret", app));
+            Endpoint endpoint =
+                    endpointRepository.save(new Endpoint("endpoint", "https://example.com/webhook", "secret", app));
             subscriptionRepository.save(new Subscription(app, event, endpoint));
         }
         return new Fixture(user, env, app, event);
@@ -196,10 +216,10 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
                   AND i.message_id = ?
                 """, Long.class, fixture.user().getId(), fixture.app().getId(), key.value(), message.getId());
         assertEquals(1L, coherent);
-        assertEquals((long) subscriberCount, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM deliveries WHERE message_id = ?", Long.class, message.getId()));
-        assertEquals((long) subscriberCount, jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM attempts WHERE message_id = ?", Long.class, message.getId()));
+        assertEquals((long) subscriberCount, jdbcTemplate
+                .queryForObject("SELECT COUNT(*) FROM deliveries WHERE message_id = ?", Long.class, message.getId()));
+        assertEquals((long) subscriberCount, jdbcTemplate
+                .queryForObject("SELECT COUNT(*) FROM attempts WHERE message_id = ?", Long.class, message.getId()));
         Long invalidAttemptStateCount = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM attempts
                 WHERE message_id = ?
@@ -211,9 +231,11 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
                 fixture.app().getId(), fixture.env().getId(), fixture.user().getId()).orElseThrow();
         assertEquals(message.getId(), scoped.getId());
 
-        Instant acceptedAt = jdbcTemplate.queryForObject("SELECT accepted_at FROM message_idempotency "
-                + "WHERE user_id = ? AND app_id = ? AND idempotency_key = ?", (rs, rowNum) -> rs.getTimestamp(1).toInstant(),
-                fixture.user().getId(), fixture.app().getId(), key.value());
+        Instant acceptedAt = jdbcTemplate.queryForObject(
+                "SELECT accepted_at FROM message_idempotency "
+                        + "WHERE user_id = ? AND app_id = ? AND idempotency_key = ?",
+                (rs, rowNum) -> rs.getTimestamp(1).toInstant(), fixture.user().getId(), fixture.app().getId(),
+                key.value());
         assertEquals(scoped.getCreatedAt(), acceptedAt);
     }
 
@@ -226,12 +248,8 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
     }
 
     private long[] counts() {
-        return new long[] {
-            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM message_idempotency", Long.class),
-            messageRepository.count(),
-            deliveryRepository.count(),
-            attemptRepository.count()
-        };
+        return new long[] {jdbcTemplate.queryForObject("SELECT COUNT(*) FROM message_idempotency", Long.class),
+                messageRepository.count(), deliveryRepository.count(), attemptRepository.count()};
     }
 
     private void clearMessageGraph() {
@@ -255,5 +273,6 @@ class MessageServiceTransactionIntegrationTest implements SharedPostgresContaine
         userRepository.deleteAll();
     }
 
-    private record Fixture(User user, Environment env, App app, Event event) { }
+    private record Fixture(User user, Environment env, App app, Event event) {
+    }
 }

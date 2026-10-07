@@ -3,7 +3,6 @@ package com.example.relay.message.application;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.example.relay.app.domain.App;
-import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.infrastructure.AttemptRepository;
 import com.example.relay.delivery.infrastructure.DeliveryRepository;
@@ -17,6 +16,7 @@ import com.example.relay.message.api.dto.MessageCreateDto;
 import com.example.relay.message.infrastructure.MessageRepository;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
+import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;

@@ -48,15 +48,23 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class MessageServiceTest {
 
-    @Mock private AppRepository appRepository;
-    @Mock private AttemptService attemptService;
-    @Mock private EventService eventService;
-    @Mock private MessageRepository messageRepository;
-    @Mock private MessageIdempotencyRepository idempotencyRepository;
-    @Mock private MessageMapper messageMapper;
-    @Mock private SubscriptionRepository subscriptionRepository;
+    @Mock
+    private AppRepository appRepository;
+    @Mock
+    private AttemptService attemptService;
+    @Mock
+    private EventService eventService;
+    @Mock
+    private MessageRepository messageRepository;
+    @Mock
+    private MessageIdempotencyRepository idempotencyRepository;
+    @Mock
+    private MessageMapper messageMapper;
+    @Mock
+    private SubscriptionRepository subscriptionRepository;
 
-    @InjectMocks private MessageService underTest;
+    @InjectMocks
+    private MessageService underTest;
 
     private User user;
     private Environment env;
@@ -87,7 +95,8 @@ class MessageServiceTest {
         when(subscriptionRepository.findAllByEventIdAndEndpointActiveTrue(event.getId())).thenReturn(subscriptions);
         when(messageMapper.toEntity(any(), any(), any(), any(), any())).thenReturn(message);
 
-        MessageCreateResult result = underTest.create(request, Optional.empty(), app.getId(), env.getId(), user.getId());
+        MessageCreateResult result =
+                underTest.create(request, Optional.empty(), app.getId(), env.getId(), user.getId());
 
         assertSame(message, result.message());
         verify(idempotencyRepository, never()).tryAcquire(any(), any(), any(), any());
@@ -102,16 +111,17 @@ class MessageServiceTest {
         MessageIdempotencyKey key = new MessageIdempotencyKey("request-1");
         Instant acceptedAt = Instant.parse("2026-10-06T12:30:00Z");
         when(subscriptionRepository.findAllByEventIdAndEndpointActiveTrue(event.getId())).thenReturn(subscriptions);
-        when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class)))
-                .thenAnswer(invocation -> Optional.of(new MessageIdempotencyAcquisition(
-                        invocation.getArgument(3), acceptedAt)));
-        when(messageMapper.toEntity(eq(request), eq(app), eq(event), any(UUID.class), eq(acceptedAt)))
-                .thenAnswer(invocation -> new Message(invocation.getArgument(3), app, event, request.body(), acceptedAt));
+        when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class))).thenAnswer(
+                invocation -> Optional.of(new MessageIdempotencyAcquisition(invocation.getArgument(3), acceptedAt)));
+        when(messageMapper.toEntity(eq(request), eq(app), eq(event), any(UUID.class), eq(acceptedAt))).thenAnswer(
+                invocation -> new Message(invocation.getArgument(3), app, event, request.body(), acceptedAt));
 
-        MessageCreateResult result = underTest.create(request, Optional.of(key), app.getId(), env.getId(), user.getId());
+        MessageCreateResult result =
+                underTest.create(request, Optional.of(key), app.getId(), env.getId(), user.getId());
 
         assertEquals(acceptedAt, result.message().getCreatedAt());
-        verify(idempotencyRepository).tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), eq(result.message().getId()));
+        verify(idempotencyRepository).tryAcquire(eq(user.getId()), eq(app.getId()), eq(key),
+                eq(result.message().getId()));
         verify(messageRepository).save(result.message());
         verify(attemptService).createFromSubscriptionList(subscriptions, result.message());
         verify(subscriptionRepository).findAllByEventIdAndEndpointActiveTrue(event.getId());
@@ -125,12 +135,13 @@ class MessageServiceTest {
         Message original = new Message(originalId, app, event, request.body(), acceptedAt);
         when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class)))
                 .thenReturn(Optional.empty());
-        when(idempotencyRepository.findCommittedAndCompare(user.getId(), app.getId(), key, event.getId(), request.body()))
-                .thenReturn(new CommittedMessageIdempotency(originalId, acceptedAt, (short) 1, true));
-        when(messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(originalId, app.getId(), env.getId(), user.getId()))
-                .thenReturn(Optional.of(original));
+        when(idempotencyRepository.findCommittedAndCompare(user.getId(), app.getId(), key, event.getId(),
+                request.body())).thenReturn(new CommittedMessageIdempotency(originalId, acceptedAt, (short) 1, true));
+        when(messageRepository.findByIdAndAppIdAndEnvironmentIdAndUserId(originalId, app.getId(), env.getId(),
+                user.getId())).thenReturn(Optional.of(original));
 
-        MessageCreateResult result = underTest.create(request, Optional.of(key), app.getId(), env.getId(), user.getId());
+        MessageCreateResult result =
+                underTest.create(request, Optional.of(key), app.getId(), env.getId(), user.getId());
 
         assertSame(original, result.message());
         verify(subscriptionRepository, never()).findAllByEventIdAndEndpointActiveTrue(any());
@@ -144,7 +155,8 @@ class MessageServiceTest {
         UUID originalId = UUID.randomUUID();
         when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class)))
                 .thenReturn(Optional.empty());
-        when(idempotencyRepository.findCommittedAndCompare(user.getId(), app.getId(), key, event.getId(), request.body()))
+        when(idempotencyRepository.findCommittedAndCompare(user.getId(), app.getId(), key, event.getId(),
+                request.body()))
                 .thenReturn(new CommittedMessageIdempotency(originalId, Instant.now(), (short) 1, false));
 
         assertThrows(IdempotencyConflictException.class,
@@ -161,13 +173,15 @@ class MessageServiceTest {
         UUID originalId = UUID.randomUUID();
         when(idempotencyRepository.tryAcquire(eq(user.getId()), eq(app.getId()), eq(key), any(UUID.class)))
                 .thenReturn(Optional.empty());
-        when(idempotencyRepository.findCommittedAndCompare(user.getId(), app.getId(), key, event.getId(), request.body()))
+        when(idempotencyRepository.findCommittedAndCompare(user.getId(), app.getId(), key, event.getId(),
+                request.body()))
                 .thenReturn(new CommittedMessageIdempotency(originalId, Instant.now(), (short) 1, true));
 
         assertThrows(IllegalStateException.class,
                 () -> underTest.create(request, Optional.of(key), app.getId(), env.getId(), user.getId()));
 
-        verify(messageRepository).findByIdAndAppIdAndEnvironmentIdAndUserId(originalId, app.getId(), env.getId(), user.getId());
+        verify(messageRepository).findByIdAndAppIdAndEnvironmentIdAndUserId(originalId, app.getId(), env.getId(),
+                user.getId());
         verify(subscriptionRepository, never()).findAllByEventIdAndEndpointActiveTrue(any());
     }
 

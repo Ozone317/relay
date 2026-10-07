@@ -3,7 +3,7 @@
 **Date:** 2026-10-06
 **Revision investigated:** `761b539` (`main`, merge of P06)
 **Design result:** READY TO IMPLEMENT (owner-approved)
-**Implementation status (2026-10-07):** Implemented; full-suite and coordinated production rollout gates remain
+**Implementation status (2026-10-07):** Implementation is present; full-suite verification and coordinated deployment remain outstanding
 
 ## Executive result
 
@@ -272,7 +272,7 @@ These do not require redesign of the P07 authority or a speculative P07 schema c
 
 No production code, test code, migration, build configuration, or runtime configuration was modified by the investigation/design task.
 
-## P07 implementation verification and rollout gate (2026-10-07)
+## P07 implementation verification and rollout gate (2026-10-07; Task 8 review correction)
 
 **Implementation code revision:** `c2f436d1db76b36eebc9b68c6d350f802d85fdd6`.
 
@@ -284,13 +284,15 @@ Formatting:
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw spotless:check
 ```
 
-Result: failed repository-wide. Spotless reported 416 Java files, 201 needing formatting and 215 already clean. It named `src/test/java/com/example/relay/attempt/mapper/AttemptMapperTest.java` and `src/test/java/com/example/relay/attempt/infrastructure/AttemptExecutionRepositoryPostgresTest.java`, then summarized “Violations also present in 199 other files.” The default output does not enumerate those remaining files. The P07-scoped check passed:
+Result: failed repository-wide. Spotless reported 416 Java files, 201 needing formatting and 215 already clean. It named `src/test/java/com/example/relay/attempt/mapper/AttemptMapperTest.java` and `src/test/java/com/example/relay/attempt/infrastructure/AttemptExecutionRepositoryPostgresTest.java`, then summarized “Violations also present in 199 other files.” The default output does not enumerate those remaining files. The first documented P07-scoped selector was incorrect and selected zero files, so it was not evidence of a pass. The review correction generated an exact selector from all 21 Java files changed since base `761b539d66b14fb09ceff150fc4ccb60e855170b`, including `GlobalExceptionHandler.java`:
 
 ```bash
-JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw spotless:check '-DspotlessFiles=src/main/java/com/example/relay/message/.*\.java|src/test/java/com/example/relay/message/.*\.java'
+p07_files_regex=$(git diff --name-only 761b539d -- '*.java' | sed 's/[.]/[.]/g' | sed 's|^|.*/|' | paste -sd '|' -)
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw spotless:apply "-DspotlessFiles=$p07_files_regex"
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw spotless:check "-DspotlessFiles=$p07_files_regex"
 ```
 
-Result: `BUILD SUCCESS`; every P07 message Java production and test source matched by the scope was clean. No formatting changes were made.
+The selector matched 21 of 21 Java files changed since the base. `spotless:apply` reported 21 selected, 12 changed to clean and 9 cache-skipped. The same-scope `spotless:check` reported 21 clean, 0 needing changes, and 21 cache-skipped (`BUILD SUCCESS`). The post-format P07 regression selection passed 46 tests with zero failures/errors/skips. The 12 formatter edits are mechanical only.
 
 Full test suite:
 
@@ -300,7 +302,7 @@ env JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef 
   JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw test
 ```
 
-The command was started at 16:50 IST and interrupted at 16:58 IST with exit 130 after more than two minutes without progress. It hung in the existing non-P07 test `BrevoEmailSenderTest.send_throwsEmailSendException_on429RateLimited`. The test enqueues one HTTP 429 response at `BrevoEmailSenderTest.java:120`; Apache HttpClient retries after the 429, and the main test thread blocks in `DefaultBHttpClientConnection.receiveResponseHeader` → `BrevoEmailSender.send(BrevoEmailSender.java:48)` → `BrevoEmailSenderTest.java:124`, waiting for another MockWebServer response. No Surefire report was produced for that class. The completed reports at interruption covered 169 test classes and 870 tests, all with 0 failures, 0 errors, and 0 skipped. This is not a full-suite pass. Earlier baseline verification had already observed the same pre-existing email-phase hang.
+The command was started at 16:50 IST and interrupted at 16:58 IST with exit 130 after more than two minutes without progress. It hung in the existing non-P07 test `BrevoEmailSenderTest.send_throwsEmailSendException_on429RateLimited`. The test enqueues one HTTP 429 response at `BrevoEmailSenderTest.java:120`; Apache HttpClient retries after the 429, and the main test thread blocks in `DefaultBHttpClientConnection.receiveResponseHeader` → `BrevoEmailSender.send(BrevoEmailSender.java:48)` → `BrevoEmailSenderTest.java:124`, waiting for another MockWebServer response. No Surefire report was produced for that class. The completed reports at interruption covered 169 test classes and 877 tests, all with 0 failures, 0 errors, and 0 skipped. This is not a full-suite pass. Earlier baseline verification had already observed the same pre-existing email-phase hang.
 
 Focused regression results from completed tasks:
 

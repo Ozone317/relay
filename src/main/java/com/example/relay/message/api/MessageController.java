@@ -37,8 +37,8 @@ public class MessageController {
     public ResponseEntity<MessageResponseDto> create(@PathVariable UUID environmentId, @PathVariable UUID appId,
             @AuthenticationPrincipal AuthenticatedUser user, @RequestHeader HttpHeaders requestHeaders,
             @RequestBody @Valid MessageCreateDto request) {
-        Optional<MessageIdempotencyKey> key = MessageIdempotencyKey.parseHeaderValues(
-                requestHeaders.get("Idempotency-Key"));
+        Optional<MessageIdempotencyKey> key =
+                MessageIdempotencyKey.parseHeaderValues(requestHeaders.get("Idempotency-Key"));
         MessageCreateResult result = messageService.create(request, key, appId, environmentId, user.getId());
 
         Message message = result.message();
