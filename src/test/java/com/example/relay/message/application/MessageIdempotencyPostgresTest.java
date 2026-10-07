@@ -170,6 +170,39 @@ class MessageIdempotencyPostgresTest implements SharedPostgresContainer {
     }
 
     @Test
+    void agedAuthorityStillReplaysOriginalMessageWithoutExpiryOrCleanupContract() throws Exception {
+        Fixture fixture = fixture(3);
+        MessageCreateDto request = request(fixture.event());
+        MessageIdempotencyKey key = new MessageIdempotencyKey("aged-" + UUID.randomUUID());
+        Message accepted = service.create(request, Optional.of(key), fixture.app().getId(),
+                fixture.environment().getId(), fixture.user().getId()).message();
+        assertGraph(fixture, key, accepted.getId(), 1, 3, 3);
+
+        Instant agedAt = Instant.parse("2000-01-01T00:00:00Z");
+        Timestamp agedTimestamp = Timestamp.from(agedAt);
+        jdbc.update("UPDATE messages SET created_at = ? WHERE id = ?", agedTimestamp, accepted.getId());
+        jdbc.update("UPDATE message_idempotency SET accepted_at = ? "
+                        + "WHERE user_id = ? AND app_id = ? AND idempotency_key = ?",
+                agedTimestamp, fixture.user().getId(), fixture.app().getId(), key.value());
+
+        assertEquals(1L, scalar("SELECT COUNT(*) FROM message_idempotency i JOIN messages m ON m.id=i.message_id "
+                        + "WHERE i.user_id=? AND i.app_id=? AND i.idempotency_key=? "
+                        + "AND i.accepted_at=? AND m.created_at=?",
+                fixture.user().getId(), fixture.app().getId(), key.value(), agedTimestamp, agedTimestamp));
+        assertEquals(0L, scalar("SELECT COUNT(*) FROM information_schema.columns "
+                        + "WHERE table_schema = current_schema() AND table_name = 'message_idempotency' "
+                        + "AND (column_name ILIKE '%expir%' OR column_name ILIKE '%delet%' "
+                        + "OR column_name ILIKE '%cleanup%')"));
+
+        Message replay = service.create(request, Optional.of(key), fixture.app().getId(),
+                fixture.environment().getId(), fixture.user().getId()).message();
+
+        assertEquals(accepted.getId(), replay.getId());
+        assertEquals(agedAt, replay.getCreatedAt());
+        assertGraph(fixture, key, accepted.getId(), 1, 3, 3);
+    }
+
+    @Test
     void sameKeyScopesByAppAndDurableUserIdRatherThanPresentationCredentials() throws Exception {
         Fixture fixture = fixture(1);
         App secondApp = app(fixture.environment(), "second-app");
