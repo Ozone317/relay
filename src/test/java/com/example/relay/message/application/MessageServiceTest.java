@@ -11,8 +11,6 @@ import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.application.AttemptService;
-import com.example.relay.attempt.domain.Attempt;
-import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.application.EventService;
@@ -75,8 +73,6 @@ public class MessageServiceTest {
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         MessageCreateDto request = new MessageCreateDto(event.getId(), body);
         Message message = new Message(app, event, body);
-        Delivery delivery = new Delivery(app, message, endpoint);
-        List<Attempt> attempts = List.of(new Attempt(app, message, endpoint, delivery, 1));
 
         // Stubs
         when(appRepository.findByIdAndEnvironmentIdAndEnvironmentUserId(app.getId(), env.getId(), user.getId()))
@@ -84,14 +80,12 @@ public class MessageServiceTest {
         when(eventService.getById(event.getId(), app.getId(), env.getId(), user.getId())).thenReturn(event);
         when(subscriptionRepository.findAllByEventIdAndEndpointActiveTrue(event.getId())).thenReturn(subscriptions);
         when(messageMapper.toEntity(request, app, event)).thenReturn(message);
-        when(attemptService.createFromSubscriptionList(subscriptions, message)).thenReturn(attempts);
 
         // Act
         MessageCreateResult result = underTest.create(request, app.getId(), env.getId(), user.getId());
 
         // Assert
         assertEquals(message.getId(), result.message().getId());
-        assertEquals(attempts, result.attempts());
 
         // Verify
         verify(messageRepository).save(message);

@@ -12,16 +12,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
-import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.common.security.AuthProperties;
-import com.example.relay.delivery.domain.Delivery;
 import com.example.relay.common.security.AuthenticatedUser;
 import com.example.relay.common.security.CsrfHeaderFilter;
 import com.example.relay.common.security.CustomUserDetailsService;
 import com.example.relay.common.security.JwtService;
 import com.example.relay.common.security.RefreshCookieFactory;
 import com.example.relay.common.security.SecurityConfig;
-import com.example.relay.endpoint.domain.Endpoint;
 import com.example.relay.environment.domain.Environment;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventNotFoundException;
@@ -86,17 +83,11 @@ public class MessageControllerTest {
         User user = new User("test@mail.com", "passwordHash");
         Environment env = new Environment("Env 1", "Desc 1", user);
         App app = new App("App 1", env);
-        Endpoint endpointOne = new Endpoint("EP 1", "https://example.com/one", "whsec_1", app);
-        Endpoint endpointTwo = new Endpoint("EP 2", "https://example.com/two", "whsec_2", app);
         Event event = new Event("payment.completed", app);
         ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
         MessageCreateDto request = new MessageCreateDto(event.getId(), body);
         Message message = new Message(app, event, body);
-        Delivery deliveryOne = new Delivery(app, message, endpointOne);
-        Delivery deliveryTwo = new Delivery(app, message, endpointTwo);
-        List<Attempt> attempts = List.of(new Attempt(app, message, endpointOne, deliveryOne, 1),
-                new Attempt(app, message, endpointTwo, deliveryTwo, 1));
-        MessageCreateResult result = new MessageCreateResult(message, attempts);
+        MessageCreateResult result = new MessageCreateResult(message);
         MessageResponseDto response = new MessageResponseDto(message.getId(), app.getId(), event.getId(),
                 event.getName(), body, message.getCreatedAt());
 
@@ -228,7 +219,7 @@ public class MessageControllerTest {
         UUID appId = UUID.randomUUID();
         ObjectNode body = objectMapper.createObjectNode().put("amount", 4999);
         MessageCreateDto request = new MessageCreateDto(UUID.randomUUID(), body);
-        MessageCreateResult result = new MessageCreateResult(null, List.of());
+        MessageCreateResult result = new MessageCreateResult(null);
         when(messageService.create(org.mockito.ArgumentMatchers.eq(request), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq(appId), org.mockito.ArgumentMatchers.eq(envId),
                 org.mockito.ArgumentMatchers.eq(user.getId()))).thenReturn(result);

@@ -10,6 +10,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -46,13 +47,15 @@ public class Message {
     private Instant createdAt;
 
     public Message(App app, Event event, JsonNode body) {
-        Instant now = Instant.now();
+        this(UUID.randomUUID(), app, event, body, Instant.now());
+    }
 
-        this.id = UUID.randomUUID();
-        this.app = app;
-        this.event = event;
-        this.body = body;
-        this.createdAt = now;
+    public Message(UUID id, App app, Event event, JsonNode body, Instant createdAt) {
+        this.id = Objects.requireNonNull(id);
+        this.app = Objects.requireNonNull(app);
+        this.event = Objects.requireNonNull(event);
+        this.body = Objects.requireNonNull(body);
+        this.createdAt = Objects.requireNonNull(createdAt);
     }
 
     @Override

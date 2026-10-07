@@ -11,6 +11,8 @@ import com.example.relay.message.domain.Message;
 import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.time.Instant;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -40,6 +42,22 @@ public class MessageMapperTest {
         assertEquals(app, result.getApp());
         assertEquals(event, result.getEvent());
         assertEquals(body, result.getBody());
+    }
+
+    @Test
+    void constructor_preservesSuppliedIdentityAndCreationTime() {
+        User user = new User("test@mail.com", "passwordHash");
+        Environment env = new Environment("Env 1", "Desc 1", user);
+        App app = new App("App 1", env);
+        Event event = new Event("payment.completed", app);
+        ObjectNode body = new ObjectMapper().createObjectNode().put("amount", 4999);
+        UUID id = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+        Instant createdAt = Instant.parse("2026-01-02T03:04:05.123456Z");
+
+        Message message = new Message(id, app, event, body, createdAt);
+
+        assertEquals(id, message.getId());
+        assertEquals(createdAt, message.getCreatedAt());
     }
 
     @Test

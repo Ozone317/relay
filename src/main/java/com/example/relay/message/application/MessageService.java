@@ -4,7 +4,6 @@ import com.example.relay.app.domain.App;
 import com.example.relay.app.exception.AppNotFoundException;
 import com.example.relay.app.infrastructure.AppRepository;
 import com.example.relay.attempt.application.AttemptService;
-import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.event.application.EventService;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventNotFoundException;
@@ -68,8 +67,8 @@ public class MessageService {
         Message message = messageMapper.toEntity(request, app, event);
         messageRepository.save(message);
 
-        List<Attempt> attempts = attemptService.createFromSubscriptionList(subscriptions, message);
+        attemptService.createFromSubscriptionList(subscriptions, message);
 
-        return new MessageCreateResult(message, attempts);
+        return new MessageCreateResult(message);
     }
 }
