@@ -8,13 +8,16 @@ import com.example.relay.message.application.MessageService;
 import com.example.relay.message.domain.Message;
 import com.example.relay.message.mapper.MessageMapper;
 import jakarta.validation.Valid;
+import java.util.Optional;
 import java.util.UUID;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,8 +35,11 @@ public class MessageController {
 
     @PostMapping("/messages")
     public ResponseEntity<MessageResponseDto> create(@PathVariable UUID environmentId, @PathVariable UUID appId,
-            @AuthenticationPrincipal AuthenticatedUser user, @RequestBody @Valid MessageCreateDto request) {
-        MessageCreateResult result = messageService.create(request, appId, environmentId, user.getId());
+            @AuthenticationPrincipal AuthenticatedUser user, @RequestHeader HttpHeaders requestHeaders,
+            @RequestBody @Valid MessageCreateDto request) {
+        Optional<MessageIdempotencyKey> key = MessageIdempotencyKey.parseHeaderValues(
+                requestHeaders.get("Idempotency-Key"));
+        MessageCreateResult result = messageService.create(request, key, appId, environmentId, user.getId());
 
         Message message = result.message();
         MessageResponseDto response = messageMapper.toResponseDto(message);

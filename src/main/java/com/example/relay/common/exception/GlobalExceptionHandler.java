@@ -13,6 +13,8 @@ import com.example.relay.endpoint.exception.EndpointNotFoundException;
 import com.example.relay.environment.exception.EnvironmentNotFoundException;
 import com.example.relay.event.exception.EventAlreadyExistsException;
 import com.example.relay.event.exception.EventNotFoundException;
+import com.example.relay.message.exception.IdempotencyConflictException;
+import com.example.relay.message.exception.InvalidIdempotencyKeyException;
 import com.example.relay.message.exception.NoActiveSubscribersException;
 import com.example.relay.user.exception.EmailNotVerifiedException;
 import com.example.relay.user.exception.InvalidOrExpiredResetTokenException;
@@ -190,6 +192,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleInvalidSortPropertyException(InvalidSortPropertyException ex) {
         ApiError error = ApiError.of(HttpStatus.BAD_REQUEST.value(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    @ExceptionHandler(InvalidIdempotencyKeyException.class)
+    public ResponseEntity<ApiError> handleInvalidIdempotencyKey(InvalidIdempotencyKeyException ex) {
+        ApiError error = ApiError.of(HttpStatus.BAD_REQUEST.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<ApiError> handleIdempotencyConflict(IdempotencyConflictException ex) {
+        ApiError error = ApiError.of(HttpStatus.CONFLICT.value(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**

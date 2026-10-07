@@ -8,6 +8,7 @@ import com.example.relay.attempt.domain.Attempt;
 import com.example.relay.event.application.EventService;
 import com.example.relay.event.domain.Event;
 import com.example.relay.event.exception.EventNotFoundException;
+import com.example.relay.message.api.MessageIdempotencyKey;
 import com.example.relay.message.api.dto.MessageCreateDto;
 import com.example.relay.message.api.dto.MessageCreateResult;
 import com.example.relay.message.domain.Message;
@@ -17,6 +18,7 @@ import com.example.relay.message.mapper.MessageMapper;
 import com.example.relay.subscription.domain.Subscription;
 import com.example.relay.subscription.infrastructure.SubscriptionRepository;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +42,13 @@ public class MessageService {
         this.messageRepository = messageRepository;
         this.messageMapper = messageMapper;
         this.subscriptionRepository = subscriptionRepository;
+    }
+
+    @Transactional
+    public MessageCreateResult create(MessageCreateDto request, Optional<MessageIdempotencyKey> idempotencyKey,
+            UUID appId, UUID environmentId, UUID userId)
+            throws AppNotFoundException, EventNotFoundException, NoActiveSubscribersException {
+        return create(request, appId, environmentId, userId);
     }
 
     @Transactional

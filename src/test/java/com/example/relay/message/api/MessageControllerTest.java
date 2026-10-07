@@ -30,6 +30,7 @@ import com.example.relay.message.api.dto.MessageCreateResult;
 import com.example.relay.message.api.dto.MessageResponseDto;
 import com.example.relay.message.application.MessageService;
 import com.example.relay.message.domain.Message;
+import com.example.relay.message.exception.IdempotencyConflictException;
 import com.example.relay.message.exception.NoActiveSubscribersException;
 import com.example.relay.message.mapper.MessageMapper;
 import com.example.relay.user.application.AuthService;
@@ -37,6 +38,7 @@ import com.example.relay.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -99,7 +101,8 @@ public class MessageControllerTest {
                 event.getName(), body, message.getCreatedAt());
 
         // Stubs
-        when(messageService.create(request, app.getId(), env.getId(), user.getId())).thenReturn(result);
+        when(messageService.create(request, Optional.empty(), app.getId(), env.getId(), user.getId()))
+                .thenReturn(result);
         when(messageMapper.toResponseDto(message)).thenReturn(response);
 
         // Act
@@ -109,6 +112,8 @@ public class MessageControllerTest {
                 .andExpect(jsonPath("$.id").value(response.id().toString()))
                 .andExpect(jsonPath("$.eventId").value(response.eventId().toString()))
                 .andExpect(jsonPath("$.eventName").value(response.eventName()));
+
+        verify(messageService).create(request, Optional.empty(), app.getId(), env.getId(), user.getId());
 
         // Publication is owned by ReadyWorkDispatcher after the controller returns.
         // The WebMvc test verifies the controller's 201 response and service interaction only.
@@ -129,7 +134,7 @@ public class MessageControllerTest {
                 .andExpect(status().isBadRequest());
 
         // Verify
-        verify(messageService, never()).create(any(), any(), any(), any());
+        verify(messageService, never()).create(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -149,7 +154,7 @@ public class MessageControllerTest {
                 .andExpect(status().isBadRequest());
 
         // Verify
-        verify(messageService, never()).create(any(), any(), any(), any());
+        verify(messageService, never()).create(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -162,7 +167,8 @@ public class MessageControllerTest {
         MessageCreateDto request = new MessageCreateDto(UUID.randomUUID(), body);
 
         // Stub
-        doThrow(new AppNotFoundException(appId)).when(messageService).create(request, appId, envId, user.getId());
+        doThrow(new AppNotFoundException(appId)).when(messageService).create(request, Optional.empty(), appId, envId,
+                user.getId());
 
         // Act + Assert
         mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
@@ -183,7 +189,8 @@ public class MessageControllerTest {
         MessageCreateDto request = new MessageCreateDto(eventId, body);
 
         // Stub
-        doThrow(new EventNotFoundException(eventId)).when(messageService).create(request, appId, envId, user.getId());
+        doThrow(new EventNotFoundException(eventId)).when(messageService).create(request, Optional.empty(), appId, envId,
+                user.getId());
 
         // Act + Assert
         mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
@@ -205,12 +212,90 @@ public class MessageControllerTest {
 
         // Stub
         doThrow(new NoActiveSubscribersException("payment.completed", eventId)).when(messageService).create(request,
-                appId, envId, user.getId());
+                Optional.empty(), appId, envId, user.getId());
 
         // Act + Assert
         mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
                 .with(authentication(authFor(user))).contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request))).andExpect(status().isUnprocessableEntity());
 
+    }
+
+    @Test
+    void create_passesValidIdempotencyKey_whenHeaderIsPresent() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        UUID envId = UUID.randomUUID();
+        UUID appId = UUID.randomUUID();
+        ObjectNode body = objectMapper.createObjectNode().put("amount", 4999);
+        MessageCreateDto request = new MessageCreateDto(UUID.randomUUID(), body);
+        MessageCreateResult result = new MessageCreateResult(null, List.of());
+        when(messageService.create(org.mockito.ArgumentMatchers.eq(request), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(appId), org.mockito.ArgumentMatchers.eq(envId),
+                org.mockito.ArgumentMatchers.eq(user.getId()))).thenReturn(result);
+
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId, appId)
+                .with(authentication(authFor(user))).header("Idempotency-Key", "Case-Sensitive_09").contentType(
+                        MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated());
+
+        verify(messageService).create(org.mockito.ArgumentMatchers.eq(request),
+                org.mockito.ArgumentMatchers.argThat(key -> key.isPresent()
+                        && key.orElseThrow().value().equals("Case-Sensitive_09")),
+                org.mockito.ArgumentMatchers.eq(appId), org.mockito.ArgumentMatchers.eq(envId),
+                org.mockito.ArgumentMatchers.eq(user.getId()));
+    }
+
+    @Test
+    void create_returnsBadRequestAndDoesNotCallService_whenIdempotencyKeyIsInvalid() throws Exception {
+        for (String value : List.of("", "has space", "a".repeat(256))) {
+            User user = new User("test@mail.com", "passwordHash");
+            ObjectNode body = objectMapper.createObjectNode().put("amount", 4999);
+            String payload = objectMapper.writeValueAsString(new MessageCreateDto(UUID.randomUUID(), body));
+
+            mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", UUID.randomUUID(),
+                    UUID.randomUUID()).with(authentication(authFor(user))).header("Idempotency-Key", value)
+                    .contentType(MediaType.APPLICATION_JSON).content(payload)).andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Idempotency-Key must be a 1-255 character RFC token"));
+        }
+
+        verify(messageService, never()).create(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void create_returnsBadRequestAndDoesNotCallService_whenIdempotencyKeyIsRepeated() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        ObjectNode body = objectMapper.createObjectNode().put("amount", 4999);
+        String payload = objectMapper.writeValueAsString(new MessageCreateDto(UUID.randomUUID(), body));
+
+        mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", UUID.randomUUID(),
+                UUID.randomUUID()).with(authentication(authFor(user))).header("Idempotency-Key", "first", "second")
+                .contentType(MediaType.APPLICATION_JSON).content(payload)).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Idempotency-Key must be a 1-255 character RFC token"));
+
+        verify(messageService, never()).create(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void create_returnsConflictWithoutEchoingKeyOrPayload_whenIdempotencyConflictOccurs() throws Exception {
+        User user = new User("test@mail.com", "passwordHash");
+        UUID envId = UUID.randomUUID();
+        UUID appId = UUID.randomUUID();
+        String key = "secret-key-value";
+        String payload = "sensitive-payload-value";
+        ObjectNode body = objectMapper.createObjectNode().put("amount", payload);
+        MessageCreateDto request = new MessageCreateDto(UUID.randomUUID(), body);
+        doThrow(new IdempotencyConflictException()).when(messageService).create(org.mockito.ArgumentMatchers.eq(request),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(appId),
+                org.mockito.ArgumentMatchers.eq(envId), org.mockito.ArgumentMatchers.eq(user.getId()));
+
+        String response = mockMvc.perform(post("/api/v1/environments/{environmentId}/apps/{appId}/messages", envId,
+                appId).with(authentication(authFor(user))).header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message")
+                        .value("Idempotency-Key is already associated with a different message request"))
+                .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(response).doesNotContain(key, payload);
     }
 }
