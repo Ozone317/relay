@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -174,12 +175,14 @@ class MessageIdempotencyRepositoryPostgresTest implements SharedPostgresContaine
         CountDownLatch loserStarted = new CountDownLatch(1);
         AtomicInteger winnerPid = new AtomicInteger();
         AtomicInteger loserPid = new AtomicInteger();
+        AtomicReference<MessageIdempotencyAcquisition> winnerAuthority = new AtomicReference<>();
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<?> winner = executor.submit(() -> transactions.executeWithoutResult(status -> {
                 winnerPid.set(jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class));
                 MessageIdempotencyAcquisition authority = repository.tryAcquire(fixture.userId(), fixture.appId(),
                         new MessageIdempotencyKey(key), UUID.randomUUID()).orElseThrow();
+                winnerAuthority.set(authority);
                 insertMessage(authority.messageId(), fixture.appId(), fixture.eventId(), "{}");
                 winnerInserted.countDown();
                 await(releaseWinner);
@@ -193,6 +196,14 @@ class MessageIdempotencyRepositoryPostgresTest implements SharedPostgresContaine
                 loserStarted.countDown();
                 Optional<MessageIdempotencyAcquisition> acquisition = repository.tryAcquire(fixture.userId(),
                         fixture.appId(), new MessageIdempotencyKey(key), UUID.randomUUID());
+                if (commitWinner && acquisition.isEmpty()) {
+                    MessageIdempotencyAcquisition winnerRecord = winnerAuthority.get();
+                    CommittedMessageIdempotency committed = repository.findCommittedAndCompare(fixture.userId(),
+                            fixture.appId(), new MessageIdempotencyKey(key), fixture.eventId(), json("{}"));
+                    assertThat(committed.messageId()).isEqualTo(winnerRecord.messageId());
+                    assertThat(committed.acceptedAt()).isEqualTo(winnerRecord.acceptedAt());
+                    assertThat(committed.fingerprintMatches()).isTrue();
+                }
                 if (acquisition.isPresent()) {
                     insertMessage(acquisition.get().messageId(), fixture.appId(), fixture.eventId(), "{}");
                 }
@@ -207,10 +218,6 @@ class MessageIdempotencyRepositoryPostgresTest implements SharedPostgresContaine
             if (commitWinner) {
                 System.out.printf("Winner resolution: committed; loser returned empty for key=%s%n", key);
                 assertThat(loserResult).isEmpty();
-                CommittedMessageIdempotency committed = transactions.execute(status -> repository.findCommittedAndCompare(
-                        fixture.userId(), fixture.appId(), new MessageIdempotencyKey(key), fixture.eventId(),
-                        json("{}")));
-                assertThat(committed.fingerprintMatches()).isTrue();
             } else {
                 System.out.printf("Winner resolution: rolled back; loser acquired authority for key=%s%n", key);
                 assertThat(loserResult).isPresent();
