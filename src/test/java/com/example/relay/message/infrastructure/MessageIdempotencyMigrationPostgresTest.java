@@ -53,6 +53,7 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
                 assertPrimaryKeyColumns(statement);
                 assertNoCompositeOwnershipOrResultForeignKey(statement);
                 assertInsertIdentityBeforeMessage(connection);
+                assertMissingMessageFailsAtCommit(connection);
                 assertMissingTargetsFailIndependently(connection);
                 assertDuplicateScopeKeyFails(connection);
                 assertDuplicateMessageResultFails(connection);
@@ -141,6 +142,18 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
                 () -> insertIdentity(connection, USER_ID, id(103), "missing-app", 1, MESSAGE_ID)));
     }
 
+    private static void assertMissingMessageFailsAtCommit(Connection connection) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            assertDoesNotThrow(() -> insertIdentity(connection, USER_ID, APP_ID, "missing-message", 1, id(108)));
+            SQLException failure = assertThrows(SQLException.class, connection::commit);
+            assertEquals("23503", failure.getSQLState());
+        } finally {
+            connection.rollback();
+            connection.setAutoCommit(true);
+        }
+    }
+
     private static void assertDuplicateScopeKeyFails(Connection connection) throws SQLException {
         assertFails("23505", () -> inTransaction(connection,
                 () -> insertIdentity(connection, USER_ID, APP_ID, "deferred", 1, id(105))));
@@ -207,13 +220,6 @@ class MessageIdempotencyMigrationPostgresTest implements SharedPostgresContainer
                 assertTrue(rows.next());
                 return rows.getInt(1);
             }
-        }
-    }
-
-    private static int scalar(Statement statement, String sql) throws SQLException {
-        try (var rows = statement.executeQuery(sql)) {
-            assertTrue(rows.next());
-            return rows.getInt(1);
         }
     }
 
