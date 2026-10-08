@@ -14,6 +14,14 @@ public interface PasswordResetTokenRepository extends JpaRepository<PasswordRese
 
     Optional<PasswordResetToken> findByTokenHash(String tokenHash);
 
+    @Query(value = """
+            SELECT *
+            FROM password_reset_tokens
+            WHERE id = :tokenId
+            FOR UPDATE
+            """, nativeQuery = true)
+    Optional<PasswordResetToken> findByIdForUpdate(UUID tokenId);
+
     @Modifying(clearAutomatically = true)
     @Query(value = """
                 UPDATE password_reset_tokens

@@ -61,6 +61,19 @@ class PasswordResetTokenRepositoryTest implements SharedPostgresContainer {
     }
 
     @Test
+    void findByIdForUpdate_returnsTheExactToken() {
+        PasswordResetToken first = persisted("lock-first", now.plusSeconds(1800));
+        persisted("lock-second", now.plusSeconds(1800));
+
+        PasswordResetToken locked = underTest.findByIdForUpdate(first.getId()).orElseThrow();
+
+        assertEquals(first.getId(), locked.getId());
+        assertEquals("lock-first", locked.getTokenHash());
+        assertEquals(user.getId(), locked.getUser().getId());
+        assertEquals(now.plusSeconds(1800), locked.getExpiresAt());
+    }
+
+    @Test
     void consume_returns1thenZero_soTheSameTokenCannotBeConsumedTwice() {
         persisted("hash-b", now.plus(30, ChronoUnit.MINUTES));
 
