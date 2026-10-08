@@ -108,36 +108,34 @@ public class PasswordResetTokenService {
     /**
      * {@code userRepository.lockForUpdate} is acquired FIRST, before any token row is touched, for both the public
      * {@link #issue(User, Instant)} entry point - this is not related to first-activation-wins semantics (issue() never
-     * activates anything), it
-     * exists purely to preserve the global "users row lock before any token row, in both directions" invariant
-     * described in {@link #consumeAndResetPassword}'s javadoc and the design spec's "Lock ordering" section. Without
-     * it, this method's unlocked invalidate-then-insert on the {@code password_reset_tokens} table (whose FK takes a
-     * share lock on the {@code users} row) can form an AB-BA deadlock cycle against a concurrent
-     * {@code consumeAndVerify}/{@code consumeAndResetPassword} call that already holds the {@code users} lock and is
-     * waiting to invalidate this method's token row on a winning activation - found in final review, reproduced with
-     * a real two-connection Postgres probe, reachable via ordinary concurrent requests (e.g. a password-reset
-     * request racing a verify-email confirmation for the same user) or the unattended
+     * activates anything), it exists purely to preserve the global "users row lock before any token row, in both
+     * directions" invariant described in {@link #consumeAndResetPassword}'s javadoc and the design spec's "Lock
+     * ordering" section. Without it, this method's unlocked invalidate-then-insert on the {@code password_reset_tokens}
+     * table (whose FK takes a share lock on the {@code users} row) can form an AB-BA deadlock cycle against a
+     * concurrent {@code consumeAndVerify}/{@code consumeAndResetPassword} call that already holds the {@code users}
+     * lock and is waiting to invalidate this method's token row on a winning activation - found in final review,
+     * reproduced with a real two-connection Postgres probe, reachable via ordinary concurrent requests (e.g. a
+     * password-reset request racing a verify-email confirmation for the same user) or the unattended
      * {@code PasswordResetEmailRecoverySweeper}.
      *
      * <p>
      * The {@code entityManager.detach} call below is load-bearing, not tidy-up, and closes a regression this same
      * lockForUpdate call introduced: the public entry point to this method ({@link #issue(User, Instant)} via
-     * {@code PasswordResetService.requestReset}/{@code issueAndDispatch}) is handed
-     * a {@code User} loaded via a plain, unlocked {@code findByEmail}/{@code findById} OUTSIDE any transaction.
-     * Under this project's default {@code spring.jpa.open-in-view=true}, that User stays MANAGED in the
-     * request-bound persistence context, so {@code lockForUpdate} above would be a lock-mode UPGRADE on that
-     * already-cached instance rather than a fresh load, and Hibernate re-validates its cached {@code version}
-     * against the row it just locked. If a wholly unrelated concurrent write bumped that row's version in between
-     * (e.g. a concurrent email-verification confirm racing a password-reset request for the same user - exactly
-     * this plan's core scenario), the upgrade throws {@code ObjectOptimisticLockingFailureException}, uncaught,
-     * surfacing as a 500 on this unauthenticated, security-sensitive endpoint. Detaching first removes the stale
-     * cached instance, making lockForUpdate a genuine {@code SELECT ... FOR UPDATE} with nothing to version-check.
-     * This is safe for every caller: {@code User} has no lazy fields (id/email/passwordHash/emailVerified/version
-     * are all plain eager columns), and the caller of issue() only reads plain getters off
-     * {@code user} AFTER the call returns (PasswordResetService's post-issue dispatch() reading user.getEmail()) -
-     * none relies on {@code user} remaining JPA-managed or on any further auto-flushed mutation to it. See
-     * EmailVerificationTokenService.issue's identical note - this is symmetric across both flows, mirroring the
-     * same fix already applied to both consume methods.
+     * {@code PasswordResetService.requestReset}/{@code issueAndDispatch}) is handed a {@code User} loaded via a plain,
+     * unlocked {@code findByEmail}/{@code findById} OUTSIDE any transaction. Under this project's default
+     * {@code spring.jpa.open-in-view=true}, that User stays MANAGED in the request-bound persistence context, so
+     * {@code lockForUpdate} above would be a lock-mode UPGRADE on that already-cached instance rather than a fresh
+     * load, and Hibernate re-validates its cached {@code version} against the row it just locked. If a wholly unrelated
+     * concurrent write bumped that row's version in between (e.g. a concurrent email-verification confirm racing a
+     * password-reset request for the same user - exactly this plan's core scenario), the upgrade throws
+     * {@code ObjectOptimisticLockingFailureException}, uncaught, surfacing as a 500 on this unauthenticated,
+     * security-sensitive endpoint. Detaching first removes the stale cached instance, making lockForUpdate a genuine
+     * {@code SELECT ... FOR UPDATE} with nothing to version-check. This is safe for every caller: {@code User} has no
+     * lazy fields (id/email/passwordHash/emailVerified/version are all plain eager columns), and the caller of issue()
+     * only reads plain getters off {@code user} AFTER the call returns (PasswordResetService's post-issue dispatch()
+     * reading user.getEmail()) - none relies on {@code user} remaining JPA-managed or on any further auto-flushed
+     * mutation to it. See EmailVerificationTokenService.issue's identical note - this is symmetric across both flows,
+     * mirroring the same fix already applied to both consume methods.
      */
     private IssuedResetToken issue(User user, Instant now, Instant firstRequestedAt) {
         entityManager.detach(user);

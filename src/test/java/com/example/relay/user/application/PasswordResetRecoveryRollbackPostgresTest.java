@@ -81,9 +81,9 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
                 .saveAndFlush(new PasswordResetToken(user, "recovery-rollback-" + UUID.randomUUID(),
                         Instant.now().plus(Duration.ofMinutes(30)), createdAt, firstRequestedAt));
         UUID candidateId = candidate.getId();
-        Instant persistedFirstRequestedAt = jdbcTemplate.queryForObject(
-                "SELECT first_requested_at FROM password_reset_tokens WHERE id = ?", java.sql.Timestamp.class,
-                candidateId).toInstant();
+        Instant persistedFirstRequestedAt =
+                jdbcTemplate.queryForObject("SELECT first_requested_at FROM password_reset_tokens WHERE id = ?",
+                        java.sql.Timestamp.class, candidateId).toInstant();
 
         doAnswer(invocation -> {
             PasswordResetToken attempted = invocation.getArgument(0);
@@ -117,8 +117,7 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
         assertNull(t0.get("used_at"), "T0 retirement must roll back when successor persistence fails");
         assertNull(t0.get("reset_email_dispatched_at"), "T0 must remain undispatched after rollback");
         Instant storedFirstRequestedAt = ((java.sql.Timestamp) t0.get("first_requested_at")).toInstant();
-        assertEquals(persistedFirstRequestedAt, storedFirstRequestedAt,
-                "the recovery-chain origin must not change");
+        assertEquals(persistedFirstRequestedAt, storedFirstRequestedAt, "the recovery-chain origin must not change");
         assertEquals(0, jdbcTemplate.queryForObject("""
                 SELECT count(*)
                 FROM password_reset_tokens
@@ -128,16 +127,17 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
 
     @Test
     void outerRecoveryPath_propagatesSuccessorFailure_rollsBackCandidateAndNeverPublishes() {
-        user = userRepository.saveAndFlush(new User("outer-recovery-rollback-" + UUID.randomUUID() + "@example.com", "hash"));
+        user = userRepository
+                .saveAndFlush(new User("outer-recovery-rollback-" + UUID.randomUUID() + "@example.com", "hash"));
         Instant createdAt = Instant.now().minus(Duration.ofMinutes(2));
         Instant firstRequestedAt = Instant.now().minus(Duration.ofMinutes(5));
         PasswordResetToken candidate = passwordResetTokenRepository
                 .saveAndFlush(new PasswordResetToken(user, "outer-recovery-rollback-" + UUID.randomUUID(),
                         Instant.now().plus(Duration.ofMinutes(30)), createdAt, firstRequestedAt));
         UUID candidateId = candidate.getId();
-        Instant persistedFirstRequestedAt = jdbcTemplate.queryForObject(
-                "SELECT first_requested_at FROM password_reset_tokens WHERE id = ?", java.sql.Timestamp.class,
-                candidateId).toInstant();
+        Instant persistedFirstRequestedAt =
+                jdbcTemplate.queryForObject("SELECT first_requested_at FROM password_reset_tokens WHERE id = ?",
+                        java.sql.Timestamp.class, candidateId).toInstant();
 
         doAnswer(invocation -> {
             PasswordResetToken attempted = invocation.getArgument(0);
@@ -166,8 +166,7 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
         assertNull(t0.get("used_at"), "T0 retirement must roll back through the outer service path");
         assertNull(t0.get("reset_email_dispatched_at"), "T0 remains undispatched after rollback");
         Instant storedFirstRequestedAt = ((java.sql.Timestamp) t0.get("first_requested_at")).toInstant();
-        assertEquals(persistedFirstRequestedAt, storedFirstRequestedAt,
-                "the recovery-chain origin must not change");
+        assertEquals(persistedFirstRequestedAt, storedFirstRequestedAt, "the recovery-chain origin must not change");
         assertEquals(1, jdbcTemplate.queryForObject("""
                 SELECT count(*)
                 FROM password_reset_tokens

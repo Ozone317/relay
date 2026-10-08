@@ -44,8 +44,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @SpringBootTest
 @EnableTestBackgroundExecution({})
 @TestPropertySource(properties = {"relay.password-reset.email-recovery.interval=1s",
-        "relay.password-reset.email-recovery.grace=1s",
-        "relay.password-reset.email-recovery.max-recovery-window=3h",
+        "relay.password-reset.email-recovery.grace=1s", "relay.password-reset.email-recovery.max-recovery-window=3h",
         "JWT_SECRET=test-only-jwt-secret-for-recovery-tests-32bytes"})
 class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContainer {
 
@@ -106,9 +105,9 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
 
         CountDownLatch t0Selected = new CountDownLatch(1);
         CountDownLatch releaseRecovery = new CountDownLatch(1);
-        PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
-                gateAfterCandidateSelection(t0Selected, releaseRecovery), passwordResetService, recoveryProperties,
-                scheduledCallbackRunner);
+        PasswordResetEmailRecoverySweeper gatedSweeper =
+                new PasswordResetEmailRecoverySweeper(gateAfterCandidateSelection(t0Selected, releaseRecovery),
+                        passwordResetService, recoveryProperties, scheduledCallbackRunner);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -207,9 +206,9 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
     private RecoveryGate startGatedRecovery() {
         CountDownLatch selected = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
-                gateAfterCandidateSelection(selected, release), passwordResetService, recoveryProperties,
-                scheduledCallbackRunner);
+        PasswordResetEmailRecoverySweeper gatedSweeper =
+                new PasswordResetEmailRecoverySweeper(gateAfterCandidateSelection(selected, release),
+                        passwordResetService, recoveryProperties, scheduledCallbackRunner);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         return new RecoveryGate(selected, release, executor, executor.submit(gatedSweeper::sweep));
     }

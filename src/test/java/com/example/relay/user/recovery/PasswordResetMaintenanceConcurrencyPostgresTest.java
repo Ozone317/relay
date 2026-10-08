@@ -110,11 +110,10 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
                 .when(passwordResetTokenService)
                 .issue(any(User.class), any(Instant.class));
         doAnswer(invocation -> {
-                    captureIssuanceBackend();
-                    return invocation.callRealMethod();
-                })
-                .when(passwordResetTokenService)
-                .recoverCandidate(any(UUID.class), any(UUID.class), any(Duration.class), any(Duration.class));
+            captureIssuanceBackend();
+            return invocation.callRealMethod();
+        }).when(passwordResetTokenService).recoverCandidate(any(UUID.class), any(UUID.class), any(Duration.class),
+                any(Duration.class));
     }
 
     @Test

@@ -57,10 +57,8 @@ public class PasswordResetService {
     }
 
     /**
-     * Issues a fresh token for this user and dispatches its reset-link email. Also called directly by
-     * com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper for a row whose original dispatch was never
-     * confirmed - recovery here means re-running this same issuance, not resending the original message, because the
-     * raw token is never persisted and so cannot be reconstructed from the database (see the design spec Section 7.2).
+     * Issues a fresh token for this user and dispatches its reset-link email after an ordinary reset request passes the
+     * rate limit and account lookup.
      */
     public void issueAndDispatch(User user) {
         dispatch(passwordResetTokenService.issue(user, Instant.now()), user);
@@ -72,8 +70,8 @@ public class PasswordResetService {
      */
     public RecoveryOutcome issueAndDispatchForRecovery(UUID candidateId, UUID observedUserId, Duration grace,
             Duration maxRecoveryWindow) {
-        RecoveryAttempt attempt = passwordResetTokenService.recoverCandidate(candidateId, observedUserId, grace,
-                maxRecoveryWindow);
+        RecoveryAttempt attempt =
+                passwordResetTokenService.recoverCandidate(candidateId, observedUserId, grace, maxRecoveryWindow);
         if (attempt.outcome() == RecoveryOutcome.REISSUED) {
             IssuedResetToken issued = attempt.issuedToken();
             dispatch(issued, issued.token().getUser());

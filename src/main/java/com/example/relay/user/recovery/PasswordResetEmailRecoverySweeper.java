@@ -1,13 +1,12 @@
 package com.example.relay.user.recovery;
 
+import com.example.relay.common.scheduling.ScheduledCallbackRunner;
+import com.example.relay.common.scheduling.ScheduledJob;
+import com.example.relay.common.scheduling.SchedulerNames;
 import com.example.relay.user.application.PasswordResetService;
 import com.example.relay.user.application.PasswordResetTokenService.RecoveryOutcome;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
-import com.example.relay.common.scheduling.SchedulerNames;
-import com.example.relay.common.scheduling.ScheduledCallbackRunner;
-import com.example.relay.common.scheduling.ScheduledJob;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import org.slf4j.Logger;
@@ -21,11 +20,11 @@ import org.springframework.stereotype.Component;
  * component, not folded into deliveryengine.ReconciliationSweeper, which is scoped to that package's own concern.
  *
  * <p>
- * Unlike recoverDeadLetter(), this cannot republish the same message because the raw token is never persisted.
- * Each scan result is only a hint: PasswordResetService passes its candidate and observed owner IDs to the
- * transactional token service, which locks and rechecks that exact row before retiring it or creating a successor.
- * The original request time is carried forward from the locked candidate and the recovery-window bound is decided
- * inside that transaction.
+ * Unlike recoverDeadLetter(), this cannot republish the same message because the raw token is never persisted. Each
+ * scan result is only a hint: PasswordResetService passes its candidate and observed owner IDs to the transactional
+ * token service, which locks and rechecks that exact row before retiring it or creating a successor. The original
+ * request time is carried forward from the locked candidate and the recovery-window bound is decided inside that
+ * transaction.
  */
 @Component
 public class PasswordResetEmailRecoverySweeper {
@@ -70,11 +69,12 @@ public class PasswordResetEmailRecoverySweeper {
             switch (outcome) {
                 case REISSUED -> log.warn("Recovering undispatched password-reset email for user {} (stale token {})",
                         candidate.getUser().getId(), candidate.getId());
-                case EXHAUSTED -> log.warn(
-                        "Undispatched password-reset recovery chain retired at bound for user {} (token {})",
-                        candidate.getUser().getId(), candidate.getId());
-                case LOST_RACE -> log.debug("Recovery for undispatched password-reset token {} lost the race; no action needed",
-                        candidate.getId());
+                case EXHAUSTED ->
+                    log.warn("Undispatched password-reset recovery chain retired at bound for user {} (token {})",
+                            candidate.getUser().getId(), candidate.getId());
+                case LOST_RACE ->
+                    log.debug("Recovery for undispatched password-reset token {} lost the race; no action needed",
+                            candidate.getId());
             }
         }
     }

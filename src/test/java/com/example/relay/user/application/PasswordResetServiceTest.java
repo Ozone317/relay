@@ -2,7 +2,6 @@ package com.example.relay.user.application;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -100,9 +99,8 @@ class PasswordResetServiceTest {
         Duration grace = Duration.ofSeconds(90);
         Duration maxRecoveryWindow = Duration.ofHours(1);
         PasswordResetToken token = new PasswordResetToken(user, "hash", Instant.now().plusSeconds(1800), Instant.now());
-        when(passwordResetTokenService.recoverCandidate(candidateId, userId, grace, maxRecoveryWindow))
-                .thenReturn(RecoveryAttempt.reissued(
-                        new PasswordResetTokenService.IssuedResetToken(token, "raw-token-value")));
+        when(passwordResetTokenService.recoverCandidate(candidateId, userId, grace, maxRecoveryWindow)).thenReturn(
+                RecoveryAttempt.reissued(new PasswordResetTokenService.IssuedResetToken(token, "raw-token-value")));
 
         RecoveryOutcome result = underTest.issueAndDispatchForRecovery(candidateId, userId, grace, maxRecoveryWindow);
 
