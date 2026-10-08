@@ -1,6 +1,7 @@
 package com.example.relay.user.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.inOrder;
 
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.support.background.EnableTestBackgroundExecution;
+import com.example.relay.user.PasswordResetProperties;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
@@ -21,6 +23,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -46,15 +49,15 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private PasswordResetProperties passwordResetProperties;
+
     private User user;
-    private PasswordResetToken candidate;
 
     @AfterEach
     void tearDown() {
-        if (candidate != null) {
-            jdbcTemplate.update("DELETE FROM password_reset_tokens WHERE id = ?", candidate.getId());
-        }
         if (user != null) {
+            jdbcTemplate.update("DELETE FROM password_reset_tokens WHERE user_id = ?", user.getId());
             jdbcTemplate.update("DELETE FROM users WHERE id = ?", user.getId());
         }
     }
@@ -64,7 +67,7 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
         user = userRepository.saveAndFlush(new User("recovery-rollback-" + UUID.randomUUID() + "@example.com", "hash"));
         Instant createdAt = Instant.now().minus(Duration.ofMinutes(2));
         Instant firstRequestedAt = Instant.now().minus(Duration.ofMinutes(5));
-        candidate = passwordResetTokenRepository
+        PasswordResetToken candidate = passwordResetTokenRepository
                 .saveAndFlush(new PasswordResetToken(user, "recovery-rollback-" + UUID.randomUUID(),
                         Instant.now().plus(Duration.ofMinutes(30)), createdAt, firstRequestedAt));
         UUID candidateId = candidate.getId();
@@ -83,9 +86,18 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
         assertThrows(IllegalStateException.class, () -> underTest.recoverCandidate(candidateId, user.getId(),
                 Duration.ofSeconds(1), Duration.ofHours(1)));
 
+        ArgumentCaptor<Instant> retirementTime = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<PasswordResetToken> attemptedSuccessor = ArgumentCaptor.forClass(PasswordResetToken.class);
         InOrder order = inOrder(passwordResetTokenRepository);
-        order.verify(passwordResetTokenRepository).giveUpOn(eq(candidateId), any(Instant.class));
-        order.verify(passwordResetTokenRepository).saveAndFlush(any(PasswordResetToken.class));
+        order.verify(passwordResetTokenRepository).giveUpOn(eq(candidateId), retirementTime.capture());
+        order.verify(passwordResetTokenRepository).saveAndFlush(attemptedSuccessor.capture());
+        Instant decisionTime = retirementTime.getValue();
+        PasswordResetToken successor = attemptedSuccessor.getValue();
+        assertNotEquals(candidateId, successor.getId(), "the flush attempt must be for a distinct successor row");
+        assertEquals(decisionTime, successor.getCreatedAt(),
+                "the exact retirement timestamp must also be the successor creation time");
+        assertEquals(decisionTime.plus(passwordResetProperties.getTokenTtl()), successor.getExpiresAt(),
+                "the successor expiry must use the same captured decision instant");
 
         Map<String, Object> t0 = jdbcTemplate.queryForMap("""
                 SELECT used_at, reset_email_dispatched_at, first_requested_at

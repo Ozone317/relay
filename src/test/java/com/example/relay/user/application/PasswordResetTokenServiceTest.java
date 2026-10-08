@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -232,6 +233,57 @@ class PasswordResetTokenServiceTest {
 
         assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
         verify(passwordResetTokenRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void recoverCandidate_returnsLostRace_whenExhaustedCandidateRetirementUpdatesZeroRows() {
+        User user = user("exhausted-retirement-race@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        Instant cutoff = decisionTime.minus(Duration.ofHours(1));
+        PasswordResetToken candidate = candidate(user, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(20), cutoff, null, null);
+        UUID candidateId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+        when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(0);
+
+        var result = recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
+        verify(passwordResetTokenRepository, times(1)).giveUpOn(candidateId, decisionTime);
+        verify(passwordResetTokenRepository, never()).saveAndFlush(any());
+        verify(passwordResetTokenRepository, never()).invalidateAllForUser(any(), any());
+    }
+
+    @Test
+    void recoverCandidate_capturesDecisionTime_onlyAfterBothLocks() {
+        User user = user("decision-time-order@example.com");
+        UUID candidateId = UUID.randomUUID();
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        PasswordResetToken candidate = candidate(user, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(20), decisionTime.minusSeconds(30), null, null);
+        AtomicInteger decisionTimeReads = new AtomicInteger();
+
+        try (MockedStatic<Instant> clock = mockStatic(Instant.class, CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenAnswer(invocation -> {
+                decisionTimeReads.incrementAndGet();
+                return decisionTime;
+            });
+            when(userRepository.lockForUpdate(user.getId())).thenAnswer(invocation -> {
+                assertEquals(0, decisionTimeReads.get(), "the user lock must complete before decision time is read");
+                return Optional.of(user);
+            });
+            when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenAnswer(invocation -> {
+                assertEquals(0, decisionTimeReads.get(), "the candidate lock must complete before decision time is read");
+                return Optional.of(candidate);
+            });
+            when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(1);
+
+            var result = underTest.recoverCandidate(candidateId, user.getId(), Duration.ofSeconds(5), Duration.ofHours(1));
+
+            assertEquals(PasswordResetTokenService.RecoveryOutcome.REISSUED, result.outcome());
+            assertEquals(1, decisionTimeReads.get(), "recovery must capture exactly one decision instant");
+        }
     }
 
     @Test
