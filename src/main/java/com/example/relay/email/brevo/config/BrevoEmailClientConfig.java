@@ -19,7 +19,7 @@ public class BrevoEmailClientConfig {
     // an unintended host, and Brevo's API endpoint has no legitimate reason to vary by environment.
     private static final String BREVO_BASE_URL = "https://api.brevo.com/v3";
 
-    // On the JDK client (see ClientHttpRequestFactoryBuilder.detect() below), the read timeout is a
+    // On the JDK client selected below, the read timeout is a
     // TOTAL-exchange budget, not per-read socket inactivity - same caveat as
     // DeliveryHttpClientConfig's read timeout comment. Worst case is ~READ_TIMEOUT total, not
     // CONNECT_TIMEOUT + READ_TIMEOUT added together.
@@ -29,6 +29,14 @@ public class BrevoEmailClientConfig {
     @Bean
     @Qualifier("brevoRestClient")
     public RestClient brevoRestClient(EmailProperties emailProperties) {
+        ClientHttpRequestFactory requestFactory = brevoRequestFactory();
+
+        return RestClient.builder().baseUrl(BREVO_BASE_URL).requestFactory(requestFactory)
+                .defaultHeader("api-key", emailProperties.getBrevo().getApiKey())
+                .defaultHeader("Content-Type", "application/json").build();
+    }
+
+    ClientHttpRequestFactory brevoRequestFactory() {
         ClientHttpRequestFactorySettings settings =
                 ClientHttpRequestFactorySettings.defaults().withConnectTimeout(CONNECT_TIMEOUT)
                         .withReadTimeout(READ_TIMEOUT)
@@ -38,16 +46,10 @@ public class BrevoEmailClientConfig {
                         // exactly the "API key sent to an unintended host" risk that hardcoding
                         // BREVO_BASE_URL above was meant to close off.
                         .withRedirects(ClientHttpRequestFactorySettings.Redirects.DONT_FOLLOW);
-        // detect() resolves to JdkClientHttpRequestFactory here too, same as DeliveryHttpClientConfig -
-        // there's no Apache HttpComponents/Jetty/Reactor Netty on this project's classpath. Unlike the
-        // delivery path (dozens of concurrent deliveries needing real backpressure and explicit
-        // virtual-thread pinning), dead-letter/password-reset email volume is low and this client isn't
-        // invoked from the delivery worker's virtual-thread executor, so that extra tuning isn't
-        // warranted here.
-        ClientHttpRequestFactory requestFactory = ClientHttpRequestFactoryBuilder.detect().build(settings);
-
-        return RestClient.builder().baseUrl(BREVO_BASE_URL).requestFactory(requestFactory)
-                .defaultHeader("api-key", emailProperties.getBrevo().getApiKey())
-                .defaultHeader("Content-Type", "application/json").build();
+        // Pin the JDK client instead of detecting from the classpath. Apache HttpClient is present for
+        // webhook delivery and automatically retries 429/503 responses by default, which violates this
+        // adapter's one-request-per-send contract. Email retries remain owned by RabbitMQ/application
+        // recovery rather than an HTTP client hidden below BrevoEmailSender.
+        return ClientHttpRequestFactoryBuilder.jdk().build(settings);
     }
 }

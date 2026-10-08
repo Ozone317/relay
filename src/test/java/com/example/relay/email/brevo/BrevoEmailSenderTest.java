@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.web.client.RestClient;
 
 import com.example.relay.email.EmailProperties;
@@ -38,6 +39,7 @@ class BrevoEmailSenderTest {
         emailProperties.getBrevo().setApiKey("test-api-key");
 
         RestClient restClient = RestClient.builder().baseUrl(mockWebServer.url("/").toString())
+                .requestFactory(ClientHttpRequestFactoryBuilder.jdk().build())
                 .defaultHeader("api-key", "test-api-key").defaultHeader("Content-Type", "application/json").build();
 
         brevoEmailSender = new BrevoEmailSender(restClient, emailProperties, new ObjectMapper());
@@ -116,13 +118,27 @@ class BrevoEmailSenderTest {
     }
 
     @Test
-    void send_throwsEmailSendException_on429RateLimited() {
+    void send_throwsEmailSendException_on503ServiceUnavailable_withoutRetrying() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(503).setBody("{\"code\":\"service_unavailable\"}"));
+
+        RenderedEmail email = new RenderedEmail("Subject", "<p>html</p>", "text");
+
+        assertThatThrownBy(() -> brevoEmailSender.send(email, "user@example.com", UUID.randomUUID().toString()))
+                .isInstanceOf(EmailSendException.class);
+
+        assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void send_throwsEmailSendException_on429RateLimited_withoutRetrying() {
         mockWebServer.enqueue(new MockResponse().setResponseCode(429).setBody("{\"code\":\"too_many_requests\"}"));
 
         RenderedEmail email = new RenderedEmail("Subject", "<p>html</p>", "text");
 
         assertThatThrownBy(() -> brevoEmailSender.send(email, "user@example.com", UUID.randomUUID().toString()))
                 .isInstanceOf(EmailSendException.class);
+
+        assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
     }
 
     @Test
