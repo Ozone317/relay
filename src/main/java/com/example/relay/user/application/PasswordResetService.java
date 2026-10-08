@@ -6,10 +6,13 @@ import com.example.relay.email.EmailDispatchPublisher;
 import com.example.relay.email.EmailTemplate;
 import com.example.relay.user.PasswordResetProperties;
 import com.example.relay.user.application.PasswordResetTokenService.IssuedResetToken;
+import com.example.relay.user.application.PasswordResetTokenService.RecoveryAttempt;
+import com.example.relay.user.application.PasswordResetTokenService.RecoveryOutcome;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -64,13 +67,18 @@ public class PasswordResetService {
     }
 
     /**
-     * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper: reissues and dispatches exactly
-     * like {@link #issueAndDispatch(User)}, except the reissued token carries {@code firstRequestedAt} forward from the
-     * row being superseded instead of restarting the window at {@code now} - see
-     * PasswordResetTokenService#reissueForRecovery.
+     * Recovers only the candidate observed by the sweeper. The token service owns the transactional lock, recheck,
+     * retirement, and successor creation; publishing happens only after its proxy call commits successfully.
      */
-    public void issueAndDispatchForRecovery(User user, Instant firstRequestedAt) {
-        dispatch(passwordResetTokenService.reissueForRecovery(user, Instant.now(), firstRequestedAt), user);
+    public RecoveryOutcome issueAndDispatchForRecovery(UUID candidateId, UUID observedUserId, Duration grace,
+            Duration maxRecoveryWindow) {
+        RecoveryAttempt attempt = passwordResetTokenService.recoverCandidate(candidateId, observedUserId, grace,
+                maxRecoveryWindow);
+        if (attempt.outcome() == RecoveryOutcome.REISSUED) {
+            IssuedResetToken issued = attempt.issuedToken();
+            dispatch(issued, issued.token().getUser());
+        }
+        return attempt.outcome();
     }
 
     private void dispatch(IssuedResetToken issued, User user) {

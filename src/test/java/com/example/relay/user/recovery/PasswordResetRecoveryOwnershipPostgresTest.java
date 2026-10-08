@@ -1,4 +1,4 @@
-package com.example.relay.user.recovery.characterization;
+package com.example.relay.user.recovery;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,8 +17,6 @@ import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
-import com.example.relay.user.recovery.PasswordResetEmailRecoveryProperties;
-import com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -42,19 +40,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
-/**
- * Investigation-only characterization of the candidate-ownership defect recorded by the 2026-10-08 review.
- *
- * <p>This deliberately asserts the unsafe current behavior. Replace it with the safety regression described by the
- * candidate-owned recovery design when the production fix is implemented.
- */
 @Tag("integration")
 @SpringBootTest
 @EnableTestBackgroundExecution({})
 @TestPropertySource(properties = {"relay.password-reset.email-recovery.interval=1s",
         "relay.password-reset.email-recovery.grace=1s",
-        "relay.password-reset.email-recovery.max-recovery-window=3h"})
-class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPostgresContainer {
+        "relay.password-reset.email-recovery.max-recovery-window=3h",
+        "JWT_SECRET=test-only-jwt-secret-for-recovery-tests-32bytes"})
+class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContainer {
 
     @Autowired
     private PasswordResetService passwordResetService;
@@ -101,7 +94,7 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
     }
 
     @Test
-    void staleSelectedCandidateInvalidatesNewerDispatchConfirmedUserRequest() throws Exception {
+    void staleSelectedCandidateCannotInvalidateNewerDispatchConfirmedUserRequest() throws Exception {
         assertThat(jdbcTemplate.queryForObject("SHOW transaction_isolation", String.class))
                 .isEqualTo("read committed");
         User user = userRepository.save(new User("candidate-race-" + UUID.randomUUID() + "@example.com", "hash"));
@@ -114,8 +107,8 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
         CountDownLatch t0Selected = new CountDownLatch(1);
         CountDownLatch releaseRecovery = new CountDownLatch(1);
         PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
-                gateAfterCandidateSelection(t0Selected, releaseRecovery), passwordResetService,
-                passwordResetTokenService, recoveryProperties, scheduledCallbackRunner);
+                gateAfterCandidateSelection(t0Selected, releaseRecovery), passwordResetService, recoveryProperties,
+                scheduledCallbackRunner);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -141,16 +134,13 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
                     .toList();
             List<PasswordResetToken> usable = rows.stream().filter(token -> token.getUsedAt() == null).toList();
 
-            assertThat(rows).as("T0, the legitimate T1, and stale recovery's T2").hasSize(3);
-            assertThat(reloadedT0.getUsedAt()).isNotNull();
+            assertThat(rows).as("only T0 and the legitimate T1 exist").hasSize(2);
+            assertThat(reloadedT0.getUsedAt()).as("the newer user request legitimately superseded T0").isNotNull();
             assertThat(reloadedT1.getResetEmailDispatchedAt()).isNotNull();
-            assertThat(reloadedT1.getUsedAt())
-                    .as("unsafe current behavior: stale recovery invalidates dispatch-confirmed T1")
-                    .isNotNull();
-            assertThat(usable).as("stale recovery leaves only T2 usable").hasSize(1);
-            assertThat(usable.getFirst().getId()).isNotEqualTo(t1Id);
-            assertThat(publications).as("recovery publishes a second reset email for T2").hasSize(1);
-            assertThat(publications.peek().idempotencyKey()).isEqualTo(usable.getFirst().getId().toString());
+            assertThat(reloadedT1.getUsedAt()).isNull();
+            assertThat(usable).as("only the newer confirmed request remains usable").hasSize(1);
+            assertThat(usable.getFirst().getId()).isEqualTo(t1Id);
+            assertThat(publications).as("no recovery publication follows the user-request publication").isEmpty();
         } finally {
             releaseRecovery.countDown();
             executor.shutdownNow();
@@ -158,7 +148,7 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
     }
 
     @Test
-    void dispatchConfirmationOfSelectedCandidateDoesNotStopStaleRecovery() throws Exception {
+    void dispatchConfirmationOfSelectedCandidateWinsBeforeRecoveryLock() throws Exception {
         User user = userRepository.save(new User("dispatch-race-" + UUID.randomUUID() + "@example.com", "hash"));
         PasswordResetToken candidate = staleCandidate(user, "dispatch-race");
         RecoveryGate gate = startGatedRecovery();
@@ -174,18 +164,16 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
 
             PasswordResetToken reloaded = tokenRepository.findById(candidate.getId()).orElseThrow();
             assertThat(reloaded.getResetEmailDispatchedAt()).isNotNull();
-            assertThat(reloaded.getUsedAt())
-                    .as("unsafe current behavior: confirmation after selection is never rechecked")
-                    .isNotNull();
-            assertThat(tokenRepository.findAll()).hasSize(2);
-            assertThat(publications).hasSize(1);
+            assertThat(reloaded.getUsedAt()).isNull();
+            assertThat(tokenRepository.findAll()).hasSize(1);
+            assertThat(publications).isEmpty();
         } finally {
             gate.close();
         }
     }
 
     @Test
-    void consumptionOfSelectedCandidateDoesNotStopStaleRecovery() throws Exception {
+    void consumptionOfSelectedCandidateWinsBeforeRecoveryLock() throws Exception {
         User user = userRepository.save(new User("consume-race-" + UUID.randomUUID() + "@example.com", "hash"));
         String rawToken = secureTokenGenerator.generateRawToken();
         Instant staleUpdatedAt = Instant.now().minus(Duration.ofMinutes(2));
@@ -202,10 +190,8 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
 
             PasswordResetToken reloaded = tokenRepository.findById(candidate.getId()).orElseThrow();
             assertThat(reloaded.getUsedAt()).isNotNull();
-            assertThat(tokenRepository.findAll())
-                    .as("unsafe current behavior: recovery issues a successor after the selected token was consumed")
-                    .hasSize(2);
-            assertThat(publications).hasSize(1);
+            assertThat(tokenRepository.findAll()).hasSize(1);
+            assertThat(publications).isEmpty();
         } finally {
             gate.close();
         }
@@ -222,8 +208,8 @@ class PasswordResetRecoveryRaceCharacterizationPostgresTest implements SharedPos
         CountDownLatch selected = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
-                gateAfterCandidateSelection(selected, release), passwordResetService,
-                passwordResetTokenService, recoveryProperties, scheduledCallbackRunner);
+                gateAfterCandidateSelection(selected, release), passwordResetService, recoveryProperties,
+                scheduledCallbackRunner);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         return new RecoveryGate(selected, release, executor, executor.submit(gatedSweeper::sweep));
     }

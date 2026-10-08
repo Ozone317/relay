@@ -53,7 +53,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @TestPropertySource(properties = {"relay.password-reset.email-recovery.interval=1s",
         "relay.password-reset.email-recovery.grace=1s",
-        "relay.password-reset.email-recovery.max-recovery-window=3h"})
+        "relay.password-reset.email-recovery.max-recovery-window=3h",
+        "JWT_SECRET=test-only-jwt-secret-for-recovery-tests-32bytes"})
 class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresContainer {
 
     @Autowired
@@ -113,7 +114,7 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
                     return invocation.callRealMethod();
                 })
                 .when(passwordResetTokenService)
-                .reissueForRecovery(any(User.class), any(Instant.class), any(Instant.class));
+                .recoverCandidate(any(UUID.class), any(UUID.class), any(Duration.class), any(Duration.class));
     }
 
     @Test
@@ -170,12 +171,12 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
                 .toList();
         List<PasswordResetToken> usable = rowsForUser.stream().filter(token -> token.getUsedAt() == null).toList();
         List<PasswordResetToken> invalidated = rowsForUser.stream().filter(token -> token.getUsedAt() != null).toList();
-        assertThat(rowsForUser).as("both recovery calls persist successor rows").hasSize(3);
-        assertThat(invalidated).as("the original and superseded successor must be invalidated").hasSize(2);
-        assertThat(usable).as("recovery must leave at most one simultaneously usable credential").hasSize(1);
+        assertThat(rowsForUser).as("only the candidate-owning recovery persists a successor").hasSize(2);
+        assertThat(invalidated).as("only the exact observed candidate is retired").hasSize(1);
+        assertThat(usable).as("the candidate-owning recovery leaves one usable credential").hasSize(1);
         assertThat(usable.getFirst().getFirstRequestedAt()).isEqualTo(persistedFirstRequestedAt);
-        assertThat(publications).hasSize(2);
-        assertThat(publications.stream().map(EmailDispatchMessage::idempotencyKey).distinct().count()).isEqualTo(2);
+        assertThat(publications).hasSize(1);
+        assertThat(publications.peek().idempotencyKey()).isEqualTo(usable.getFirst().getId().toString());
         assertThat(publications).allMatch(publication -> rowsForUser.stream()
                 .anyMatch(token -> token.getId().toString().equals(publication.idempotencyKey())));
 
@@ -268,7 +269,7 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         assertThat(publications).hasSize(2);
         Set<String> publicationKeys = publications.stream().map(EmailDispatchMessage::idempotencyKey)
                 .collect(Collectors.toSet());
-        assertThat(publicationKeys).as("each issuance publishes its own successor id").hasSize(2)
+        assertThat(publicationKeys).as("each successful issuance publishes its own successor id").hasSize(2)
                 .containsExactlyInAnyOrderElementsOf(
                         successors.stream().map(token -> token.getId().toString()).toList());
         assertThat(usable.getFirst().getFirstRequestedAt()).satisfies(requestedAt -> {
@@ -341,8 +342,8 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
         PasswordResetTokenRepository gatedRepository = repositoryGatedAt(
                 "findByResetEmailDispatchedAtIsNullAndUsedAtIsNullAndExpiresAtAfterAndUpdatedAtBefore", arrived,
                 release);
-        return new PasswordResetEmailRecoverySweeper(gatedRepository, passwordResetService,
-                passwordResetTokenService, recoveryProperties, scheduledCallbackRunner);
+        return new PasswordResetEmailRecoverySweeper(gatedRepository, passwordResetService, recoveryProperties,
+                scheduledCallbackRunner);
     }
 
     private PasswordResetTokenCleanupTask gatedCleanupTask(CountDownLatch arrived, CountDownLatch release) {

@@ -13,6 +13,8 @@ import com.example.relay.email.EmailDispatchMessage;
 import com.example.relay.email.EmailDispatchPublisher;
 import com.example.relay.email.EmailTemplate;
 import com.example.relay.user.PasswordResetProperties;
+import com.example.relay.user.application.PasswordResetTokenService.RecoveryAttempt;
+import com.example.relay.user.application.PasswordResetTokenService.RecoveryOutcome;
 import com.example.relay.user.domain.PasswordResetToken;
 import com.example.relay.user.domain.User;
 import com.example.relay.user.infrastructure.UserRepository;
@@ -91,21 +93,59 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    void issueAndDispatchForRecovery_reissuesCarryingFirstRequestedAtForward_andDispatchesTheResetEmail() {
+    void issueAndDispatchForRecovery_dispatchesOnlyTheCommittedCandidateOwnedSuccessor() {
         User user = new User("recovery-user@example.com", "hash");
-        Instant originalFirstRequestedAt = Instant.now().minusSeconds(1800);
+        java.util.UUID candidateId = java.util.UUID.randomUUID();
+        java.util.UUID userId = java.util.UUID.randomUUID();
+        Duration grace = Duration.ofSeconds(90);
+        Duration maxRecoveryWindow = Duration.ofHours(1);
         PasswordResetToken token = new PasswordResetToken(user, "hash", Instant.now().plusSeconds(1800), Instant.now());
-        when(passwordResetTokenService.reissueForRecovery(any(), any(), eq(originalFirstRequestedAt)))
-                .thenReturn(new PasswordResetTokenService.IssuedResetToken(token, "raw-token-value"));
+        when(passwordResetTokenService.recoverCandidate(candidateId, userId, grace, maxRecoveryWindow))
+                .thenReturn(RecoveryAttempt.reissued(
+                        new PasswordResetTokenService.IssuedResetToken(token, "raw-token-value")));
 
-        underTest.issueAndDispatchForRecovery(user, originalFirstRequestedAt);
+        RecoveryOutcome result = underTest.issueAndDispatchForRecovery(candidateId, userId, grace, maxRecoveryWindow);
 
-        verify(passwordResetTokenService).reissueForRecovery(eq(user), any(), eq(originalFirstRequestedAt));
+        org.junit.jupiter.api.Assertions.assertEquals(RecoveryOutcome.REISSUED, result);
+        verify(passwordResetTokenService).recoverCandidate(candidateId, userId, grace, maxRecoveryWindow);
         org.mockito.ArgumentCaptor<EmailDispatchMessage> captor =
                 org.mockito.ArgumentCaptor.forClass(EmailDispatchMessage.class);
         verify(emailDispatchPublisher).publish(captor.capture());
         assertTrue(captor.getValue().template() == EmailTemplate.PASSWORD_RESET);
         assertTrue(captor.getValue().params().get("resetUrl").toString().contains("raw-token-value"));
+        assertTrue(captor.getValue().idempotencyKey().equals(token.getId().toString()));
+    }
+
+    @Test
+    void issueAndDispatchForRecovery_doesNotPublishForExhaustedCandidate() {
+        java.util.UUID candidateId = java.util.UUID.randomUUID();
+        java.util.UUID userId = java.util.UUID.randomUUID();
+        Duration grace = Duration.ofSeconds(90);
+        Duration maxRecoveryWindow = Duration.ofHours(1);
+        when(passwordResetTokenService.recoverCandidate(candidateId, userId, grace, maxRecoveryWindow))
+                .thenReturn(RecoveryAttempt.exhausted());
+
+        RecoveryOutcome result = underTest.issueAndDispatchForRecovery(candidateId, userId, grace, maxRecoveryWindow);
+
+        org.junit.jupiter.api.Assertions.assertEquals(RecoveryOutcome.EXHAUSTED, result);
+        verify(passwordResetTokenService).recoverCandidate(candidateId, userId, grace, maxRecoveryWindow);
+        verify(emailDispatchPublisher, never()).publish(any());
+    }
+
+    @Test
+    void issueAndDispatchForRecovery_doesNotPublishForLostRace() {
+        java.util.UUID candidateId = java.util.UUID.randomUUID();
+        java.util.UUID userId = java.util.UUID.randomUUID();
+        Duration grace = Duration.ofSeconds(90);
+        Duration maxRecoveryWindow = Duration.ofHours(1);
+        when(passwordResetTokenService.recoverCandidate(candidateId, userId, grace, maxRecoveryWindow))
+                .thenReturn(RecoveryAttempt.lostRace());
+
+        RecoveryOutcome result = underTest.issueAndDispatchForRecovery(candidateId, userId, grace, maxRecoveryWindow);
+
+        org.junit.jupiter.api.Assertions.assertEquals(RecoveryOutcome.LOST_RACE, result);
+        verify(passwordResetTokenService).recoverCandidate(candidateId, userId, grace, maxRecoveryWindow);
+        verify(emailDispatchPublisher, never()).publish(any());
     }
 
     @Test

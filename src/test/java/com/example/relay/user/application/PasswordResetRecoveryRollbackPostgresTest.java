@@ -8,7 +8,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
+import com.example.relay.email.EmailDispatchMessage;
+import com.example.relay.email.EmailDispatchPublisher;
 import com.example.relay.support.SharedPostgresContainer;
 import com.example.relay.support.background.EnableTestBackgroundExecution;
 import com.example.relay.user.PasswordResetProperties;
@@ -41,10 +45,16 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
     private PasswordResetTokenService underTest;
 
     @Autowired
+    private PasswordResetService passwordResetService;
+
+    @Autowired
     private UserRepository userRepository;
 
     @MockitoSpyBean
     private PasswordResetTokenRepository passwordResetTokenRepository;
+
+    @MockitoSpyBean
+    private EmailDispatchPublisher emailDispatchPublisher;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -114,5 +124,55 @@ class PasswordResetRecoveryRollbackPostgresTest implements SharedPostgresContain
                 FROM password_reset_tokens
                 WHERE user_id = ? AND id <> ?
                 """, Integer.class, user.getId(), candidateId), "no successor may survive the failed transaction");
+    }
+
+    @Test
+    void outerRecoveryPath_propagatesSuccessorFailure_rollsBackCandidateAndNeverPublishes() {
+        user = userRepository.saveAndFlush(new User("outer-recovery-rollback-" + UUID.randomUUID() + "@example.com", "hash"));
+        Instant createdAt = Instant.now().minus(Duration.ofMinutes(2));
+        Instant firstRequestedAt = Instant.now().minus(Duration.ofMinutes(5));
+        PasswordResetToken candidate = passwordResetTokenRepository
+                .saveAndFlush(new PasswordResetToken(user, "outer-recovery-rollback-" + UUID.randomUUID(),
+                        Instant.now().plus(Duration.ofMinutes(30)), createdAt, firstRequestedAt));
+        UUID candidateId = candidate.getId();
+        Instant persistedFirstRequestedAt = jdbcTemplate.queryForObject(
+                "SELECT first_requested_at FROM password_reset_tokens WHERE id = ?", java.sql.Timestamp.class,
+                candidateId).toInstant();
+
+        doAnswer(invocation -> {
+            PasswordResetToken attempted = invocation.getArgument(0);
+            if (!attempted.getId().equals(candidateId)) {
+                throw new IllegalStateException("simulated outer successor persistence failure");
+            }
+            return invocation.callRealMethod();
+        }).when(passwordResetTokenRepository).saveAndFlush(any(PasswordResetToken.class));
+
+        assertThrows(IllegalStateException.class, () -> passwordResetService.issueAndDispatchForRecovery(candidateId,
+                user.getId(), Duration.ofSeconds(1), Duration.ofHours(1)));
+
+        ArgumentCaptor<Instant> retirementTime = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<PasswordResetToken> attemptedSuccessor = ArgumentCaptor.forClass(PasswordResetToken.class);
+        InOrder recoverySteps = inOrder(passwordResetTokenRepository);
+        recoverySteps.verify(passwordResetTokenRepository).giveUpOn(eq(candidateId), retirementTime.capture());
+        recoverySteps.verify(passwordResetTokenRepository).saveAndFlush(attemptedSuccessor.capture());
+        assertNotEquals(candidateId, attemptedSuccessor.getValue().getId());
+        assertEquals(retirementTime.getValue(), attemptedSuccessor.getValue().getCreatedAt());
+
+        Map<String, Object> t0 = jdbcTemplate.queryForMap("""
+                SELECT used_at, reset_email_dispatched_at, first_requested_at
+                FROM password_reset_tokens
+                WHERE id = ?
+                """, candidateId);
+        assertNull(t0.get("used_at"), "T0 retirement must roll back through the outer service path");
+        assertNull(t0.get("reset_email_dispatched_at"), "T0 remains undispatched after rollback");
+        Instant storedFirstRequestedAt = ((java.sql.Timestamp) t0.get("first_requested_at")).toInstant();
+        assertEquals(persistedFirstRequestedAt, storedFirstRequestedAt,
+                "the recovery-chain origin must not change");
+        assertEquals(1, jdbcTemplate.queryForObject("""
+                SELECT count(*)
+                FROM password_reset_tokens
+                WHERE user_id = ?
+                """, Integer.class, user.getId()), "no successor may survive the failed transaction");
+        verify(emailDispatchPublisher, never()).publish(any(EmailDispatchMessage.class));
     }
 }

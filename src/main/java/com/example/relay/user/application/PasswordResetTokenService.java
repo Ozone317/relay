@@ -60,18 +60,6 @@ public class PasswordResetTokenService {
     }
 
     /**
-     * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper: reissues a token exactly like
-     * {@link #issue(User, Instant)}, except {@code firstRequestedAt} is carried forward from the row being superseded
-     * rather than reset to {@code now} - this is what lets
-     * com.example.relay.user.recovery.PasswordResetEmailRecoveryProperties#maxRecoveryWindow bound an entire recovery
-     * chain instead of restarting on every reissue.
-     */
-    @Transactional
-    public IssuedResetToken reissueForRecovery(User user, Instant now, Instant firstRequestedAt) {
-        return issue(user, now, firstRequestedAt);
-    }
-
-    /**
      * Recovers exactly the observed undispatched candidate while holding the user row before the token row. The user
      * and token are both reloaded under lock so a stale sweep observation cannot retire or issue on behalf of a row
      * whose state changed in the meantime.
@@ -118,23 +106,9 @@ public class PasswordResetTokenService {
     }
 
     /**
-     * Used only by com.example.relay.user.recovery.PasswordResetEmailRecoverySweeper's give-up path - a thin
-     *
-     * @Transactional wrapper, the same shape as deliveryengine's AttemptService#claimDeadLetterNotification, since
-     *                PasswordResetTokenRepository#giveUpOn is a custom @Modifying @Query method and Spring Data JPA
-     *                does not wrap such methods in a transaction on its own (unlike SimpleJpaRepository's built-in CRUD
-     *                methods) - calling it directly from the sweeper's un-transactional sweep() throws
-     *                TransactionRequiredException.
-     */
-    @Transactional
-    public boolean giveUpOnRecovery(UUID tokenId, Instant now) {
-        return passwordResetTokenRepository.giveUpOn(tokenId, now) == 1;
-    }
-
-    /**
      * {@code userRepository.lockForUpdate} is acquired FIRST, before any token row is touched, for both the public
-     * {@link #issue(User, Instant)} and {@link #reissueForRecovery(User, Instant, Instant)} entry points (both
-     * delegate here) - this is not related to first-activation-wins semantics (issue() never activates anything), it
+     * {@link #issue(User, Instant)} entry point - this is not related to first-activation-wins semantics (issue() never
+     * activates anything), it
      * exists purely to preserve the global "users row lock before any token row, in both directions" invariant
      * described in {@link #consumeAndResetPassword}'s javadoc and the design spec's "Lock ordering" section. Without
      * it, this method's unlocked invalidate-then-insert on the {@code password_reset_tokens} table (whose FK takes a
@@ -147,9 +121,8 @@ public class PasswordResetTokenService {
      *
      * <p>
      * The {@code entityManager.detach} call below is load-bearing, not tidy-up, and closes a regression this same
-     * lockForUpdate call introduced: both public entry points to this method ({@link #issue(User, Instant)} via
-     * {@code PasswordResetService.requestReset}/{@code issueAndDispatch}, and
-     * {@link #reissueForRecovery(User, Instant, Instant)} via {@code PasswordResetEmailRecoverySweeper}) are handed
+     * lockForUpdate call introduced: the public entry point to this method ({@link #issue(User, Instant)} via
+     * {@code PasswordResetService.requestReset}/{@code issueAndDispatch}) is handed
      * a {@code User} loaded via a plain, unlocked {@code findByEmail}/{@code findById} OUTSIDE any transaction.
      * Under this project's default {@code spring.jpa.open-in-view=true}, that User stays MANAGED in the
      * request-bound persistence context, so {@code lockForUpdate} above would be a lock-mode UPGRADE on that
@@ -160,7 +133,7 @@ public class PasswordResetTokenService {
      * surfacing as a 500 on this unauthenticated, security-sensitive endpoint. Detaching first removes the stale
      * cached instance, making lockForUpdate a genuine {@code SELECT ... FOR UPDATE} with nothing to version-check.
      * This is safe for every caller: {@code User} has no lazy fields (id/email/passwordHash/emailVerified/version
-     * are all plain eager columns), and every caller of issue()/reissueForRecovery only reads plain getters off
+     * are all plain eager columns), and the caller of issue() only reads plain getters off
      * {@code user} AFTER the call returns (PasswordResetService's post-issue dispatch() reading user.getEmail()) -
      * none relies on {@code user} remaining JPA-managed or on any further auto-flushed mutation to it. See
      * EmailVerificationTokenService.issue's identical note - this is symmetric across both flows, mirroring the

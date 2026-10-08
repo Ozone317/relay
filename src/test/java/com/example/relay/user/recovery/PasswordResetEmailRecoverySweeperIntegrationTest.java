@@ -47,7 +47,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest
 @Testcontainers
 @TestPropertySource(properties = {"relay.password-reset.email-recovery.interval=2s",
-        "relay.password-reset.email-recovery.grace=2s", "relay.password-reset.email-recovery.max-recovery-window=1h"})
+        "relay.password-reset.email-recovery.grace=2s", "relay.password-reset.email-recovery.max-recovery-window=1h",
+        "JWT_SECRET=test-only-jwt-secret-for-recovery-tests-32bytes"})
 @EnableTestBackgroundExecution({TestBackgroundComponent.SCHEDULING, TestBackgroundComponent.RABBIT_LISTENERS})
 class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgresContainer {
 
@@ -152,7 +153,7 @@ class PasswordResetEmailRecoverySweeperIntegrationTest implements SharedPostgres
         assertEquals(1, passwordResetTokenRepository.count(),
                 "giving up must retire the row in place, never reissue a successor");
         assertThat(sweeperLogAppender.list.stream().map(ILoggingEvent::getFormattedMessage))
-                .anyMatch(message -> message.contains("Giving up"));
+                .anyMatch(message -> message.contains("retired at bound"));
     }
 
     @Test
