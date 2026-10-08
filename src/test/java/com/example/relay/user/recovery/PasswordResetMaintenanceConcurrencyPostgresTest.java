@@ -185,6 +185,72 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
     }
 
     @Test
+    void recoveryLocksUserBeforeTokenWhileWaitingForTheUser() throws Exception {
+        User user = userRepository.save(new User("user-before-token-" + UUID.randomUUID() + "@example.com", "hash"));
+        PasswordResetToken stale = tokenRepository.saveAndFlush(new PasswordResetToken(user,
+                "user-before-token-stale-" + UUID.randomUUID(), Instant.now().plus(Duration.ofMinutes(30)),
+                Instant.now().minus(Duration.ofMinutes(2)), Instant.now().minus(Duration.ofMinutes(10))));
+
+        CountDownLatch userLocked = new CountDownLatch(1);
+        CountDownLatch releaseUser = new CountDownLatch(1);
+        AtomicInteger userHolderPid = new AtomicInteger();
+        AtomicInteger recoveryPid = new AtomicInteger();
+        CountDownLatch recoveryEnteredTransaction = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        Future<?> userHolder = null;
+        Future<?> recovery = null;
+        try {
+            TransactionTemplate tx = new TransactionTemplate(transactionManager);
+            userHolder = executor.submit(() -> tx.executeWithoutResult(status -> {
+                userHolderPid.set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                userRepository.lockForUpdate(user.getId());
+                userLocked.countDown();
+                awaitRelease(releaseUser);
+            }));
+            assertTrue(userLocked.await(10, TimeUnit.SECONDS), "independent transaction must hold the user row");
+
+            recovery = withIssuanceObservation(executor, recoveryPid, recoveryEnteredTransaction,
+                    recoverySweeper::sweep);
+            assertTrue(recoveryEnteredTransaction.await(10, TimeUnit.SECONDS),
+                    "recoverCandidate backend PID must be captured at transactional entry");
+            assertThat(recoveryPid.get()).isNotEqualTo(userHolderPid.get());
+            assertSingleBackendBlockedOnUserLock(recoveryPid.get(), userHolderPid.get());
+
+            AtomicInteger tokenLockPid = new AtomicInteger();
+            Future<?> tokenLock = executor.submit(() -> tx.executeWithoutResult(status -> {
+                tokenLockPid.set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                jdbcTemplate.queryForObject("SELECT id FROM password_reset_tokens WHERE id = ? FOR UPDATE",
+                        UUID.class, stale.getId());
+            }));
+            tokenLock.get(10, TimeUnit.SECONDS);
+            assertThat(tokenLockPid.get()).isNotIn(userHolderPid.get(), recoveryPid.get());
+            assertThat(recovery).as("recovery remains blocked on users while another backend locks T0").isNotDone();
+
+            releaseUser.countDown();
+            userHolder.get(15, TimeUnit.SECONDS);
+            recovery.get(15, TimeUnit.SECONDS);
+        } finally {
+            releaseUser.countDown();
+            executor.shutdownNow();
+            try {
+                assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "lock-order workers must terminate");
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("interrupted while awaiting lock-order worker cleanup", interrupted);
+            }
+        }
+
+        List<PasswordResetToken> rowsForUser = tokenRepository.findAll().stream()
+                .filter(token -> token.getUser().getId().equals(user.getId())).toList();
+        List<PasswordResetToken> usable = rowsForUser.stream().filter(token -> token.getUsedAt() == null).toList();
+        assertThat(rowsForUser).hasSize(2);
+        assertThat(tokenRepository.findById(stale.getId()).orElseThrow().getUsedAt()).isNotNull();
+        assertThat(usable).hasSize(1);
+        assertThat(publications).hasSize(1);
+        assertThat(publications.peek().idempotencyKey()).isEqualTo(usable.getFirst().getId().toString());
+    }
+
+    @Test
     void ordinaryResetRacingRecoveryLeavesOnlyTheSerializedWinnerUsable() throws Exception {
         User user = userRepository.save(new User("ordinary-recovery-race-" + UUID.randomUUID() + "@example.com",
                 "unchanged-hash"));
@@ -329,6 +395,20 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
                 assertThat(((Number) activity.get("blocker_count")).intValue()).isPositive();
             });
             assertThat(activities).anyMatch(activity -> Boolean.TRUE.equals(activity.get("blocked_by_test_holder")));
+        });
+    }
+
+    private void assertSingleBackendBlockedOnUserLock(int waitingPid, int blockerPid) {
+        Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10)).untilAsserted(() -> {
+            Map<String, Object> activity = jdbcTemplate.queryForMap("""
+                    SELECT pid, query, wait_event_type, ? = ANY(pg_blocking_pids(pid)) AS blocked_by_user_holder
+                    FROM pg_stat_activity WHERE pid = ?
+                    """, blockerPid, waitingPid);
+            assertThat(((Number) activity.get("pid")).intValue()).isEqualTo(waitingPid);
+            assertThat(activity.get("wait_event_type")).isEqualTo("Lock");
+            assertThat(activity.get("blocked_by_user_holder")).isEqualTo(true);
+            String query = activity.get("query").toString().toLowerCase();
+            assertThat(query).contains("from users").contains("for no key update");
         });
     }
 

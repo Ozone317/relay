@@ -1,6 +1,7 @@
 package com.example.relay.user.recovery;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -22,6 +23,8 @@ import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -29,16 +32,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.postgresql.util.PSQLException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.awaitility.Awaitility;
 
 @Tag("integration")
 @SpringBootTest
@@ -54,10 +61,13 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
     @Autowired
     private PasswordResetTokenService passwordResetTokenService;
 
-    @Autowired
+    @MockitoSpyBean
     private PasswordResetTokenRepository tokenRepository;
 
-    @Autowired
+    @MockitoSpyBean
+    private PasswordResetTokenService passwordResetTokenServiceSpy;
+
+    @MockitoSpyBean
     private UserRepository userRepository;
 
     @Autowired
@@ -79,6 +89,8 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
     private EmailDispatchPublisher emailDispatchPublisher;
 
     private final ConcurrentLinkedQueue<EmailDispatchMessage> publications = new ConcurrentLinkedQueue<>();
+    private final ThreadLocal<RecoveryLockObservation> recoveryLockObservation = new ThreadLocal<>();
+    private final ThreadLocal<IssuanceObservation> issuanceObservation = new ThreadLocal<>();
 
     @BeforeEach
     void setUp() {
@@ -90,6 +102,47 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
                 })
                 .when(emailDispatchPublisher)
                 .publish(any(EmailDispatchMessage.class));
+        doAnswer(invocation -> {
+                    UUID candidateId = invocation.getArgument(0);
+                    jdbcTemplate.query("SELECT id FROM password_reset_tokens WHERE id = ? FOR UPDATE",
+                            (org.springframework.jdbc.core.ResultSetExtractor<Void>) resultSet -> {
+                                while (resultSet.next()) {
+                                    // Consume the result while PostgreSQL retains the row lock in this transaction.
+                                }
+                                return null;
+                            }, candidateId);
+                    Optional<PasswordResetToken> result = tokenRepository.findById(candidateId);
+                    RecoveryLockObservation observation = recoveryLockObservation.get();
+                    if (observation != null && observation.candidateId().equals(candidateId)) {
+                        assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                                "recovery candidate must be selected under its real transaction");
+                        observation.backendPid().set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                        observation.locked().countDown();
+                        awaitRelease(observation.release());
+                    }
+                    return result;
+                })
+                .when(tokenRepository)
+                .findByIdForUpdate(any(UUID.class));
+        doAnswer(invocation -> {
+                    UUID userId = invocation.getArgument(0);
+                    jdbcTemplate.query("SELECT id FROM users WHERE id = ? FOR UPDATE",
+                            (org.springframework.jdbc.core.ResultSetExtractor<Void>) resultSet -> {
+                                while (resultSet.next()) {
+                                    // Retain the user row lock in the caller's transaction.
+                                }
+                                return null;
+                            }, userId);
+                    return userRepository.findById(userId);
+                })
+                .when(userRepository)
+                .lockForUpdate(any(UUID.class));
+        doAnswer(invocation -> {
+                    captureIssuanceBackend();
+                    return invocation.callRealMethod();
+                })
+                .when(passwordResetTokenServiceSpy)
+                .issue(any(User.class), any(Instant.class));
     }
 
     @Test
@@ -143,6 +196,172 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         } finally {
             releaseRecovery.countDown();
             executor.shutdownNow();
+            awaitTermination(executor);
+        }
+    }
+
+    @Test
+    void ordinaryRequestCommitsAfterCandidateScanAndWinsWithoutDispatchConfirmation() throws Exception {
+        User user = userRepository.save(new User("ordinary-first-" + UUID.randomUUID() + "@example.com", "hash"));
+        PasswordResetToken t0 = staleCandidate(user, "ordinary-first-t0");
+        RecoveryGate gate = startGatedRecovery();
+        try {
+            assertTrue(gate.selected().await(10, TimeUnit.SECONDS), "recovery must select T0 before T1 commits");
+            passwordResetService.issueAndDispatch(user);
+            List<EmailDispatchMessage> issuedPublications = List.copyOf(publications);
+            assertThat(issuedPublications).hasSize(1);
+            UUID t1Id = UUID.fromString(issuedPublications.getFirst().idempotencyKey());
+
+            gate.release().countDown();
+            gate.future().get(15, TimeUnit.SECONDS);
+
+            List<PasswordResetToken> rows = rowsFor(user);
+            assertThat(rows).hasSize(2);
+            assertThat(tokenRepository.findById(t0.getId()).orElseThrow().getUsedAt()).isNotNull();
+            PasswordResetToken t1 = tokenRepository.findById(t1Id).orElseThrow();
+            assertThat(t1.getUsedAt()).isNull();
+            assertThat(t1.getResetEmailDispatchedAt()).isNull();
+            assertThat(publications).as("the ordinary request is the sole publication").hasSize(1);
+        } finally {
+            gate.close();
+        }
+    }
+
+    @Test
+    void recoveryWinsThenOrdinaryRequestWaitsOnItsUserLock() throws Exception {
+        User user = userRepository.save(new User("recovery-first-" + UUID.randomUUID() + "@example.com", "hash"));
+        PasswordResetToken t0 = staleCandidate(user, "recovery-first-t0");
+        CountDownLatch lockedT0 = new CountDownLatch(1);
+        CountDownLatch releaseRecovery = new CountDownLatch(1);
+        AtomicInteger recoveryPid = new AtomicInteger();
+        RecoveryLockObservation observation = new RecoveryLockObservation(t0.getId(), recoveryPid, lockedT0,
+                releaseRecovery);
+        CountDownLatch ordinaryEnteredIssue = new CountDownLatch(1);
+        AtomicInteger ordinaryPid = new AtomicInteger();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Future<?> recovery = null;
+        Future<?> ordinary = null;
+        try {
+            PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
+                    gateAfterCandidateSelection(new CountDownLatch(0), new CountDownLatch(0)), passwordResetService,
+                    recoveryProperties, scheduledCallbackRunner);
+            recovery = executor.submit(() -> {
+                recoveryLockObservation.set(observation);
+                try {
+                    gatedSweeper.sweep();
+                } finally {
+                    recoveryLockObservation.remove();
+                }
+            });
+            assertTrue(lockedT0.await(10, TimeUnit.SECONDS), "recovery must own T0 before ordinary issuance starts");
+            assertThatThrownBy(() -> new TransactionTemplate(transactionManager).execute(status ->
+                    jdbcTemplate.queryForObject("SELECT id FROM users WHERE id = ? FOR UPDATE NOWAIT",
+                            UUID.class, user.getId())))
+                    .as("recovery's transaction must retain the exact user row lock")
+                    .satisfies(failure -> {
+                        Throwable root = failure;
+                        while (root.getCause() != null) {
+                            root = root.getCause();
+                        }
+                        assertThat(root).isInstanceOf(PSQLException.class);
+                        assertThat(((PSQLException) root).getSQLState()).isEqualTo("55P03");
+                    });
+            ordinary = executor.submit(() -> {
+                issuanceObservation.set(new IssuanceObservation(ordinaryPid, ordinaryEnteredIssue));
+                try {
+                    passwordResetService.issueAndDispatch(user);
+                } finally {
+                    issuanceObservation.remove();
+                }
+            });
+            assertTrue(ordinaryEnteredIssue.await(10, TimeUnit.SECONDS), "ordinary request must enter issue transaction");
+            assertThat(ordinaryPid.get()).isNotEqualTo(recoveryPid.get());
+            assertThat(ordinary).as("ordinary issuance must remain inside its user-lock query").isNotDone();
+            assertBlockedBy(recoveryPid.get(), ordinaryPid.get(), "from users", "for update");
+
+            releaseRecovery.countDown();
+            recovery.get(15, TimeUnit.SECONDS);
+            ordinary.get(15, TimeUnit.SECONDS);
+
+            List<PasswordResetToken> rows = rowsFor(user);
+            List<PasswordResetToken> successors = rows.stream().filter(token -> !token.getId().equals(t0.getId()))
+                    .toList();
+            List<PasswordResetToken> usable = rows.stream().filter(token -> token.getUsedAt() == null).toList();
+            List<PasswordResetToken> invalidated = rows.stream().filter(token -> token.getUsedAt() != null).toList();
+            assertThat(rows).hasSize(3);
+            assertThat(tokenRepository.findById(t0.getId()).orElseThrow().getUsedAt()).isNotNull();
+            assertThat(successors).hasSize(2);
+            assertThat(usable).hasSize(1);
+            assertThat(invalidated).as("T0 and the recovery successor are invalidated by the later request")
+                    .hasSize(2);
+            assertThat(publications).hasSize(2);
+            assertThat(publications.stream().map(EmailDispatchMessage::idempotencyKey).toList())
+                    .containsExactlyInAnyOrderElementsOf(successors.stream().map(token -> token.getId().toString()).toList());
+            assertThat(publications.stream().map(EmailDispatchMessage::idempotencyKey).toList())
+                    .contains(usable.getFirst().getId().toString());
+        } finally {
+            releaseRecovery.countDown();
+            executor.shutdownNow();
+            awaitTermination(executor);
+        }
+    }
+
+    @Test
+    void recoveryWinsThenDispatchConfirmationWaitsOnItsTokenLock() throws Exception {
+        User user = userRepository.save(new User("confirm-after-recovery-" + UUID.randomUUID() + "@example.com", "hash"));
+        PasswordResetToken t0 = staleCandidate(user, "confirm-after-recovery-t0");
+        CountDownLatch lockedT0 = new CountDownLatch(1);
+        CountDownLatch releaseRecovery = new CountDownLatch(1);
+        AtomicInteger recoveryPid = new AtomicInteger();
+        RecoveryLockObservation observation = new RecoveryLockObservation(t0.getId(), recoveryPid, lockedT0,
+                releaseRecovery);
+        AtomicInteger confirmationPid = new AtomicInteger();
+        CountDownLatch confirmationStarted = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Future<?> recovery = null;
+        Future<Integer> confirmation = null;
+        try {
+            PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
+                    gateAfterCandidateSelection(new CountDownLatch(0), new CountDownLatch(0)), passwordResetService,
+                    recoveryProperties, scheduledCallbackRunner);
+            recovery = executor.submit(() -> {
+                recoveryLockObservation.set(observation);
+                try {
+                    gatedSweeper.sweep();
+                } finally {
+                    recoveryLockObservation.remove();
+                }
+            });
+            assertTrue(lockedT0.await(10, TimeUnit.SECONDS), "recovery must own T0 before confirmation starts");
+            TransactionTemplate tx = new TransactionTemplate(transactionManager);
+            confirmation = executor.submit(() -> tx.execute(status -> {
+                confirmationPid.set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                confirmationStarted.countDown();
+                return tokenRepository.claimResetEmailDispatch(t0.getId(), Instant.now());
+            }));
+            assertTrue(confirmationStarted.await(10, TimeUnit.SECONDS), "confirmation transaction must start");
+            assertThat(confirmationPid.get()).isNotEqualTo(recoveryPid.get());
+            assertBlockedBy(recoveryPid.get(), confirmationPid.get(), "update password_reset_tokens",
+                    "reset_email_dispatched_at");
+
+            releaseRecovery.countDown();
+            recovery.get(15, TimeUnit.SECONDS);
+            assertThat(confirmation.get(15, TimeUnit.SECONDS)).isOne();
+
+            PasswordResetToken reloadedT0 = tokenRepository.findById(t0.getId()).orElseThrow();
+            List<PasswordResetToken> rows = rowsFor(user);
+            List<PasswordResetToken> usable = rows.stream().filter(token -> token.getUsedAt() == null).toList();
+            assertThat(reloadedT0.getUsedAt()).isNotNull();
+            assertThat(reloadedT0.getResetEmailDispatchedAt()).isNotNull();
+            assertThat(rows).hasSize(2);
+            assertThat(usable).hasSize(1);
+            assertThat(usable.getFirst().getId()).isNotEqualTo(t0.getId());
+            assertThat(publications).hasSize(1);
+            assertThat(publications.peek().idempotencyKey()).isEqualTo(usable.getFirst().getId().toString());
+        } finally {
+            releaseRecovery.countDown();
+            executor.shutdownNow();
+            awaitTermination(executor);
         }
     }
 
@@ -203,6 +422,48 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
                 Instant.now().minus(Duration.ofMinutes(10))));
     }
 
+    private List<PasswordResetToken> rowsFor(User user) {
+        return tokenRepository.findAll().stream().filter(token -> token.getUser().getId().equals(user.getId())).toList();
+    }
+
+    private void captureIssuanceBackend() {
+        IssuanceObservation observation = issuanceObservation.get();
+        if (observation == null) {
+            return;
+        }
+        assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                "ordinary issuance PID must be captured inside its real transaction");
+        observation.backendPid().set(jdbcTemplate.queryForObject("SELECT pg_backend_pid()", Integer.class));
+        observation.entered().countDown();
+    }
+
+    private void assertBlockedBy(int blockerPid, int blockedPid, String queryFragment, String secondFragment) {
+        Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10)).untilAsserted(() -> {
+            Map<String, Object> activity = jdbcTemplate.queryForMap("""
+                    SELECT waiting.pid, waiting.state, waiting.query, waiting.wait_event_type,
+                           pg_blocking_pids(waiting.pid) AS blocking_pids,
+                           ? = ANY(pg_blocking_pids(waiting.pid)) AS blocked_by_expected,
+                           holder.state AS holder_state, holder.query AS holder_query
+                    FROM pg_stat_activity waiting CROSS JOIN pg_stat_activity holder
+                    WHERE waiting.pid = ? AND holder.pid = ?
+                    """, blockerPid, blockedPid, blockerPid);
+            assertThat(((Number) activity.get("pid")).intValue()).isEqualTo(blockedPid);
+            assertThat(activity.get("wait_event_type")).as("PostgreSQL activity: %s", activity).isEqualTo("Lock");
+            String query = activity.get("query").toString().toLowerCase();
+            assertThat(query).contains(queryFragment).contains(secondFragment);
+            assertThat(activity.get("blocked_by_expected")).isEqualTo(true);
+        });
+    }
+
+    private static void awaitTermination(ExecutorService executor) {
+        try {
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "race worker threads must terminate");
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while awaiting race worker cleanup", interrupted);
+        }
+    }
+
     private RecoveryGate startGatedRecovery() {
         CountDownLatch selected = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -242,6 +503,11 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         }
     }
 
+    private record RecoveryLockObservation(UUID candidateId, AtomicInteger backendPid, CountDownLatch locked,
+            CountDownLatch release) {}
+
+    private record IssuanceObservation(AtomicInteger backendPid, CountDownLatch entered) {}
+
     private record RecoveryGate(CountDownLatch selected, CountDownLatch release, ExecutorService executor,
             Future<?> future) implements AutoCloseable {
 
@@ -249,6 +515,7 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         public void close() {
             release.countDown();
             executor.shutdownNow();
+            awaitTermination(executor);
         }
     }
 }
