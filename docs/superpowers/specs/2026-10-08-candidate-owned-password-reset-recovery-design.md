@@ -1,7 +1,7 @@
 # Candidate-Owned Password-Reset Recovery Design
 
 **Date:** 2026-10-08
-**Status:** Proposed for implementation review
+**Status:** IMPLEMENTED — PENDING OWNER REVIEW
 **Investigation:** `docs/reviews/2026-10-08-password-reset-recovery-investigation.md`
 
 ## Intent
@@ -214,12 +214,7 @@ No generic outbox, new auth mechanism, verification-email recovery, account rest
 
 No migration is required. The candidate is read by its existing primary key; candidate discovery continues to use the existing partial recovery index.
 
-**Mixed-version scheduler restriction:** old and new recovery implementations must not execute concurrently. An old instance can still select T0 and call blanket invalidation after a new instance has correctly lost the same race. Deployment must therefore use one of these procedures:
-
-1. stop/disable password-reset recovery scheduling on every old instance, wait until every in-flight old recovery execution has drained or been terminated, deploy all instances, then enable scheduling on new instances; or
-2. perform an all-at-once deployment that stops old schedulers and drains or terminates every in-flight old recovery execution before any new scheduler is enabled.
-
-Ordinary HTTP request traffic may continue during the scheduler-disabled interval; undispatched candidates remain durable and will be recovered after re-enable. This is a rollout gate, not a request for leader election or scheduler redesign.
+**Mixed-version scheduler restriction:** Old and new password-reset recovery schedulers must not execute concurrently. Stop or disable recovery scheduling on every old instance and wait until every in-flight old recovery execution has drained or been terminated before enabling any new recovery scheduler. Ordinary request traffic may continue while recovery scheduling is disabled. Undispatched candidates remain durable and will be recovered after re-enable. This is a rollout gate, not a request for leader election or scheduler redesign.
 
 ## PostgreSQL regression matrix
 

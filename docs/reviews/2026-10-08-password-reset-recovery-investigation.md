@@ -291,3 +291,35 @@ The current two-sweeper test encodes the defect as acceptable (“both recovery 
 ## Investigation disposition
 
 The defect is confirmed and a design is required. See `docs/superpowers/specs/2026-10-08-candidate-owned-password-reset-recovery-design.md`.
+
+## Implementation verification (2026-10-08)
+
+**Implementation commit:** `31caf0670eb7c703b826c0461f0d10eb61d378ad` (`test: harden password reset race cleanup`). A follow-up formatting-only commit, `3e9ce23` (`style: format candidate-owned recovery tests`), corrected three new test classes flagged by Spotless. The final regression gates below were rerun at `3e9ce23`; the Task 5 documentation commit follows it.
+
+The historical T0/T1/T2 reproduction is now a permanent safety regression: `PasswordResetRecoveryOwnershipPostgresTest.staleSelectedCandidateCannotInvalidateNewerDispatchConfirmedUserRequest` passes with T0 retired, T1 still dispatch-confirmed and usable, no T2, and only T1's publication. The recovery transaction uses the scanned candidate ID and observed user ID, locks User before the exact token row, and evaluates eligibility from the locked row at one post-lock decision time.
+
+Fresh Maven regression gates, each run with `JWT_SECRET=test-only-jwt-secret-for-recovery-tests-32bytes`, passed at the validated HEAD:
+
+| Gate | Exact command | Result |
+|---|---|---|
+| Focused repository/service/recovery | `./mvnw -Dtest=PasswordResetTokenRepositoryTest,PasswordResetTokenCandidateLockPostgresTest,PasswordResetTokenServiceTest,PasswordResetRecoveryRollbackPostgresTest,PasswordResetServiceTest,PasswordResetEmailRecoverySweeperTest,PasswordResetEmailRecoverySweeperIntegrationTest,PasswordResetRecoveryOwnershipPostgresTest,PasswordResetMaintenanceConcurrencyPostgresTest test` | Exit 0; 53 tests, 0 failures, 0 errors, 0 skipped. |
+| Adjacent auth and dispatch | `./mvnw -Dtest=PasswordResetConcurrentRequestPostgresTest,PasswordResetConcurrentConfirmPostgresTest,PasswordResetTransactionRollbackIntegrationTest,PasswordResetActivatesPendingAccountIntegrationTest,EmailDispatchIntegrationTest,EmailVerificationConcurrentVerifyPostgresTest,EmailVerificationConcurrentResendPostgresTest test` | Exit 0; 10 tests, 0 failures, 0 errors, 0 skipped. |
+| Unit tests | `./mvnw test -DexcludedGroups=integration` | Exit 0; 573 tests, 0 failures, 0 errors, 0 skipped. |
+| Package/compile | `./mvnw -DskipTests package` | Exit 0; production and test sources compiled and package created. |
+
+Spotless requires a baseline qualification. The normal `./mvnw spotless:check` exited 1. Cache-free checks ran in detached worktrees with empty `target/spotless-index` files: base `main` at `ff91dd1baf6277cbafcebddab352dc261dafc230` exited 1 with 190 violating files; the unformatted implementation head exited 1 with 192, including three newly added test classes that needed formatting. Spotless was then applied only to those three test classes and committed in `3e9ce23`. A final cache-free comparison at base `ff91dd1baf6277cbafcebddab352dc261dafc230` and validated HEAD `3e9ce23` still exited 1 on both sides: base had 190 violating files and HEAD had 189. The post-format file-set comparison had one base-only path (`PasswordResetEmailRecoverySweeper.java`) and no head-only paths. The normal repository-wide Spotless gate remains red because the base already fails; no introduced formatting violation remains. No production code or unrelated tests were reformatted, and this is not a repository-wide green claim.
+
+No database migration was added. No schema, configuration, or API contract was changed. Provider acceptance or idempotent duplicate acceptance still does not prove email delivery to a recipient's inbox; `reset_email_dispatched_at` remains evidence of provider-side dispatch handling only.
+
+**Deployment restriction:** Old and new password-reset recovery schedulers must not execute concurrently. Stop or disable recovery scheduling on every old instance and wait until every in-flight old recovery execution has drained or been terminated before enabling any new recovery scheduler. Ordinary request traffic may continue while recovery scheduling is disabled.
+
+### Whole-change adversarial review
+
+- Candidate identity remains explicit from scan through mutation: recovery receives the candidate ID and observed user ID, locks that user first and then the exact candidate, verifies ownership, and never falls back to a user-wide invalidation in the recovery path.
+- Issuance and consumption retain User-before-token ordering. Tests cover a request winning after scan, recovery winning while the request blocks on the user row, dispatch confirmation winning before the candidate lock, and confirmation blocking behind recovery's candidate lock. The selected-candidate consumption race is also covered.
+- Confirmation and recovery are serialized on the candidate row. A two-sweeper caller test still observes two valid emails only in the distinct ordering where recovery commits first and a later ordinary request then replaces its successor; same-candidate recovery ownership allows only one recovery successor/publication. The `publications.hasSize(2)` assertion in `recoveryWinsThenOrdinaryRequestWaitsOnItsUserLock` is therefore intentional and is not a duplicate-recovery expectation.
+- Deadline carry-forward uses the locked candidate's `first_requested_at`; strict expiry, stale grace, and max-window boundaries are covered by deterministic service tests. Exhaustion retires only the exact candidate.
+- The forced PostgreSQL successor-persistence failure rolls back candidate retirement and emits no reset publication. Successful publication is reached only after the candidate-owned transaction returns successfully.
+- The strengthened mixed-version scheduler restriction above is present. Existing migrations stop at V15; no new migration, scheduler architecture, configuration, API, or unrelated code change was introduced.
+
+Remaining concern: repository-wide Spotless is still red because the base revision independently has 190 violations. The three new test-only formatting issues introduced by this implementation were corrected; no other failure was observed in the requested gates.
