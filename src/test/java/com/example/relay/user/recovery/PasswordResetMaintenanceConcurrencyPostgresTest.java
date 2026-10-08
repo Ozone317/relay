@@ -21,6 +21,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -145,34 +146,84 @@ class PasswordResetMaintenanceConcurrencyPostgresTest implements SharedPostgresC
                 assertTrue(remaining > 0 && executor.awaitTermination(remaining, TimeUnit.NANOSECONDS),
                         "all maintenance workers must terminate before fixture cleanup");
             }
-            for (Future<?> future : workerFutures) {
-                if (!future.isCancelled()) {
-                    long remaining = deadline - System.nanoTime();
-                    assertTrue(remaining > 0, "future joins must fit the cleanup deadline");
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("could not prove maintenance workers terminated before fixture cleanup",
+                    interrupted);
+        }
+
+        List<Throwable> workerFailures = new ArrayList<>();
+        boolean interruptedWhileJoining = false;
+        for (Future<?> future : workerFutures) {
+            if (!future.isCancelled()) {
+                long remaining = Math.max(0, deadline - System.nanoTime());
+                try {
                     future.get(remaining, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException interrupted) {
+                    interruptedWhileJoining = true;
+                    workerFailures.add(interrupted);
+                } catch (java.util.concurrent.ExecutionException failure) {
+                    workerFailures.add(failure.getCause() == null ? failure : failure.getCause());
+                } catch (java.util.concurrent.TimeoutException failure) {
+                    workerFailures.add(failure);
                 }
             }
-            Set<UUID> scopedUsers = Set.copyOf(fixtureUserIds);
-            Set<UUID> scopedTokens = ConcurrentHashMap.newKeySet();
-            scopedTokens.addAll(fixtureTokenIds);
+        }
+
+        List<Throwable> cleanupFailures = deleteScopedFixtures();
+        if (cleanupFailures.isEmpty()) {
+            clearFixtureTracking();
+        }
+        if (interruptedWhileJoining) {
+            Thread.currentThread().interrupt();
+        }
+        if (!cleanupFailures.isEmpty()) {
+            cleanupFailures.addAll(workerFailures);
+            throw failures("scoped maintenance fixture cleanup failed", cleanupFailures);
+        }
+        if (!workerFailures.isEmpty()) {
+            throw failures("maintenance worker failed after scoped fixture cleanup", workerFailures);
+        }
+    }
+
+    private List<Throwable> deleteScopedFixtures() {
+        Set<UUID> scopedUsers = Set.copyOf(fixtureUserIds);
+        Set<UUID> scopedTokens = ConcurrentHashMap.newKeySet();
+        scopedTokens.addAll(fixtureTokenIds);
+        List<Throwable> failures = new ArrayList<>();
+        try {
             tokenRepository.findAll().stream()
                     .filter(token -> scopedUsers.contains(token.getUser().getId()))
                     .map(PasswordResetToken::getId)
                     .forEach(scopedTokens::add);
-            tokenRepository.deleteAllById(scopedTokens);
-            userRepository.deleteAllById(scopedUsers);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError("interrupted during maintenance worker cleanup", interrupted);
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException failure) {
-            throw new AssertionError("maintenance workers must finish before fixture cleanup", failure);
-        } finally {
-            workerExecutors.clear();
-            workerFutures.clear();
-            releaseGates.clear();
-            fixtureUserIds.clear();
-            fixtureTokenIds.clear();
+        } catch (RuntimeException failure) {
+            failures.add(failure);
         }
+        try {
+            tokenRepository.deleteAllById(scopedTokens);
+        } catch (RuntimeException failure) {
+            failures.add(failure);
+        }
+        try {
+            userRepository.deleteAllById(scopedUsers);
+        } catch (RuntimeException failure) {
+            failures.add(failure);
+        }
+        return failures;
+    }
+
+    private void clearFixtureTracking() {
+        workerExecutors.clear();
+        workerFutures.clear();
+        releaseGates.clear();
+        fixtureUserIds.clear();
+        fixtureTokenIds.clear();
+    }
+
+    private static AssertionError failures(String message, List<Throwable> causes) {
+        AssertionError error = new AssertionError(message);
+        causes.forEach(error::addSuppressed);
+        return error;
     }
 
     private User createUser(String email, String passwordHash) {

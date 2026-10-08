@@ -22,6 +22,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -146,34 +147,83 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
                 assertTrue(remaining > 0 && executor.awaitTermination(remaining, TimeUnit.NANOSECONDS),
                         "all race workers must terminate before fixture cleanup");
             }
-            for (Future<?> future : workerFutures) {
-                if (!future.isCancelled()) {
-                    long remaining = deadline - System.nanoTime();
-                    assertTrue(remaining > 0, "future joins must fit the cleanup deadline");
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("could not prove race workers terminated before fixture cleanup", interrupted);
+        }
+
+        List<Throwable> workerFailures = new ArrayList<>();
+        boolean interruptedWhileJoining = false;
+        for (Future<?> future : workerFutures) {
+            if (!future.isCancelled()) {
+                long remaining = Math.max(0, deadline - System.nanoTime());
+                try {
                     future.get(remaining, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException interrupted) {
+                    interruptedWhileJoining = true;
+                    workerFailures.add(interrupted);
+                } catch (java.util.concurrent.ExecutionException failure) {
+                    workerFailures.add(failure.getCause() == null ? failure : failure.getCause());
+                } catch (java.util.concurrent.TimeoutException failure) {
+                    workerFailures.add(failure);
                 }
             }
-            Set<UUID> scopedUsers = Set.copyOf(fixtureUserIds);
-            Set<UUID> scopedTokens = ConcurrentHashMap.newKeySet();
-            scopedTokens.addAll(fixtureTokenIds);
+        }
+
+        List<Throwable> cleanupFailures = deleteScopedFixtures();
+        if (cleanupFailures.isEmpty()) {
+            clearFixtureTracking();
+        }
+        if (interruptedWhileJoining) {
+            Thread.currentThread().interrupt();
+        }
+        if (!cleanupFailures.isEmpty()) {
+            cleanupFailures.addAll(workerFailures);
+            throw failures("scoped race fixture cleanup failed", cleanupFailures);
+        }
+        if (!workerFailures.isEmpty()) {
+            throw failures("race worker failed after scoped fixture cleanup", workerFailures);
+        }
+    }
+
+    private List<Throwable> deleteScopedFixtures() {
+        Set<UUID> scopedUsers = Set.copyOf(fixtureUserIds);
+        Set<UUID> scopedTokens = ConcurrentHashMap.newKeySet();
+        scopedTokens.addAll(fixtureTokenIds);
+        List<Throwable> failures = new ArrayList<>();
+        try {
             tokenRepository.findAll().stream()
                     .filter(token -> scopedUsers.contains(token.getUser().getId()))
                     .map(PasswordResetToken::getId)
                     .forEach(scopedTokens::add);
-            tokenRepository.deleteAllById(scopedTokens);
-            userRepository.deleteAllById(scopedUsers);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError("interrupted during race worker cleanup", interrupted);
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException failure) {
-            throw new AssertionError("race workers must finish before fixture cleanup", failure);
-        } finally {
-            workerExecutors.clear();
-            workerFutures.clear();
-            releaseGates.clear();
-            fixtureUserIds.clear();
-            fixtureTokenIds.clear();
+        } catch (RuntimeException failure) {
+            failures.add(failure);
         }
+        try {
+            tokenRepository.deleteAllById(scopedTokens);
+        } catch (RuntimeException failure) {
+            failures.add(failure);
+        }
+        try {
+            userRepository.deleteAllById(scopedUsers);
+        } catch (RuntimeException failure) {
+            failures.add(failure);
+        }
+        return failures;
+    }
+
+    private void clearFixtureTracking() {
+        workerExecutors.clear();
+        workerFutures.clear();
+        releaseGates.clear();
+        fixtureUserIds.clear();
+        fixtureTokenIds.clear();
+    }
+
+    private static AssertionError failures(String message, List<Throwable> causes) {
+        AssertionError error = new AssertionError(message);
+        causes.forEach(error::addSuppressed);
+        return error;
     }
 
     private User createUser(String email, String passwordHash) {
@@ -226,7 +276,7 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         CountDownLatch t0Selected = trackedLatch(1);
         CountDownLatch releaseRecovery = trackedLatch(1);
         PasswordResetEmailRecoverySweeper gatedSweeper =
-                new PasswordResetEmailRecoverySweeper(gateAfterCandidateSelection(t0Selected, releaseRecovery),
+                new PasswordResetEmailRecoverySweeper(gateAfterCandidateSelection(t0Selected, releaseRecovery, t0.getId()),
                         passwordResetService, recoveryProperties, scheduledCallbackRunner);
 
         ExecutorService executor = newExecutor(1);
@@ -271,7 +321,7 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
     void ordinaryRequestCommitsAfterCandidateScanAndWinsWithoutDispatchConfirmation() throws Exception {
         User user = createUser("ordinary-first-" + UUID.randomUUID() + "@example.com", "hash");
         PasswordResetToken t0 = staleCandidate(user, "ordinary-first-t0");
-        RecoveryGate gate = startGatedRecovery();
+        RecoveryGate gate = startGatedRecovery(t0.getId());
         try {
             assertTrue(gate.selected().await(STAGE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                     "recovery must select T0 before T1 commits");
@@ -314,7 +364,8 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         Future<?> ordinary = null;
         try {
             PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
-                    gateAfterCandidateSelection(new CountDownLatch(0), new CountDownLatch(0)), passwordResetService,
+                    gateAfterCandidateSelection(new CountDownLatch(0), new CountDownLatch(0), t0.getId()),
+                    passwordResetService,
                     recoveryProperties, scheduledCallbackRunner);
             recovery = submitTask(executor, () -> {
                 RECOVERY_LOCK_OBSERVATION.set(observation);
@@ -393,7 +444,8 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         Future<Integer> confirmation = null;
         try {
             PasswordResetEmailRecoverySweeper gatedSweeper = new PasswordResetEmailRecoverySweeper(
-                    gateAfterCandidateSelection(new CountDownLatch(0), new CountDownLatch(0)), passwordResetService,
+                    gateAfterCandidateSelection(new CountDownLatch(0), new CountDownLatch(0), t0.getId()),
+                    passwordResetService,
                     recoveryProperties, scheduledCallbackRunner);
             recovery = submitTask(executor, () -> {
                 RECOVERY_LOCK_OBSERVATION.set(observation);
@@ -440,7 +492,7 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
     void dispatchConfirmationOfSelectedCandidateWinsBeforeRecoveryLock() throws Exception {
         User user = createUser("dispatch-race-" + UUID.randomUUID() + "@example.com", "hash");
         PasswordResetToken candidate = staleCandidate(user, "dispatch-race");
-        RecoveryGate gate = startGatedRecovery();
+        RecoveryGate gate = startGatedRecovery(candidate.getId());
         try {
             assertTrue(gate.selected().await(STAGE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
             TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
@@ -469,7 +521,7 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
         PasswordResetToken candidate = saveToken(new PasswordResetToken(user,
                 secureTokenGenerator.hash(rawToken), Instant.now().plus(Duration.ofMinutes(30)), staleUpdatedAt,
                 Instant.now().minus(Duration.ofMinutes(10))));
-        RecoveryGate gate = startGatedRecovery();
+        RecoveryGate gate = startGatedRecovery(candidate.getId());
         try {
             assertTrue(gate.selected().await(STAGE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
             passwordResetTokenService.consumeAndResetPassword(rawToken, "new-hash", Instant.now());
@@ -527,17 +579,19 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
                 });
     }
 
-    private RecoveryGate startGatedRecovery() {
+    private RecoveryGate startGatedRecovery(UUID expectedCandidateId) {
         CountDownLatch selected = trackedLatch(1);
         CountDownLatch release = trackedLatch(1);
         PasswordResetEmailRecoverySweeper gatedSweeper =
-                new PasswordResetEmailRecoverySweeper(gateAfterCandidateSelection(selected, release),
+                new PasswordResetEmailRecoverySweeper(
+                        gateAfterCandidateSelection(selected, release, expectedCandidateId),
                         passwordResetService, recoveryProperties, scheduledCallbackRunner);
         ExecutorService executor = newExecutor(1);
         return new RecoveryGate(selected, release, submitTask(executor, gatedSweeper::sweep));
     }
 
-    private PasswordResetTokenRepository gateAfterCandidateSelection(CountDownLatch selected, CountDownLatch release) {
+    private PasswordResetTokenRepository gateAfterCandidateSelection(CountDownLatch selected, CountDownLatch release,
+            UUID expectedCandidateId) {
         return (PasswordResetTokenRepository) Proxy.newProxyInstance(
                 PasswordResetTokenRepository.class.getClassLoader(),
                 new Class<?>[] {PasswordResetTokenRepository.class}, (proxy, method, arguments) -> {
@@ -545,6 +599,11 @@ class PasswordResetRecoveryOwnershipPostgresTest implements SharedPostgresContai
                         Object result = method.invoke(tokenRepository, arguments);
                         if (method.getName().equals(
                                 "findByResetEmailDispatchedAtIsNullAndUsedAtIsNullAndExpiresAtAfterAndUpdatedAtBefore")) {
+                            @SuppressWarnings("unchecked")
+                            List<PasswordResetToken> candidates = (List<PasswordResetToken>) result;
+                            assertThat(candidates.stream().map(PasswordResetToken::getId).toList())
+                                    .as("the real candidate scan must return exactly T0 before the gate")
+                                    .containsExactly(expectedCandidateId);
                             selected.countDown();
                             awaitRelease(release);
                         }
