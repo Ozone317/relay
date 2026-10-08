@@ -258,12 +258,14 @@ class PasswordResetTokenServiceTest {
                 return Optional.of(user);
             });
             when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenAnswer(invocation -> {
-                assertEquals(0, decisionTimeReads.get(), "the candidate lock must complete before decision time is read");
+                assertEquals(0, decisionTimeReads.get(),
+                        "the candidate lock must complete before decision time is read");
                 return Optional.of(candidate);
             });
             when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(1);
 
-            var result = underTest.recoverCandidate(candidateId, user.getId(), Duration.ofSeconds(5), Duration.ofHours(1));
+            var result =
+                    underTest.recoverCandidate(candidateId, user.getId(), Duration.ofSeconds(5), Duration.ofHours(1));
 
             assertEquals(PasswordResetTokenService.RecoveryOutcome.REISSUED, result.outcome());
             assertEquals(1, decisionTimeReads.get(), "recovery must capture exactly one decision instant");

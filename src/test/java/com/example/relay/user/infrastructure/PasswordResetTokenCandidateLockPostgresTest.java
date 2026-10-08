@@ -54,10 +54,10 @@ class PasswordResetTokenCandidateLockPostgresTest implements SharedPostgresConta
     void candidateLockBlocksOnlyTheSameTokenRow() throws Exception {
         User user = new User("candidate-lock-" + UUID.randomUUID() + "@example.com", "hash");
         Instant now = Instant.now();
-        PasswordResetToken t0 = new PasswordResetToken(
-                user, "candidate-t0-" + UUID.randomUUID(), now.plusSeconds(1800), now);
-        PasswordResetToken t1 = new PasswordResetToken(
-                user, "candidate-t1-" + UUID.randomUUID(), now.plusSeconds(1800), now);
+        PasswordResetToken t0 =
+                new PasswordResetToken(user, "candidate-t0-" + UUID.randomUUID(), now.plusSeconds(1800), now);
+        PasswordResetToken t1 =
+                new PasswordResetToken(user, "candidate-t1-" + UUID.randomUUID(), now.plusSeconds(1800), now);
 
         CountDownLatch t0Locked = new CountDownLatch(1);
         CountDownLatch releaseT0 = new CountDownLatch(1);
@@ -83,8 +83,8 @@ class PasswordResetTokenCandidateLockPostgresTest implements SharedPostgresConta
             assertTrue(t0Locked.await(COORDINATOR_STAGE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
                     "transaction A must lock T0");
 
-            independentCandidate = executor.submit(() -> transactions.executeWithoutResult(status ->
-                    assertThat(tokenRepository.findByIdForUpdate(t1.getId())).isPresent()));
+            independentCandidate = executor.submit(() -> transactions.executeWithoutResult(
+                    status -> assertThat(tokenRepository.findByIdForUpdate(t1.getId())).isPresent()));
             independentCandidate.get(COORDINATOR_STAGE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             assertThat(releaseT0.getCount()).as("transaction A must still hold T0").isEqualTo(1);
 
@@ -93,8 +93,7 @@ class PasswordResetTokenCandidateLockPostgresTest implements SharedPostgresConta
                 t0CompetitorAttempting.countDown();
                 assertThat(tokenRepository.findByIdForUpdate(t0.getId())).isPresent();
             }));
-            assertTrue(t0CompetitorAttempting.await(
-                    COORDINATOR_STAGE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+            assertTrue(t0CompetitorAttempting.await(COORDINATOR_STAGE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
                     "transaction C must begin its T0 lock request");
             assertThat(competitorBackendPid.get()).isNotEqualTo(t0BackendPid.get());
             assertBlockedBy(competitorBackendPid.get(), t0BackendPid.get());
@@ -110,9 +109,8 @@ class PasswordResetTokenCandidateLockPostgresTest implements SharedPostgresConta
             jdbcTemplate.update("DELETE FROM users WHERE id = ?", user.getId());
         }
 
-        assertThat(jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM password_reset_tokens WHERE id IN (?, ?)", Integer.class,
-                t0.getId(), t1.getId())).as("the test must remove only its token fixtures").isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM password_reset_tokens WHERE id IN (?, ?)",
+                Integer.class, t0.getId(), t1.getId())).as("the test must remove only its token fixtures").isZero();
         assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM users WHERE id = ?", Integer.class, user.getId()))
                 .as("the test must remove its user fixture").isZero();
     }
