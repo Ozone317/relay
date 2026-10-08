@@ -9,7 +9,10 @@ import com.example.relay.user.infrastructure.EmailVerificationTokenRepository;
 import com.example.relay.user.infrastructure.PasswordResetTokenRepository;
 import com.example.relay.user.infrastructure.UserRepository;
 import jakarta.persistence.EntityManager;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,6 +69,52 @@ public class PasswordResetTokenService {
     @Transactional
     public IssuedResetToken reissueForRecovery(User user, Instant now, Instant firstRequestedAt) {
         return issue(user, now, firstRequestedAt);
+    }
+
+    /**
+     * Recovers exactly the observed undispatched candidate while holding the user row before the token row. The user
+     * and token are both reloaded under lock so a stale sweep observation cannot retire or issue on behalf of a row
+     * whose state changed in the meantime.
+     */
+    @Transactional
+    public RecoveryAttempt recoverCandidate(UUID candidateId, UUID observedUserId, Duration grace,
+            Duration maxRecoveryWindow) {
+        Optional<User> lockedUser = userRepository.lockForUpdate(observedUserId);
+        if (lockedUser.isEmpty()) {
+            return RecoveryAttempt.lostRace();
+        }
+
+        Optional<PasswordResetToken> lockedCandidate = passwordResetTokenRepository.findByIdForUpdate(candidateId);
+        if (lockedCandidate.isEmpty()) {
+            return RecoveryAttempt.lostRace();
+        }
+
+        Instant decisionTime = Instant.now();
+        PasswordResetToken candidate = lockedCandidate.get();
+        if (!candidate.getUser().getId().equals(lockedUser.get().getId())
+                || candidate.getUsedAt() != null
+                || candidate.getResetEmailDispatchedAt() != null
+                || !candidate.getExpiresAt().isAfter(decisionTime)
+                || !candidate.getUpdatedAt().isBefore(decisionTime.minus(grace))) {
+            return RecoveryAttempt.lostRace();
+        }
+
+        if (!candidate.getFirstRequestedAt().isAfter(decisionTime.minus(maxRecoveryWindow))) {
+            return passwordResetTokenRepository.giveUpOn(candidateId, decisionTime) == 1
+                    ? RecoveryAttempt.exhausted()
+                    : RecoveryAttempt.lostRace();
+        }
+
+        if (passwordResetTokenRepository.giveUpOn(candidateId, decisionTime) != 1) {
+            return RecoveryAttempt.lostRace();
+        }
+
+        String rawToken = secureTokenGenerator.generateRawToken();
+        PasswordResetToken successor = passwordResetTokenRepository.saveAndFlush(new PasswordResetToken(
+                lockedUser.get(), secureTokenGenerator.hash(rawToken),
+                decisionTime.plus(passwordResetProperties.getTokenTtl()), decisionTime,
+                candidate.getFirstRequestedAt()));
+        return RecoveryAttempt.reissued(new IssuedResetToken(successor, rawToken));
     }
 
     /**
@@ -219,5 +268,32 @@ public class PasswordResetTokenService {
     }
 
     public record IssuedResetToken(PasswordResetToken token, String rawToken) {
+    }
+
+    public enum RecoveryOutcome {
+        REISSUED,
+        EXHAUSTED,
+        LOST_RACE
+    }
+
+    public record RecoveryAttempt(RecoveryOutcome outcome, IssuedResetToken issuedToken) {
+        public RecoveryAttempt {
+            Objects.requireNonNull(outcome, "outcome");
+            if ((outcome == RecoveryOutcome.REISSUED) != (issuedToken != null)) {
+                throw new IllegalArgumentException("only REISSUED recovery attempts may carry an issued token");
+            }
+        }
+
+        static RecoveryAttempt reissued(IssuedResetToken token) {
+            return new RecoveryAttempt(RecoveryOutcome.REISSUED, Objects.requireNonNull(token, "token"));
+        }
+
+        static RecoveryAttempt exhausted() {
+            return new RecoveryAttempt(RecoveryOutcome.EXHAUSTED, null);
+        }
+
+        static RecoveryAttempt lostRace() {
+            return new RecoveryAttempt(RecoveryOutcome.LOST_RACE, null);
+        }
     }
 }

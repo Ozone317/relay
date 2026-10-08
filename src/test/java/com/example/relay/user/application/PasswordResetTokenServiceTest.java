@@ -2,11 +2,14 @@ package com.example.relay.user.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Answers.CALLS_REAL_METHODS;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -22,9 +25,11 @@ import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
+import org.mockito.MockedStatic;
 
 class PasswordResetTokenServiceTest {
 
@@ -84,6 +89,217 @@ class PasswordResetTokenServiceTest {
         assertEquals(originalFirstRequestedAt, result.token().getFirstRequestedAt(),
                 "recovery must carry the ORIGINAL request's timestamp forward, not restart the window at now");
         assertEquals(now, result.token().getCreatedAt(), "the reissued row's own createdAt is still genuinely new");
+    }
+
+    @Test
+    void recoverCandidate_returnsLostRace_whenUserIsMissing() {
+        UUID userId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(userId)).thenReturn(Optional.empty());
+
+        var result = underTest.recoverCandidate(UUID.randomUUID(), userId, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
+        verify(passwordResetTokenRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void recoverCandidate_returnsLostRace_whenCandidateIsMissing() {
+        User user = user("missing-candidate@example.com");
+        UUID candidateId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.empty());
+
+        var result = underTest.recoverCandidate(candidateId, user.getId(), Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
+    }
+
+    @Test
+    void recoverCandidate_returnsLostRace_whenCandidateBelongsToAnotherUser() {
+        User user = user("observed@example.com");
+        User otherUser = user("other@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        PasswordResetToken candidate = candidate(otherUser, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(30), decisionTime.minusSeconds(30), null, null);
+        UUID candidateId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+
+        var result = recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
+        verify(passwordResetTokenRepository, never()).giveUpOn(any(), any());
+        verify(passwordResetTokenRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void recoverCandidate_returnsLostRace_whenCandidateIsUsedDispatchedExpiredOrNotStale() {
+        User user = user("invalid-candidates@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        Instant old = decisionTime.minusSeconds(20);
+        PasswordResetToken[] invalid = {
+                candidate(user, old, decisionTime.plusSeconds(60), old, old, decisionTime, null),
+                candidate(user, old, decisionTime.plusSeconds(60), old, old, null, decisionTime),
+                candidate(user, old, decisionTime, old, old, null, null),
+                candidate(user, decisionTime.minusSeconds(5), decisionTime.plusSeconds(60), old, old, null, null)};
+
+        for (PasswordResetToken candidate : invalid) {
+            UUID candidateId = UUID.randomUUID();
+            when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+            when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+
+            var result = recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+            assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
+        }
+        verify(passwordResetTokenRepository, never()).giveUpOn(any(), any());
+        verify(passwordResetTokenRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void recoverCandidate_returnsExhausted_andRetiresOnlyCandidate_atWindowBoundary() {
+        User user = user("exhausted@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        Instant cutoff = decisionTime.minus(Duration.ofHours(1));
+        PasswordResetToken candidate = candidate(user, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(20), cutoff, null, null);
+        UUID candidateId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+        when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(1);
+
+        var result = recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.EXHAUSTED, result.outcome());
+        verify(passwordResetTokenRepository).giveUpOn(candidateId, decisionTime);
+        verify(passwordResetTokenRepository, times(1)).giveUpOn(candidateId, decisionTime);
+        verify(passwordResetTokenRepository, never()).saveAndFlush(any());
+        verify(passwordResetTokenRepository, never()).invalidateAllForUser(any(), any());
+    }
+
+    @Test
+    void recoverCandidate_reissues_andCarriesLockedFirstRequestedAt() {
+        User user = user("reissued@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        Instant firstRequestedAt = decisionTime.minusSeconds(300);
+        PasswordResetToken candidate = candidate(user, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(20), firstRequestedAt, null, null);
+        UUID candidateId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+        when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(1);
+
+        var result = recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.REISSUED, result.outcome());
+        assertEquals(firstRequestedAt, result.issuedToken().token().getFirstRequestedAt());
+        assertEquals(decisionTime, result.issuedToken().token().getCreatedAt());
+        verify(passwordResetTokenRepository).giveUpOn(candidateId, decisionTime);
+        verify(passwordResetTokenRepository, times(1)).giveUpOn(candidateId, decisionTime);
+        verify(passwordResetTokenRepository, never()).invalidateAllForUser(any(), any());
+    }
+
+    @Test
+    void recoverCandidate_locksUserBeforeCandidate() {
+        User user = user("lock-order@example.com");
+        UUID candidateId = UUID.randomUUID();
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        PasswordResetToken candidate = candidate(user, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(20), decisionTime.minusSeconds(30), null, null);
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+        when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(1);
+
+        recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        InOrder order = inOrder(userRepository, passwordResetTokenRepository);
+        order.verify(userRepository).lockForUpdate(user.getId());
+        order.verify(passwordResetTokenRepository).findByIdForUpdate(candidateId);
+    }
+
+    @Test
+    void recoverCandidate_returnsLostRace_whenExactRetirementUpdatesZeroRows() {
+        User user = user("retirement-race@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        PasswordResetToken candidate = candidate(user, decisionTime.minusSeconds(20), decisionTime.plusSeconds(60),
+                decisionTime.minusSeconds(20), decisionTime.minusSeconds(30), null, null);
+        UUID candidateId = UUID.randomUUID();
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+        when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(0);
+
+        var result = recoverAt(candidateId, user, decisionTime, Duration.ofSeconds(5), Duration.ofHours(1));
+
+        assertEquals(PasswordResetTokenService.RecoveryOutcome.LOST_RACE, result.outcome());
+        verify(passwordResetTokenRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void recoverCandidate_appliesStrictGraceExpiryAndRecoveryWindowBoundaries() {
+        User user = user("boundaries@example.com");
+        Instant decisionTime = Instant.parse("2026-10-08T10:00:00Z");
+        Duration grace = Duration.ofSeconds(5);
+        Duration maxWindow = Duration.ofHours(1);
+        Instant graceCutoff = decisionTime.minus(grace);
+        Instant recoveryCutoff = decisionTime.minus(maxWindow);
+
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.minusNanos(1),
+                decisionTime.plusNanos(1), recoveryCutoff.plusNanos(1),
+                PasswordResetTokenService.RecoveryOutcome.REISSUED);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff, decisionTime.plusNanos(1),
+                recoveryCutoff.plusNanos(1), PasswordResetTokenService.RecoveryOutcome.LOST_RACE);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.plusNanos(1), decisionTime.plusNanos(1),
+                recoveryCutoff.plusNanos(1), PasswordResetTokenService.RecoveryOutcome.LOST_RACE);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.minusSeconds(1),
+                decisionTime.minusNanos(1), recoveryCutoff.plusNanos(1),
+                PasswordResetTokenService.RecoveryOutcome.LOST_RACE);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.minusSeconds(1), decisionTime,
+                recoveryCutoff.plusNanos(1), PasswordResetTokenService.RecoveryOutcome.LOST_RACE);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.minusSeconds(1),
+                decisionTime.plusNanos(1), recoveryCutoff.minusNanos(1),
+                PasswordResetTokenService.RecoveryOutcome.EXHAUSTED);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.minusSeconds(1),
+                decisionTime.plusNanos(1), recoveryCutoff, PasswordResetTokenService.RecoveryOutcome.EXHAUSTED);
+        assertRecoveryOutcome(user, decisionTime, grace, maxWindow, graceCutoff.minusSeconds(1),
+                decisionTime.plusNanos(1), recoveryCutoff.plusNanos(1),
+                PasswordResetTokenService.RecoveryOutcome.REISSUED);
+    }
+
+    private void assertRecoveryOutcome(User user, Instant decisionTime, Duration grace, Duration maxWindow,
+            Instant updatedAt, Instant expiresAt, Instant firstRequestedAt,
+            PasswordResetTokenService.RecoveryOutcome expected) {
+        UUID candidateId = UUID.randomUUID();
+        PasswordResetToken candidate = candidate(user, updatedAt, expiresAt, updatedAt, firstRequestedAt, null, null);
+        when(userRepository.lockForUpdate(user.getId())).thenReturn(Optional.of(user));
+        when(passwordResetTokenRepository.findByIdForUpdate(candidateId)).thenReturn(Optional.of(candidate));
+        when(passwordResetTokenRepository.giveUpOn(candidateId, decisionTime)).thenReturn(1);
+
+        assertEquals(expected, recoverAt(candidateId, user, decisionTime, grace, maxWindow).outcome());
+    }
+
+    private PasswordResetTokenService.RecoveryAttempt recoverAt(UUID candidateId, User user, Instant decisionTime,
+            Duration grace, Duration maxWindow) {
+        try (MockedStatic<Instant> clock = mockStatic(Instant.class, CALLS_REAL_METHODS)) {
+            clock.when(Instant::now).thenReturn(decisionTime);
+            return underTest.recoverCandidate(candidateId, user.getId(), grace, maxWindow);
+        }
+    }
+
+    private static User user(String email) {
+        return new User(email, "hash");
+    }
+
+    private static PasswordResetToken candidate(User user, Instant updatedAt, Instant expiresAt, Instant createdAt,
+            Instant firstRequestedAt, Instant usedAt, Instant dispatchedAt) {
+        PasswordResetToken candidate = mock(PasswordResetToken.class);
+        when(candidate.getUser()).thenReturn(user);
+        when(candidate.getUpdatedAt()).thenReturn(updatedAt);
+        when(candidate.getExpiresAt()).thenReturn(expiresAt);
+        when(candidate.getCreatedAt()).thenReturn(createdAt);
+        when(candidate.getFirstRequestedAt()).thenReturn(firstRequestedAt);
+        when(candidate.getUsedAt()).thenReturn(usedAt);
+        when(candidate.getResetEmailDispatchedAt()).thenReturn(dispatchedAt);
+        return candidate;
     }
 
     @Test
